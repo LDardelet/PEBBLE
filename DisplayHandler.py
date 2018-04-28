@@ -39,9 +39,11 @@ class DisplayHandler:
 
         self.PostBox = []
 
-    def OnEvent(self, event):
+    def _OnEvent(self, event):
         self.PostBox += [event]
         self.Post()
+
+        return event
 
     def Post(self):
         for item in self.PostBox:

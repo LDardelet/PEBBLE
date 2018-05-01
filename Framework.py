@@ -61,13 +61,16 @@ class Framework:
             PropagatedEvent = Event(original = event)
             for tool_name in self.ToolsOrder:
                 PropagatedEvent = self.Tools[tool_name]._OnEvent(PropagatedEvent)
+                if PropagatedEvent is None:
+                    break
             
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
                     print "Closed main loop at event {0}".format(self.nEvents[StreamName])
                     break
-        print "Main loop finished without error."
+        if self.nEvents[StreamName] == len(self.Streams[StreamName]):
+            print "Main loop finished without error."
 
 #### Project Management ####
 
@@ -214,15 +217,15 @@ class Framework:
             tool_name = self.InputName
             filename = inspect.getfile(self.Tools[tool_name].__class__)
             print "# 0 : {1}, from class {1} in file {2}.".format(None, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
-        print "     Type : {0}".format(self.Tools[tool_name]._Type)
-        print "     Parameters used for Creation:"
-        for Parameter in self._ToolsCreationParameters[tool_name].keys():
-            print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
-        print "     Parameters used for Initialization:"
-        for Parameter in self._ToolsInitializationParameters[tool_name].keys():
-            print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
+            print "     Type : {0}".format(self.Tools[tool_name]._Type)
+            print "     Parameters used for Creation:"
+            for Parameter in self._ToolsCreationParameters[tool_name].keys():
+                print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
+            print "     Parameters used for Initialization:"
+            for Parameter in self._ToolsInitializationParameters[tool_name].keys():
+                print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
 
-        print ""
+            print ""
 
         nOrder = 1
         for tool_name in self.ToolsOrder:

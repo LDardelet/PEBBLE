@@ -9,6 +9,7 @@ class Memory:
         '''
 
         self._Type = 'Memory'
+        self.Self = self
 
         for key in argsCreationDict.keys():
             self.__dict__[key.split('.')[2]] = argsCreationDict[key]

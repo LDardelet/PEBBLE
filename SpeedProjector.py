@@ -73,7 +73,6 @@ class Projector:
                 self.LastTsSave = event.timestamp
                 self.ts += [event.timestamp]
                 self.ArgMinAreaHistory += [self.ArgMinArea]
-                self.AreasHistory += [list(self.Areas)]
                 self.NormalizedAreasHistory += [(np.array(self.Areas)/np.array(self.NEventsBySpeed)).tolist()]
 
                 self.ClearUselessSpeeds()
@@ -121,11 +120,11 @@ class Projector:
             self.ArgMinArea = n_speed
             self.MinArea = self.Areas[n_speed]/self.NEventsBySpeed[n_speed]
 
-    def ClearUselessSpeeds(self):
+    def ClearUselessSpeeds(self, conserve_top = 10):
         if not self.ExpandableBunch:
             return None
         
-        if (self.LocalPaddings[self.ArgMinArea] < self.Precision_aimed).all():
+        if (abs(np.array(self.LocalPaddings[self.ArgMinArea])) < self.Precision_aimed).all():
             return None
 
         Expandables = []
@@ -141,10 +140,16 @@ class Projector:
             self.AddStrictSeedsFromPadding(self.Speeds[Expandables[local_speed_id]], self.LocalPaddings[Expandables[local_speed_id]], add_center = True, force = True)
         print "Changed speeds, now containing {0} speeds, from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.ActiveSpeeds), np.array(self.Speeds)[self.ActiveSpeeds,0].min(), np.array(self.Speeds)[self.ActiveSpeeds,1].min(), np.array(self.Speeds)[self.ActiveSpeeds,0].max(), np.array(self.Speeds)[self.ActiveSpeeds,1].max())
 
-    def AddSeed(self, speed, localpadding):
-        for PreviousSpeed in self.Speeds:
-            if (speed == PreviousSpeed).all():
-                return False
+    def AddSeed(self, speed, localpadding, force = False):
+        if force:
+            for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
+                if (speed == PreviousSpeed).all():
+                    return False
+        else:
+            for PreviousSpeed in self.Speeds:
+                if (speed == PreviousSpeed).all():
+                    return False
+
         speed_id = len(self.Speeds)
         self.ActiveSpeeds += [speed_id]
         self.ToInitializeSpeed += [speed_id]
@@ -188,7 +193,7 @@ class Projector:
                         self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, v_seed), -max(dvy, v_seed), max(dvx, v_seed), max(dvy/2, v_seed)))
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
 
-    def AddStrictSeedsFromPadding(self, center_speed, padding):
+    def AddStrictSeedsFromPadding(self, center_speed, padding, add_center = False, force = False):
         vx_seeds = [padding[0]/2, 0, padding[2]/2]
         vy_seeds = [padding[1]/2, 0, padding[3]/2]
         n_seeds_added = 0
@@ -205,8 +210,8 @@ class Projector:
                 yMaxPadding = vy_seeds[yMaxPaddingIndex] - vy_seeds[yMaxPaddingIndex-1]
                 
                 dv = np.array([vx_seeds[n_dvx], vy_seeds[n_dvy]])
-                if n_dvx != 1 or n_dvy != 1:
-                    n_seeds_added += self.AddSeed(center_speed + dv, (xMinPadding, yMinPadding, xMaxPadding, yMaxPadding))
+                if n_dvx != 1 or n_dvy != 1 or add_center:
+                    n_seeds_added += self.AddSeed(center_speed + dv, (xMinPadding, yMinPadding, xMaxPadding, yMaxPadding), force)
         return n_seeds_added
 
     def DynamicMinTSSet(self, ts):
@@ -226,14 +231,14 @@ class Projector:
         for speed_id in self.ActiveSpeeds:
             ax.plot(self.Speeds[speed_id][0], self.Speeds[speed_id][1], 'vr')
 
-        def PlotNormalizedAreas(self):
-            f, ax = plt.subplots(1,1)
-            n_start = 0
-            
-            for nArea in range(len(self.Speeds)):
-                while len(self.NormalizedAreasHistory[n_start]) < nArea + 1:
-                    n_start += 1
-                NormalizedAreas = []
-                for n in range(n_start, len(self.NormalizedAreasHistory)):
-                    NormalizedAreas += [self.NormalizedAreasHistory[n][nArea]]
-                ax.plot(self.ts[-len(NormalizedAreas):], NormalizedAreas)
+    def PlotNormalizedAreas(self):
+        f, ax = plt.subplots(1,1)
+        n_start = 0
+        
+        for nArea in range(len(self.Speeds)):
+            while len(self.NormalizedAreasHistory[n_start]) < nArea + 1:
+                n_start += 1
+            NormalizedAreas = []
+            for n in range(n_start, len(self.NormalizedAreasHistory)):
+                NormalizedAreas += [self.NormalizedAreasHistory[n][nArea]]
+            ax.plot(self.ts[-len(NormalizedAreas):], NormalizedAreas)

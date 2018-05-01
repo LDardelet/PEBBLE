@@ -2,9 +2,10 @@ import numpy as np
 import pickle
 import sys
 import select
-
 import inspect
+
 from event import Event
+import tools
 
 TypesLimits = {'Input':1}
 NonRunningTools = ['Input', 'Framework']
@@ -50,7 +51,11 @@ class Framework:
 
     def Initialize(self):
         for tool_name in [self.InputName] + self.ToolsOrder:
-            self.Tools[tool_name]._Initialize(self._ToolsInitializationParameters[tool_name])
+            CurrentDict = {}
+            for ArgName in self._ToolsInitializationParameters[tool_name]:
+                argClass, argName = ArgName.split('.')
+                CurrentDict[ArgName] = self.Tools[argClass].__dict__[argName]
+            self.Tools[tool_name]._Initialize(CurrentDict)
 
     def RunStream(self, StreamName):
         self.StreamHistory += [StreamName]
@@ -66,6 +71,7 @@ class Framework:
             
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
+                print promptedLine
                 if 'a' in promptedLine or 'q' in promptedLine:
                     print "Closed main loop at event {0}".format(self.nEvents[StreamName])
                     break
@@ -103,9 +109,9 @@ class Framework:
             self._ToolsCreationParameters[tool_name] = {}
             for argClass, argName, argAlias in data[tool_name]['CreationArgs']:
                 self._ToolsCreationParameters[tool_name][argClass+'.'+argName+'.'+argAlias] = self.Tools[argClass].__dict__[argName]
-            self._ToolsInitializationParameters[tool_name] = {}
+            self._ToolsInitializationParameters[tool_name] = []
             for argClass, argName in data[tool_name]['InitializationArgs']:
-                self._ToolsInitializationParameters[tool_name][argClass+'.'+argName] = self.Tools[argClass].__dict__[argName]
+                self._ToolsInitializationParameters[tool_name] += [argClass+'.'+argName]
 
             if 'Order' in data[tool_name].keys():
                 ToolsOrder[tool_name] = data[tool_name]['Order']

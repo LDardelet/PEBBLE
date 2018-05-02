@@ -43,9 +43,11 @@ def ComputeNewItems(InitialList, NewElement, Area = 0, IntersectingArea = 0):
                 ElementsAppearing += SubParts
                 break
         if not FoundIntersection:
-            InitialList += [tuple(CurrentElement)]
-            NewParts += [tuple(CurrentElement)]
-            Area += (CurrentElement[2] - CurrentElement[0]) * (CurrentElement[3] - CurrentElement[1])
+            AddedArea = (CurrentElement[2] - CurrentElement[0]) * (CurrentElement[3] - CurrentElement[1])
+            if AddedArea > 0.05:
+                InitialList += [tuple(CurrentElement)]
+                NewParts += [tuple(CurrentElement)]
+                Area += AddedArea
         ElementsAppearing = ElementsAppearing[1:]
 
     IntersectingArea += ComputeArea(IntersectionParts)

@@ -64,12 +64,9 @@ class Framework:
 
         for event in self.Streams[StreamName][self.nEvents[StreamName]:]:
             self.nEvents[StreamName] += 1
-            PropagatedEvent = Event(original = event)
-            for tool_name in self.ToolsOrder:
-                PropagatedEvent = self.Tools[tool_name]._OnEvent(PropagatedEvent)
-                if PropagatedEvent is None:
-                    break
             
+            self.RunEvent(event)
+
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
@@ -80,6 +77,13 @@ class Framework:
 
     def Resume(self):
         self.RunStream(self.StreamHistory[-1], resume = True)
+
+    def RunEvent(self, event):
+        PropagatedEvent = Event(original = event)
+        for tool_name in self.ToolsOrder:
+            PropagatedEvent = self.Tools[tool_name]._OnEvent(PropagatedEvent)
+            if PropagatedEvent is None:
+                break
 
 #### Project Management ####
 
@@ -231,7 +235,7 @@ class Framework:
             for Parameter in self._ToolsCreationParameters[tool_name].keys():
                 print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
             print "     Parameters used for Initialization:"
-            for Parameter in self._ToolsInitializationParameters[tool_name].keys():
+            for Parameter in self._ToolsInitializationParameters[tool_name]:
                 print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
 
             print ""
@@ -245,7 +249,7 @@ class Framework:
             for Parameter in self._ToolsCreationParameters[tool_name].keys():
                 print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
             print "     Parameters used for Initialization:"
-            for Parameter in self._ToolsInitializationParameters[tool_name].keys():
+            for Parameter in self._ToolsInitializationParameters[tool_name]:
                 print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
             print ""
             

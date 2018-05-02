@@ -1,4 +1,5 @@
 import tools
+import atexit
 import socket
 
 class DisplayHandler:
@@ -14,6 +15,8 @@ class DisplayHandler:
 
         for key in argsCreationDict.keys():
             self.__dict__[key.split('.')[2]] = argsCreationDict[key]
+
+        atexit.register(self.EndTransmission)
 
     def _Initialize(self, argsInitializationDict):
         '''
@@ -42,6 +45,7 @@ class DisplayHandler:
 
         self._Initialized = True
 
+
     def _OnEvent(self, event):
         if not self._Initialized:
             return event
@@ -55,3 +59,5 @@ class DisplayHandler:
             self.PostTransporters[item.__class__.__name__](item, self.MainUDP, self.MainAddress, self.Socket)
         self.PostBox = []
 
+    def EndTransmission(self):
+        tools.DestroySocket(self.Socket)

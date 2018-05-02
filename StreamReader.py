@@ -28,9 +28,12 @@ class Reader:
             elif 'Circle' in StreamName:
                 self.Framework.Streams[StreamName], self.Framework.StreamsGeometries[StreamName] = tools.CreateMovingCircleStream(float(StreamName.split('#')[1]), float(StreamName.split('#')[2]), float(StreamName.split('#')[3]))
         else:
-            print "No valid loading function found for this type of stream. Aborting."
+            print "No valid loading function found for this type of stream. Initiating empty stream {0}.".format(StreamName)
+            self.Framework.Streams[StreamName] = []
+            self.Framework.StreamsGeometries[StreamName] = (1,1,1)
+
 
         self.Framework.nEvents[StreamName] = 0
         self.Framework.NEvents = len(self.Framework.Streams[StreamName])
-
-        print "Loaded stream {0}, containing {1} events, from t = {2} to t = {3}".format(StreamName, self.Framework.NEvents, self.Framework.Streams[StreamName][0].timestamp, self.Framework.Streams[StreamName][-1].timestamp)
+        if len(self.Framework.Streams[StreamName]) > 0:
+            print "Loaded stream {0}, containing {1} events, from t = {2} to t = {3}".format(StreamName, self.Framework.NEvents, self.Framework.Streams[StreamName][0].timestamp, self.Framework.Streams[StreamName][-1].timestamp)

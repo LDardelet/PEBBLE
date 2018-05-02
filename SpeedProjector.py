@@ -76,7 +76,7 @@ class Projector:
                 self.ProjectEventWithSpeed(event, speed_id)
 
             if self.ArgMinArea != PreviousArg:
-                print "Changed best speed to vx = {0} and vy  = {1}. Arg = {2}".format(self.Speeds[self.ArgMinArea][0], self.Speeds[self.ArgMinArea][1], self.ArgMinArea)
+                print "Changed best speed to vx = {0} and vy  = {1}, with area {3}. Arg = {2}".format(self.Speeds[self.ArgMinArea][0], self.Speeds[self.ArgMinArea][1], self.ArgMinArea, self.MinArea)
                 self.TsArgMin = event.timestamp
             
             if self.ArgMinArea != -1 and event.timestamp - self.LastTsSave >= self.BinDt:

@@ -76,7 +76,7 @@ class Projector:
                 self.ProjectEventWithSpeed(event, speed_id)
 
             if self.ArgMinArea != PreviousArg:
-                print "Changed best speed to vx = {0} and vy  = {1}, with area {3}. Arg = {2}".format(self.Speeds[self.ArgMinArea][0], self.Speeds[self.ArgMinArea][1], self.ArgMinArea, self.MinArea)
+                print "Changed best speed to vx = {0} and vy  = {1}, with area {3:.2f} at t = {4:.2f}. Arg = {2}".format(self.Speeds[self.ArgMinArea][0], self.Speeds[self.ArgMinArea][1], self.ArgMinArea, self.MinArea, event.timestamp)
                 self.TsArgMin = event.timestamp
             
             if self.ArgMinArea != -1 and event.timestamp - self.LastTsSave >= self.BinDt:
@@ -137,7 +137,8 @@ class Projector:
                         self.ZonePartsIDs[n_speed][key] = []
                         self.ZonePartsIDs[n_speed][key] += [ID]
 
-        if self.AssumedInitialized[n_speed] != 0 and self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea:
+        if self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea: # Possible check needed for this line, but seems to work better without the AssumedInitialized condition
+        #if self.AssumedInitialized[n_speed] != 0 and self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea:
             self.ArgMinArea = n_speed
             self.MinArea = self.Areas[n_speed]/self.NEventsBySpeed[n_speed]
 

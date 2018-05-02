@@ -8,7 +8,7 @@ import random
 import pylab
 import sys
 
-def ComputeNewItems(InitialList, NewElement, Area = 0):
+def ComputeNewItems(InitialList, NewElement, Area = 0, IntersectingArea = 0):
     ElementsAppearing = [NewElement]
     NewParts = []
     IntersectionParts = []
@@ -48,7 +48,8 @@ def ComputeNewItems(InitialList, NewElement, Area = 0):
             Area += (CurrentElement[2] - CurrentElement[0]) * (CurrentElement[3] - CurrentElement[1])
         ElementsAppearing = ElementsAppearing[1:]
 
-    return NewParts, IntersectionParts, Area
+    IntersectingArea += ComputeArea(IntersectionParts)
+    return NewParts, IntersectionParts, Area, IntersectingArea
 
 
 def DrawSubdivision(List, fig = None, ax = None):

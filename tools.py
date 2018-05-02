@@ -474,8 +474,9 @@ def peek(f, length=1):
     f.seek(pos)
     return data
 
-def RandomStream(vmax = 100., gitterrange = 1.):
-    geometry = random.choice(['Circle', 'Bar'])
+def RandomStream(geometry = None, vmax = 100., gitterrange = 1.):
+    if geometry is None:
+        geometry = random.choice(['Circle', 'Bar'])
     speednorm = random.random()*vmax
     angle = random.random()*2*np.pi
     gitter = random.random()*gitterrange

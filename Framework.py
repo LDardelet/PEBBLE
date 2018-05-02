@@ -57,11 +57,12 @@ class Framework:
                 CurrentDict[ArgName] = self.Tools[argClass].__dict__[argName]
             self.Tools[tool_name]._Initialize(CurrentDict)
 
-    def RunStream(self, StreamName):
-        self.StreamHistory += [StreamName]
-        self.Initialize()
+    def RunStream(self, StreamName, resume = False):
+        if not resume:
+            self.StreamHistory += [StreamName]
+            self.Initialize()
 
-        for event in self.Streams[StreamName]:
+        for event in self.Streams[StreamName][self.nEvents[StreamName]:]:
             self.nEvents[StreamName] += 1
             PropagatedEvent = Event(original = event)
             for tool_name in self.ToolsOrder:
@@ -71,12 +72,14 @@ class Framework:
             
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
-                print promptedLine
                 if 'a' in promptedLine or 'q' in promptedLine:
                     print "Closed main loop at event {0}".format(self.nEvents[StreamName])
                     break
         if self.nEvents[StreamName] == len(self.Streams[StreamName]):
             print "Main loop finished without error."
+
+    def Resume(self):
+        self.RunStream(self.StreamHistory[-1], resume = True)
 
 #### Project Management ####
 

@@ -26,6 +26,7 @@ class DisplayHandler:
         DisplayUp = tools.IsDisplayUp()
         if not DisplayUp:
             print "Aborting initialization process"
+            self._Initialized = False
             return False
 
         print "Initializing DisplayHandler sockets."
@@ -39,7 +40,11 @@ class DisplayHandler:
 
         self.PostBox = []
 
+        self._Initialized = True
+
     def _OnEvent(self, event):
+        if not self._Initialized:
+            return event
         self.PostBox += [event]
         self.Post()
 

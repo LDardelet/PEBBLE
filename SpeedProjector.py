@@ -11,7 +11,7 @@ class Projector:
         Expects:
         '''
         self.R_Projection = 0.5
-        self.ExpansionFactor = 1.
+        self.ExpansionFactor = 4.
 
         self._Type = 'Computation'
 
@@ -30,19 +30,27 @@ class Projector:
         self.IntersectingPartsList = []
         self.ZonePartsIDs = []
         self.Areas = []
+        self.IntersectingAreas = []
         self.LocalPaddings = []
         self.AssumedInitialized = []
         self.NEventsBySpeed = []
 
+        self.SpeedsChangesTs = []
+        self.SpeedsChangesIndexes = [None]
+        self.SpeedsExpanded  = [[]]
+        self.MinRunArea = [1.]
+        
         self.AddExponentialSeeds(vx_center = 0., vy_center = 0., v_max_observed = self.Initial_dv_MAX, v_min_observed = self.Precision_aimed*2, add_center = True)
 
         self.LastTsSave = 0.
 
         self.ArgMinAreaHistory = []
         self.NormalizedAreasHistory = []
+        self.NormalizedIntersectingAreasHistory = []
 
         self.MinArea = 1.
         self.ArgMinArea = -1
+        self.TsArgMin = np.inf
 
         self.SetTS = self.DynamicMinTSSet
 
@@ -60,22 +68,35 @@ class Projector:
             self.ExpandableBunch = 1
             for speed_id in self.ActiveSpeeds:
                 if self.AssumedInitialized[speed_id] == 0:
-                    if (event.timestamp - self.SpeedStartTime[speed_id])*max(self.Precision_aimed, self.SpeedNorms[speed_id]) >= self.ExpansionFactor * np.sqrt(2) or (event.timestamp - self.SpeedStartTime[speed_id]) > 0.1:
+                    if (event.timestamp - self.SpeedStartTime[speed_id])*max(2., self.SpeedNorms[speed_id]) >= self.ExpansionFactor * np.sqrt(2):
                         self.AssumedInitialized[speed_id] = event.timestamp
                     else:
-                        self.ExpandableBunch *= 0
+                        if not (event.timestamp - self.SpeedStartTime[speed_id]) > 0.1:
+                            self.ExpandableBunch *= 0
                 self.ProjectEventWithSpeed(event, speed_id)
 
             if self.ArgMinArea != PreviousArg:
                 print "Changed best speed to vx = {0} and vy  = {1}. Arg = {2}".format(self.Speeds[self.ArgMinArea][0], self.Speeds[self.ArgMinArea][1], self.ArgMinArea)
-
+                self.TsArgMin = event.timestamp
+            
             if self.ArgMinArea != -1 and event.timestamp - self.LastTsSave >= self.BinDt:
                 self.LastTsSave = event.timestamp
                 self.ts += [event.timestamp]
                 self.ArgMinAreaHistory += [self.ArgMinArea]
                 self.NormalizedAreasHistory += [(np.array(self.Areas)/np.array(self.NEventsBySpeed)).tolist()]
+                self.NormalizedIntersectingAreasHistory += [(np.array(self.IntersectingAreas)/np.array(self.Areas)).tolist()]
 
-                self.ClearUselessSpeeds()
+                if event.timestamp - self.TsArgMin > 0.3 and self.NormalizedIntersectingAreasHistory[-1][self.ArgMinArea] > 1.:
+                    self.ExpandableBunch = 1
+
+                if self.MinArea > self.MinRunArea[-1]:
+                    self.ExpandableBunch = 0
+
+                ActiveNormalizedAreas = np.array(self.NormalizedAreasHistory[-1])[self.ActiveSpeeds]
+                if ActiveNormalizedAreas.max() < 1.2*ActiveNormalizedAreas.min():
+                    self.ExpandableBunch = 0
+
+                self.ClearUselessSpeeds(event)
         return event
 
     def ProjectEventWithSpeed(self, event, n_speed):
@@ -100,7 +121,7 @@ class Projector:
         else:
             for PartID in ZoneList:
                 UsefulPartsList += [self.PartsList[n_speed][PartID]]
-            NewParts, IntersectingParts, self.Areas[n_speed] = geometry.ComputeNewItems(UsefulPartsList, NewElement, self.Areas[n_speed])
+            NewParts, IntersectingParts, self.Areas[n_speed], self.IntersectingAreas[n_speed] = geometry.ComputeNewItems(UsefulPartsList, NewElement, self.Areas[n_speed], self.IntersectingAreas[n_speed])
 
         for NewPart in NewParts:
             ID = len(self.PartsList[n_speed])
@@ -120,12 +141,16 @@ class Projector:
             self.ArgMinArea = n_speed
             self.MinArea = self.Areas[n_speed]/self.NEventsBySpeed[n_speed]
 
-    def ClearUselessSpeeds(self, conserve_top = 10):
+    def ClearUselessSpeeds(self, event):
+        conserve_top = max(5, int(len(self.ActiveSpeeds)/9))
         if not self.ExpandableBunch:
             return None
         
-        if (abs(np.array(self.LocalPaddings[self.ArgMinArea])) < self.Precision_aimed).all():
+        if (abs(np.array(self.LocalPaddings[self.ArgMinArea])) <= self.Precision_aimed).all():
             return None
+
+        self.TsArgMin = np.inf
+        self.ArgMinArea = -1
 
         Expandables = []
         Values = []
@@ -135,19 +160,25 @@ class Projector:
             Values += [self.NormalizedAreasHistory[-1][speed_id]]
             
         self.ActiveSpeeds = []
-        
+        self.SpeedsExpanded += [[]]
+
         for local_speed_id in np.argsort(Values)[:conserve_top]:
+            self.SpeedsExpanded[-1] += [Expandables[local_speed_id]]
             self.AddStrictSeedsFromPadding(self.Speeds[Expandables[local_speed_id]], self.LocalPaddings[Expandables[local_speed_id]], add_center = True, force = True)
+            
+        self.SpeedsChangesTs += [event.timestamp]
+        self.SpeedsChangesIndexes += [len(self.ts) - 2]
+        self.MinRunArea += [self.MinArea]
         print "Changed speeds, now containing {0} speeds, from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.ActiveSpeeds), np.array(self.Speeds)[self.ActiveSpeeds,0].min(), np.array(self.Speeds)[self.ActiveSpeeds,1].min(), np.array(self.Speeds)[self.ActiveSpeeds,0].max(), np.array(self.Speeds)[self.ActiveSpeeds,1].max())
 
     def AddSeed(self, speed, localpadding, force = False):
         if force:
             for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
-                if (speed == PreviousSpeed).all():
+                if (abs(speed - PreviousSpeed) < 0.001).all():
                     return False
         else:
             for PreviousSpeed in self.Speeds:
-                if (speed == PreviousSpeed).all():
+                if (abs(speed - PreviousSpeed) < 0.001).all():
                     return False
 
         speed_id = len(self.Speeds)
@@ -163,6 +194,7 @@ class Projector:
         self.IntersectingPartsList += [[]]
         self.ZonePartsIDs += [{}]
         self.Areas += [0]
+        self.IntersectingAreas += [0]
         self.AssumedInitialized += [0]
         self.NEventsBySpeed += [0]
 
@@ -178,7 +210,7 @@ class Projector:
         while v_seed**i <= MaxSpeedTried:
             seeds += [v_seed**i]
             i += 1
-
+        print "Seeds : ", seeds
         if add_center:
             self.AddSeed(center_speed, (-v_seed, -v_seed, v_seed, v_seed))
         
@@ -218,6 +250,7 @@ class Projector:
         self.MinTS = 0.8
         self.ts = [self.MinTS]
         self.t0 = 0.8
+        self.SpeedsChangesTs += [self.MinTS]
 
         self.SetTS = self.GBFunction
 

@@ -3,6 +3,7 @@ import pickle
 import sys
 import select
 import inspect
+import atexit
 
 from event import Event
 import tools
@@ -24,12 +25,22 @@ class Framework:
     For the special type 'Input', no '_OnEvent' method is currently needed.
 
     Currently implemented tools :
-        -> DisplayHandler : allows to use the StreamDisplay Program
-        -> StreamReader : Basic input method
-        -> Memory : Basic storage tool
+        Input tools :
+            -> StreamReader : Basic input method
+        Display and visualization tools :
+            -> DisplayHandler : allows to use the StreamDisplay Program
+        Memory tools :
+            -> Memory : Basic storage tool
+        Filters :
+            -> RefractoryPeriod : Filters events from spike trains for a certain period.
+        Computation tools :
+            -> SpeedProjector : Recover the primitive generator of an events sequence by projecting the 3D ST-Context along several speeds, until finding the correct one
+            -> FlowComputer : Computes the optical flow of a stream of events
+
     '''
     def __init__(self, ProjectFile = None, verboseRatio = 10000):
         self.ProjectFile = ProjectFile
+        self.Modified = False
 
         self.Self = self
 
@@ -42,12 +53,17 @@ class Framework:
 
         self.VerboseRatio = verboseRatio
 
+        atexit.register(self._OnClosing)
+
         if not ProjectFile is None:
             try:
                 self.LoadProject(ProjectFile)
             except e:
                 print e
                 print "Unable to load project, check self._ProjectRawData for file integrity"
+        else:
+            self._ProjectRawData = {}
+            self._GenerateEmptyProject()
 
     def Initialize(self):
         for tool_name in [self.InputName] + self.ToolsOrder:
@@ -56,6 +72,14 @@ class Framework:
                 argClass, argName = ArgName.split('.')
                 CurrentDict[ArgName] = self.Tools[argClass].__dict__[argName]
             self.Tools[tool_name]._Initialize(CurrentDict)
+
+    def _OnClosing(self):
+        if self.Modified:
+            ans = 'void'
+            while '.json' not in ans and ans != '':
+                ans = raw_input('Unsaved changes. Please enter a file name, or leave blank to discard : ')
+            if ans != '':
+                self.SaveProject(ans)
 
     def RunStream(self, StreamName, resume = False):
         if not resume:
@@ -87,7 +111,7 @@ class Framework:
 
 #### Project Management ####
 
-    def LoadProject(self, ProjectFile = None, enable_easy_access = True):
+    def _GenerateEmptyProject(self):
         self.Tools = {}
         self.Types = {}
         self.InputName = None
@@ -99,6 +123,11 @@ class Framework:
         self._ToolsCreationParameters['Framework'] = {}
         self._ToolsInitializationParameters['Framework'] = {}
         self._ToolsClasses['Framework'] = self.__class__
+
+        self.ToolsOrder = []
+
+    def LoadProject(self, ProjectFile = None, enable_easy_access = True):
+        self._GenerateEmptyProject()
 
         ToolsOrder = {}
         FirstTools = []
@@ -127,8 +156,11 @@ class Framework:
 
             print "Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class'])
 
-        MaxOrder = max(ToolsOrder.values()) + 1
-        self.ToolsOrder = [None] * MaxOrder
+        if len(ToolsOrder.keys()) != 0:
+            MaxOrder = max(ToolsOrder.values()) + 1
+            self.ToolsOrder = [None] * MaxOrder
+        else:
+            self.ToolsOrder = []
 
         for tool_name in ToolsOrder.keys():
             if self.ToolsOrder[ToolsOrder[tool_name]] is None:
@@ -175,6 +207,8 @@ class Framework:
         
     def SaveProject(self, ProjectFile):
         pickle.dump(self._ProjectRawData, open(ProjectFile, 'wb'))
+        self.ProjectFile = ProjectFile
+        self.Modified = False
 
     def AddTool(self):
         print "Current project :"
@@ -222,6 +256,7 @@ class Framework:
         self.LoadProject()
         print "New project : "
         self.DisplayCurrentProject()
+        self.Modified = True
 
     def DisplayCurrentProject(self):
         print "# Framework"

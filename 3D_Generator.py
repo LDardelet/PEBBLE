@@ -2,51 +2,99 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle, PathPatch
-# register Axes3D class with matplotlib by importing Axes3D
 from mpl_toolkits.mplot3d import Axes3D
 import mpl_toolkits.mplot3d.art3d as art3d
 from matplotlib.text import TextPath
 from matplotlib.transforms import Affine2D
 
 class Map3D:
-    def __init__(self, FlowManager, Z_speed = 20.):
+    def __init__(self, argsCreationDict):
+        '''
+        Creates a 3d Map from the optical flow, incase of a constant translation along the optical axis of the camera.
+        Expects:
+        'FlowComputer.Self' as 'FlowComputer' -> Accesses the diverse optical flow results
+        '''
+        for key in argsCreationDict.keys():
+            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
+
+        self.Z_speed = 1.
+        self.Pixel_angular_aperture = 0.00245
+        self.R_threshold = 0.92
+        self.N_threshold = 20
+
+        self._Type = 'Computation'
+
+    def _Initialize(self, argsInitializationDict):
+        '''
+        Expects:
+        '''
+
         self.PointsList = []
-        self.FlowManager = FlowManager
+        self.PointsVariance = []
 
-        Center = np.array(FlowMap.shape[:2])/2
-
-        self.Defined_z_speed = Z_speed
-        self.Pixel_angular_aperture = 0.1
+        self.Center = np.array(self.FlowComputer.FlowMap.shape[:2])/2
 
         self.CurrentZ = 0.
         self.InitialTs = None
 
-    def OnEvent(self, event, R_threshold = 0.95):
-        R_Value = self.FlowManager.RegValue[event.location[0], event.location[1]]
-        if R_Value < R_threshold:
-            return None
+        self.PointsCreationFailuresReasons = {'R':0, 'N' :0, 'Dneg': 0, 'Outside':0}
 
-        if self.InitialTs == None:
+    def _OnEvent(self, event):
+        R_Value = self.FlowComputer.RegMap[event.location[0], event.location[1], event.polarity]
+        if R_Value < self.R_threshold:
+            self.PointsCreationFailuresReasons['R'] += 1
+            return event
+        N_Value = self.FlowComputer.NEventsMap[event.location[0], event.location[1], event.polarity]
+        if N_Value < self.N_threshold:
+            self.PointsCreationFailuresReasons['N'] += 1
+            return event
+
+
+        if self.InitialTs is None:
             self.InitialTs = event.timestamp
-        self.CurrentZ = (event.timestamp - self.InitialTs) * self.Defined_z_speed
+        self.CurrentZ = (event.timestamp - self.InitialTs) * self.Z_speed
 
         centered_location = event.location - self.Center
 
-        Flow = np.array(self.FlowManager.FlowMap[event.location[0], event.location[1], :])
-        FlowNorm = np.sqrt(Flow[0]**2 + Flow[1]**2)
+        Flow = np.array(self.FlowComputer.FlowMap[event.location[0], event.location[1], event.polarity, :])
+        FlowNorm = self.FlowComputer.NormMap[event.location[0], event.location[1], event.polarity]
         NormalUnitaryVector = np.array([-Flow[1]/FlowNorm, Flow[0]/FlowNorm])
 
-        D = -self.Defined_z_speed*(centered_location[1]*NormalUnitaryVector[0] - centered_location[0]*NormalUnitaryVector[1])/FlowNorm
+        D = -self.Z_speed*(centered_location[1]*NormalUnitaryVector[0] - centered_location[0]*NormalUnitaryVector[1])/FlowNorm
 
         if D < 0:
-            print D
+            self.PointsCreationFailuresReasons['Dneg'] += 1
+            return event
 
         Thetas = self.Pixel_angular_aperture * centered_location
         X, Y = np.tan(Thetas)*D
 
-        FinalPosition = np.array([X, Y, self.CurrentZ + D])
+        FinalPosition = np.array([Y, self.CurrentZ + D, X])
 
-        self.PointsList += [FinalPosition]
+        if (abs(FinalPosition) < 20).all():
+            self.PointsList += [FinalPosition]
+            self.PointsVariance += [0.05*D]
+        else:
+            self.PointsCreationFailuresReasons['Outside'] += 1
+
+        return event
+
+    def PlotCurrentMap(self, ):
+        default_variances = np.array([1.,1.,1.])
+        default_alpha_value = 0.01
+
+        plt.ion()
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        Limits = None
+        ax.set_xlabel('Transverse')
+        ax.set_ylabel('Depth')
+        ax.set_zlabel('Height')
+
+        for Point, PointVariance in zip(self.PointsList, self.PointsVariance):
+            Variance  = default_variances*PointVariance
+            ax, Limits = DrawRectangle(Point, Variance, default_alpha_value, ax, Limits)
+        return ax, Limits
 
 def DrawRectangle(CenterPosition, Variances, Alpha, ax = None, Limits = None):
     if ax == None:

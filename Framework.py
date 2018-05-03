@@ -142,9 +142,9 @@ class Framework:
             fileLoaded = __import__(data[tool_name]['File'])
             self._ToolsClasses[tool_name] = getattr(fileLoaded, data[tool_name]['Class'])
 
-            self._ToolsCreationParameters[tool_name] = {}
+            self._ToolsCreationParameters[tool_name] = []
             for argClass, argName, argAlias in data[tool_name]['CreationArgs']:
-                self._ToolsCreationParameters[tool_name][argClass+'.'+argName+'.'+argAlias] = self.Tools[argClass].__dict__[argName]
+                self._ToolsCreationParameters[tool_name] += [argClass+'.'+argName+'.'+argAlias]
             self._ToolsInitializationParameters[tool_name] = []
             for argClass, argName in data[tool_name]['InitializationArgs']:
                 self._ToolsInitializationParameters[tool_name] += [argClass+'.'+argName]
@@ -177,7 +177,10 @@ class Framework:
         print "Successfully generated tools order"
         
         for tool_name in FirstTools:
-            self.Tools[tool_name] = self._ToolsClasses[tool_name](self._ToolsCreationParameters[tool_name])
+            CurrentDict = {}
+            for arg in self._ToolsCreationParameters[tool_name]:
+                CurrentDict[arg] = self.Tools[arg.split('.')[0]].__dict__[arg.split('.')[1]]
+            self.Tools[tool_name] = self._ToolsClasses[tool_name](CurrentDict)
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
 
@@ -191,7 +194,10 @@ class Framework:
                 self.InputName = str(tool_name)
             print "Created tool {0} (among FirstTools).".format(tool_name)
         for tool_name in self.ToolsOrder:
-            self.Tools[tool_name] = self._ToolsClasses[tool_name](self._ToolsCreationParameters[tool_name])
+            CurrentDict = {}
+            for arg in self._ToolsCreationParameters[tool_name]:
+                CurrentDict[arg] = self.Tools[arg.split('.')[0]].__dict__[arg.split('.')[1]]
+            self.Tools[tool_name] = self._ToolsClasses[tool_name](CurrentDict)
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
 
@@ -241,7 +247,7 @@ class Framework:
             print ""
             
             if 'Order' in self._ProjectRawData[Name].keys():
-                self._ProjectRawData[Name]['Order'] -= 1
+                #self._ProjectRawData[Name]['Order'] -= 1
                 print "Compiling new order."
                 print ""
                 for tool_name in self._ProjectRawData.keys():
@@ -267,7 +273,7 @@ class Framework:
             print "# 0 : {1}, from class {1} in file {2}.".format(None, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
             print "     Type : {0}".format(self.Tools[tool_name]._Type)
             print "     Parameters used for Creation:"
-            for Parameter in self._ToolsCreationParameters[tool_name].keys():
+            for Parameter in self._ToolsCreationParameters[tool_name]:
                 print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
             print "     Parameters used for Initialization:"
             for Parameter in self._ToolsInitializationParameters[tool_name]:
@@ -281,7 +287,7 @@ class Framework:
             print "# {0} : {1}, from class {1} in file {2}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
             print "     Type : {0}".format(self.Tools[tool_name]._Type)
             print "     Parameters used for Creation:"
-            for Parameter in self._ToolsCreationParameters[tool_name].keys():
+            for Parameter in self._ToolsCreationParameters[tool_name]:
                 print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
             print "     Parameters used for Initialization:"
             for Parameter in self._ToolsInitializationParameters[tool_name]:

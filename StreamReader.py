@@ -1,39 +1,42 @@
 import  tools
 
 class Reader:
-    def __init__(self, argsCreationDict):
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to read events streams files.
-        Expects :
-        'Framework.Self' as 'Framework' -> Access the different Streams variables
         '''
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
         self._Type = 'Input'
+        self._CreationReferences = dict(argsCreationReferences)
 
-        for key in argsCreationDict.keys():
-            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
-
-    def _Initialize(self, argsInitializationDict):
-        '''
-        Expects:
-        '''
-        StreamName = self.Framework.StreamHistory[-1]
-        if '.csv' in StreamName: # TODO
+    def _Initialize(self):
+        self.StreamName = self._Framework.StreamHistory[-1]
+        if '.csv' in self.StreamName: # TODO
             print "csv load is  not workin yet"
-            self.Framework.Streams[StreamName], self.Framework.StreamsGeometries[StreamName] = tools.load_data_csv(StreamName)
-        elif '.dat' in StreamName:
-            self.Framework.Streams[StreamName], self.Framework.StreamsGeometries[StreamName] = tools.load_data_dat(StreamName)
-        elif 'Create-' in StreamName:
-            if 'Bar' in StreamName:
-                self.Framework.Streams[StreamName], self.Framework.StreamsGeometries[StreamName] = tools.CreateMovingBarStream(float(StreamName.split('#')[1]), float(StreamName.split('#')[2]), float(StreamName.split('#')[3]))
-            elif 'Circle' in StreamName:
-                self.Framework.Streams[StreamName], self.Framework.StreamsGeometries[StreamName] = tools.CreateMovingCircleStream(float(StreamName.split('#')[1]), float(StreamName.split('#')[2]), float(StreamName.split('#')[3]))
+            self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_csv(self.StreamName)
+        elif '.dat' in self.StreamName:
+            self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_dat(self.StreamName)
+        elif 'Create-' in self.StreamName:
+            if 'Bar' in self.StreamName:
+                self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.CreateMovingBarStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
+            elif 'Circle' in self.StreamName:
+                self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.CreateMovingCircleStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
         else:
-            print "No valid loading function found for this type of stream. Initiating empty stream {0}.".format(StreamName)
-            self.Framework.Streams[StreamName] = []
-            self.Framework.StreamsGeometries[StreamName] = (1,1,1)
+            print "No valid loading function found for this type of stream. Initiating empty stream {0}.".format(self.StreamName)
+            self.CurrentStream = []
+            self._Framework.StreamsGeometries[self.StreamName] = (1,1,1)
 
+        self.nEvents = -1
+        self.NEvents = len(self.CurrentStream)
+        if len(self.CurrentStream) > 0:
+            print "Loaded stream {0}, containing {1} events, from t = {2} to t = {3}".format(self.StreamName, self.NEvents, self.CurrentStream[0].timestamp, self.CurrentStream[-1].timestamp)
 
-        self.Framework.nEvents[StreamName] = 0
-        self.Framework.NEvents = len(self.Framework.Streams[StreamName])
-        if len(self.Framework.Streams[StreamName]) > 0:
-            print "Loaded stream {0}, containing {1} events, from t = {2} to t = {3}".format(StreamName, self.Framework.NEvents, self.Framework.Streams[StreamName][0].timestamp, self.Framework.Streams[StreamName][-1].timestamp)
+    def _OnEvent(self, event):
+        try:
+            self.nEvents += 1
+            return self.CurrentStream[self.nEvents]
+        except IndexError:
+            self._Framework.Running = False
+            print "Input reached EOF."

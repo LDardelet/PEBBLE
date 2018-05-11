@@ -4,12 +4,13 @@ import sys
 import select
 import inspect
 import atexit
+import types
 
 from event import Event
 import tools
 
 TypesLimits = {'Input':1}
-NonRunningTools = ['Input', 'Framework']
+NonRunningTools = ['Input']
 
 class Framework:
     '''
@@ -42,13 +43,9 @@ class Framework:
         self.ProjectFile = ProjectFile
         self.Modified = False
 
-        self.Self = self
-
         self._Type = 'Framework'
 
-        self.Streams = {}
         self.StreamsGeometries = {}
-        self.nEvents = {}
         self.StreamHistory = []
 
         self.VerboseRatio = verboseRatio
@@ -66,12 +63,8 @@ class Framework:
             self._GenerateEmptyProject()
 
     def Initialize(self):
-        for tool_name in [self.InputName] + self.ToolsOrder:
-            CurrentDict = {}
-            for ArgName in self._ToolsInitializationParameters[tool_name]:
-                argClass, argName = ArgName.split('.')
-                CurrentDict[ArgName] = self.Tools[argClass].__dict__[argName]
-            self.Tools[tool_name]._Initialize(CurrentDict)
+        for tool_name in self.ToolsList:
+            self.Tools[tool_name]._Initialize()
 
     def _OnClosing(self):
         if self.Modified:
@@ -86,25 +79,24 @@ class Framework:
             self.StreamHistory += [StreamName]
             self.Initialize()
 
-        for event in self.Streams[StreamName][self.nEvents[StreamName]:]:
-            self.nEvents[StreamName] += 1
-            
-            self.RunEvent(event)
+        self.Running = True
+        while self.Running:
+            self.NextEvent()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
-                    print "Closed main loop at event {0}".format(self.nEvents[StreamName])
+                    print "Interrupted."
                     break
-        if self.nEvents[StreamName] == len(self.Streams[StreamName]):
+        if not self.Running:
             print "Main loop finished without error."
 
     def Resume(self):
         self.RunStream(self.StreamHistory[-1], resume = True)
 
-    def RunEvent(self, event):
-        PropagatedEvent = Event(original = event)
-        for tool_name in self.ToolsOrder:
+    def NextEvent(self):
+        PropagatedEvent = None
+        for tool_name in self.ToolsList:
             PropagatedEvent = self.Tools[tool_name]._OnEvent(PropagatedEvent)
             if PropagatedEvent is None:
                 break
@@ -114,23 +106,15 @@ class Framework:
     def _GenerateEmptyProject(self):
         self.Tools = {}
         self.Types = {}
-        self.InputName = None
-        self._ToolsCreationParameters = {}
-        self._ToolsInitializationParameters = {}
+        self._ToolsCreationReferences = {}
+        self._ToolsExternalParameters = {}
         self._ToolsClasses = {}
 
-        self.Tools['Framework'] = self
-        self._ToolsCreationParameters['Framework'] = {}
-        self._ToolsInitializationParameters['Framework'] = {}
-        self._ToolsClasses['Framework'] = self.__class__
-
-        self.ToolsOrder = []
+        self.ToolsOrder = {}
+        self.ToolsList = []
 
     def LoadProject(self, ProjectFile = None, enable_easy_access = True):
         self._GenerateEmptyProject()
-
-        ToolsOrder = {}
-        FirstTools = []
 
         if ProjectFile is None:
             data = self._ProjectRawData
@@ -142,45 +126,35 @@ class Framework:
             fileLoaded = __import__(data[tool_name]['File'])
             self._ToolsClasses[tool_name] = getattr(fileLoaded, data[tool_name]['Class'])
 
-            self._ToolsCreationParameters[tool_name] = []
-            for argClass, argName, argAlias in data[tool_name]['CreationArgs']:
-                self._ToolsCreationParameters[tool_name] += [argClass+'.'+argName+'.'+argAlias]
-            self._ToolsInitializationParameters[tool_name] = []
-            for argClass, argName in data[tool_name]['InitializationArgs']:
-                self._ToolsInitializationParameters[tool_name] += [argClass+'.'+argName]
+            self._ToolsCreationReferences[tool_name] = data[tool_name]['CreationReferences']
+            self._ToolsExternalParameters[tool_name] = data[tool_name]['ExternalParameters']
 
-            if 'Order' in data[tool_name].keys():
-                ToolsOrder[tool_name] = data[tool_name]['Order']
-            else:
-                FirstTools += [tool_name]
-
+            self.ToolsOrder[tool_name] = data[tool_name]['Order']
             print "Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class'])
 
-        if len(ToolsOrder.keys()) != 0:
-            MaxOrder = max(ToolsOrder.values()) + 1
-            self.ToolsOrder = [None] * MaxOrder
+        if len(self.ToolsOrder.keys()) != 0:
+            MaxOrder = max(self.ToolsOrder.values()) + 1
+            self.ToolsList = [None] * MaxOrder
         else:
-            self.ToolsOrder = []
+            self.ToolsList = []
 
-        for tool_name in ToolsOrder.keys():
-            if self.ToolsOrder[ToolsOrder[tool_name]] is None:
-                self.ToolsOrder[ToolsOrder[tool_name]] = tool_name
+        for tool_name in self.ToolsOrder.keys():
+            if self.ToolsList[self.ToolsOrder[tool_name]] is None:
+                self.ToolsList[self.ToolsOrder[tool_name]] = tool_name
             else:
-                print "Double assignement of number {0}. Aborting ProjectFile loading".format(ToolsOrder[tool_name])
+                print "Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[tool_name])
                 return None
-        if None in self.ToolsOrder:
-            print "Removing remaining 'None' in self.ToolsOrder, please check file integrity."
-            while None in self.ToolsOrder:
-                self.ToolsOrder.remove(None)
+        if None in self.ToolsList:
+            while None in self.ToolsList:
+                self.ToolsList.remove(None)
 
         print ""
         print "Successfully generated tools order"
         
-        for tool_name in FirstTools:
-            CurrentDict = {}
-            for arg in self._ToolsCreationParameters[tool_name]:
-                CurrentDict[arg] = self.Tools[arg.split('.')[0]].__dict__[arg.split('.')[1]]
-            self.Tools[tool_name] = self._ToolsClasses[tool_name](CurrentDict)
+        for tool_name in self.ToolsList:
+            self.Tools[tool_name] = self._ToolsClasses[tool_name](tool_name, self, self._ToolsCreationReferences[tool_name])
+            self._UpdateToolsParameters(tool_name)
+
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
 
@@ -190,27 +164,20 @@ class Framework:
             self.Types[NewType] += 1
             if NewType in TypesLimits.keys() and self.Types[NewType] > TypesLimits[NewType]:
                 print "Project contains too many {0} types, aborting Projectfile loading.".format(NewType)
-            if NewType == 'Input':
-                self.InputName = str(tool_name)
-            print "Created tool {0} (among FirstTools).".format(tool_name)
-        for tool_name in self.ToolsOrder:
-            CurrentDict = {}
-            for arg in self._ToolsCreationParameters[tool_name]:
-                CurrentDict[arg] = self.Tools[arg.split('.')[0]].__dict__[arg.split('.')[1]]
-            self.Tools[tool_name] = self._ToolsClasses[tool_name](CurrentDict)
-            if enable_easy_access and tool_name not in self.__dict__.keys():
-                self.__dict__[tool_name] = self.Tools[tool_name]
+            print "Created tool {0}.".format(tool_name)
 
-            NewType = self.Tools[tool_name]._Type
-            if NewType not in self.Types.keys():
-                self.Types[NewType] = 0
-            self.Types[NewType] += 1
-            if NewType in TypesLimits.keys() and self.Types[NewType] > TypesLimits[NewType]:
-                print "Project contains too many {0} types, aborting Projectfile loading.".format(NewType)
-            if NewType == 'Input':
-                self.InputName = str(tool_name)
-            print "Created tool {0} (among ToolsOrder).".format(tool_name)
-        
+    def _UpdateToolsParameters(self, tool_name):
+        for key, value in self._ToolsExternalParameters[tool_name].items():
+            if key in self.Tools[tool_name].__dict__.keys() and key[0] != '_':
+                try:
+                    self.Tools[tool_name].__dict__[key] = type(self.Tools[tool_name].__dict__[key])(value)
+                except:
+                    print "Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, tool_name, type(self.Tools[tool_name].__dict__[key]), value)
+            elif key[0] == '_':
+                print "Trying to modify protected variable {0} for tool {1}, ignoring.".format(key, tool_name)
+            else:
+                print "Key {0} for tool {1} doesn't exist. Please ProjectFile integrity.".format(key, tool_name)
+
     def SaveProject(self, ProjectFile):
         pickle.dump(self._ProjectRawData, open(ProjectFile, 'wb'))
         self.ProjectFile = ProjectFile
@@ -220,78 +187,163 @@ class Framework:
         print "Current project :"
         self.DisplayCurrentProject()
         print ""
-        FieldList = [('File', str, False), ('Class', str, False), ('Order', int, True), ('CreationArgs', list, True), ('InitializationArgs', list, True)]
+        FieldList = [('File', str, False), ('Class', str, False), ('Order', int, True), ('CreationReferences', str, False), ('ExternalParameters', list, True)]
         
-        Name = raw_input('Enter the name of the new tool : ')
+        Name = raw_input('Enter the name of the new tool : ')                   # Tool name 
         if Name == '' or Name in self._ProjectRawData.keys():
             print "Invalid entry (empty or already existing)."
             return None
         self._ProjectRawData[Name] = {}
         try:
-            for field in FieldList:
-                if field[1] != list:
-                    entry = None
-                    while entry is None or (entry == '' and not field[2]):
-                        print "Enter the value for field {0} : ".format(field[0])
-                        entry = raw_input('')
-                    if entry != '':
-                        self._ProjectRawData[Name][field[0]] = field[1](entry)
+            entry = ''
+            while entry == '' :                                                 # Filename and Class definition
+                print "Enter the tool filename :"
+                entry = raw_input('')
+            if '.py' in entry:
+                entry = entry.split('.py')[0]
+            self._ProjectRawData[Name]['File'] = entry
+            fileLoaded = __import__(entry)
+            classFound = False
+            PossibleClasses = []
+            for key in fileLoaded.__dict__.keys():
+                if type(fileLoaded.__dict__[key]) is types.ClassType:
+                    PossibleClasses += [key]
+                    if key == entry:
+                        classFound = True
+                        self._ProjectRawData[Name]['Class'] = entry
+                        print "Found the corresponding class in the file."
+                        break
+            if not classFound:
+                if len(PossibleClasses) == 0:
+                    print "No possible Class is available in this file. Aborting."
+                    del self._ProjectRawData[Name]
+                    return None
+                elif len(PossibleClasses) == 1:
+                    print "Using class {0}".format(PossibleClasses[0])
+                    self._ProjectRawData[Name]['Class'] = PossibleClasses[0]
                 else:
-                    entry = None
-                    self._ProjectRawData[Name][field[0]] = []
-                    while entry != '':
-                        print "Enter new item for field {0} - blank stops adding items to the list, create tuples by commas separation : ".format(field[0])
+                    entry = ''
+                    while entry == '' :
+                        print "Enter the tool class among the following ones :"
+                        for Class in PossibleClasses:
+                            print " * {0}".format(Class)
                         entry = raw_input('')
-                        if entry != '':
-                            self._ProjectRawData[Name][field[0]] += [tuple([item.strip() for item in entry.split(',')])]
+                    if entry not in PossibleClasses:
+                        print "Invalid class, absent from tool file or not a ClassType."
+                        del self._ProjectRawData[Name]
+                        return None
+                    self._ProjectRawData[Name]['Class'] = entry
             print ""
-            
-            if 'Order' in self._ProjectRawData[Name].keys():
-                #self._ProjectRawData[Name]['Order'] -= 1
+                                                                                  # Loading the class to get the references needed and parameters
+
+            TmpClass = fileLoaded.__dict__[self._ProjectRawData[Name]['Class']](Name, self, {})
+            ReferencesAsked = TmpClass._ReferencesAsked
+
+            PossibleVariables = []
+            for var in TmpClass.__dict__.keys():
+                if var[0] != '_':
+                    PossibleVariables += [var]
+            if TmpClass._Type != 'Input':
+                print "Enter the tool order number :"                             # Order definition
+                entry = ''
+                while entry == '':
+                    entry = raw_input('')
+                self._ProjectRawData[Name]['Order'] = int(entry)
+            else:
+                print "Input Type detected. Setting default order to 0."
+                self._ProjectRawData[Name]['Order'] = 0
+            NumberTaken = False
+            for tool_name in self._ProjectRawData.keys():
+                if tool_name != Name and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name].keys():
+                    NumberTaken = True
+            if NumberTaken:
                 print "Compiling new order."
-                print ""
                 for tool_name in self._ProjectRawData.keys():
                     if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys():
                         if self._ProjectRawData[tool_name]['Order'] >= self._ProjectRawData[Name]['Order']:
                             self._ProjectRawData[tool_name]['Order'] += 1
+                print "Done"
+                print ""
+
+            self._ProjectRawData[Name]['CreationReferences'] = {}
+            if len(ReferencesAsked) > 0:
+                print "Fill tool name for the needed references. Currently available tool names:"
+                for key in self._ProjectRawData.keys():
+                    print " * {0}".format(key)
+                for Reference in ReferencesAsked:
+                    print Reference
+                    entry = ''
+                    while entry == '':
+                        entry = raw_input('-> ')
+                    self._ProjectRawData[Name]['CreationReferences'][Reference] = entry
+            else:
+                print "No particular reference needed for this tool."
+            print ""
+            self._ProjectRawData[Name]['ExternalParameters'] = {}
+            if len(PossibleVariables) > 0:
+                print "Current tool parameters :"
+                for var in PossibleVariables:
+                    print " * {0} : {1}".format(var, TmpClass.__dict__[var])
+                entryvar = 'nothing'
+                while entryvar != '':
+                    print "Enter variable to change :"
+                    entryvar = raw_input('-> ')
+                    if entryvar != '' and entryvar in PossibleVariables:
+                        print "Enter new value :"
+                        entryvalue = raw_input('-> ')
+                        if entryvalue != '':
+                            try:
+                                self._ProjectRawData[Name]['ExternalParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
+                            except ValueError:
+                                print "Could not parse entry into the correct type"
+                    elif '=' in entryvar:
+                        entryvar, entryvalue = entryvar.split('=')
+                        if entryvar.strip() in PossibleVariables:
+                            try:
+                                self._ProjectRawData[Name]['ExternalParameters'][entryvar.strip()] = type(TmpClass.__dict__[entryvar.strip()])(entryvalue.strip())
+                            except ValueError:
+                                print "Could not parse entry into the correct type"
+                    elif entryvar != '':
+                        print "Wrong variable name."
+            print ""
+
         except KeyboardInterrupt:
             print "Canceling entries."
             del self._ProjectRawData[Name]
             return None
+        except ImportError:
+            print "No such file found. Canceling entries"
+            del self._ProjectRawData[Name]
+            return None
 
+        print "AddTool finished. Reloading project."
         self.LoadProject()
         print "New project : "
+        print ""
         self.DisplayCurrentProject()
         self.Modified = True
 
     def DisplayCurrentProject(self):
         print "# Framework"
         print ""
-        if self.InputName != None:
-            tool_name = self.InputName
-            filename = inspect.getfile(self.Tools[tool_name].__class__)
-            print "# 0 : {1}, from class {1} in file {2}.".format(None, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
-            print "     Type : {0}".format(self.Tools[tool_name]._Type)
-            print "     Parameters used for Creation:"
-            for Parameter in self._ToolsCreationParameters[tool_name]:
-                print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
-            print "     Parameters used for Initialization:"
-            for Parameter in self._ToolsInitializationParameters[tool_name]:
-                print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
 
-            print ""
-
-        nOrder = 1
-        for tool_name in self.ToolsOrder:
+        nOrder = 0
+        for tool_name in self.ToolsList:
             filename = inspect.getfile(self.Tools[tool_name].__class__)
-            print "# {0} : {1}, from class {1} in file {2}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
+            print "# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
             print "     Type : {0}".format(self.Tools[tool_name]._Type)
-            print "     Parameters used for Creation:"
-            for Parameter in self._ToolsCreationParameters[tool_name]:
-                print "         -> {0} from {1}, aliased {2}".format(Parameter.split('.')[1], Parameter.split('.')[0], Parameter.split('.')[2])
-            print "     Parameters used for Initialization:"
-            for Parameter in self._ToolsInitializationParameters[tool_name]:
-                print "         -> {0} from {1}".format(Parameter.split('.')[1], Parameter.split('.')[0])
+            if len(self._ToolsCreationReferences[tool_name].items()) > 0:
+                print "     Creation References:"
+                for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
+                    print "         -> Access to {0} from tool {1}".format(argName, toolReference)
+            else:
+                print "     No creation reference."
+            if len(self._ToolsExternalParameters[tool_name].items()) > 0:
+                print "     Modified Parameters:"
+                for var, value in  self._ToolsExternalParameters[tool_name].items():
+                    print "         -> {0} = {1}".format(var, value)
+            else:
+                print "     Using default parameters."
             print ""
             
             nOrder += 1

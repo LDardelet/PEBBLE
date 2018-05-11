@@ -3,29 +3,23 @@ import atexit
 import socket
 
 class DisplayHandler:
-    def __init__(self, argsCreationDict): 
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to handle the stream Display.
         '''
-        self.PostTransporters = {'Event':tools.SendEvent, 'Segment':tools.SendSegment}
-        self.MainAddress =  ("localhost", 54242)
-        self.Socket = None
-
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
         self._Type = 'Display'
+        self._CreationReferences = dict(argsCreationReferences)
 
-        for key in argsCreationDict.keys():
-            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
+        self._PostTransporters = {'Event':tools.SendEvent, 'Segment':tools.SendSegment}
+        self._MainAddress =  ("localhost", 54242)
+        self._Socket = None
 
         atexit.register(self.EndTransmission)
 
-    def _Initialize(self, argsInitializationDict):
-        '''
-        Expects:
-        'Framework.StreamsGeometries' -> Dict of Streams Geometries
-        'Framework.StreamHistory' -> List of previous streams
-        'Framework.ProjectFile' -> Name of the current project file
-        '''
-
+    def _Initialize(self):
         DisplayUp = tools.IsDisplayUp()
         if not DisplayUp:
             print "Aborting initialization process"
@@ -33,12 +27,12 @@ class DisplayHandler:
             return False
 
         print "Initializing DisplayHandler sockets."
-        tools.DestroySocket(self.Socket)
-        self.Socket = tools.GetDisplaySocket(argsInitializationDict['Framework.StreamsGeometries'][argsInitializationDict['Framework.StreamHistory'][-1]])
+        tools.DestroySocket(self._Socket)
+        self._Socket = tools.GetDisplaySocket(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
 
-        tools.CleanMapForStream(self.Socket)
+        tools.CleanMapForStream(self._Socket)
 
-        tools.SendStreamData(argsInitializationDict['Framework.ProjectFile'], argsInitializationDict['Framework.StreamHistory'][-1], self.Socket)
+        tools.SendStreamData(self._Framework.ProjectFile, self._Framework.StreamHistory[-1], self._Socket)
         self.MainUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 
         self.PostBox = []
@@ -56,8 +50,8 @@ class DisplayHandler:
 
     def Post(self):
         for item in self.PostBox:
-            self.PostTransporters[item.__class__.__name__](item, self.MainUDP, self.MainAddress, self.Socket)
+            self._PostTransporters[item.__class__.__name__](item, self.MainUDP, self._MainAddress, self._Socket)
         self.PostBox = []
 
     def EndTransmission(self):
-        tools.DestroySocket(self.Socket)
+        tools.DestroySocket(self._Socket)

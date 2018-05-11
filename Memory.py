@@ -2,25 +2,19 @@ import numpy as np
 from event import Event
 
 class Memory:
-    def __init__(self, argsCreationDict):
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to handle ST-context memory.
         Requires :
         '''
-
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
         self._Type = 'Memory'
-        self.Self = self
+        self._CreationReferences = dict(argsCreationReferences)
 
-        for key in argsCreationDict.keys():
-            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
-
-    def _Initialize(self, argInitializationDict):
-        '''
-        Expects:
-        'Framework.StreamsGeometries' -> Gets the ST-contexts shapes to create
-        'Framework.StreamHistory' -> Gets the name of the last stream created
-        '''
-        self.STContext = -np.inf*np.ones(argInitializationDict['Framework.StreamsGeometries'][argInitializationDict['Framework.StreamHistory'][-1]])
+    def _Initialize(self):
+        self.STContext = -np.inf*np.ones(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
         self.PreviousTsAtLocation = - np.inf
         self.LastEvent = Event(-np.inf, [0,0], 0)
 

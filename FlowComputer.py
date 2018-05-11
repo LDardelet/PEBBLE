@@ -5,36 +5,29 @@ from event import Event
 import matplotlib.pyplot as plt
 
 class FlowComputer:
-    def __init__(self, argsCreationDict):
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Tool to compute the optical flow.
         '''
+        self._ReferencesAsked = ['Memory']
+        self._Name = Name
+        self._Framework = Framework
+        self._Type = 'Computation'
+        self._CreationReferences = dict(argsCreationReferences)
 
-        self.Self = self
-
-        for key in argsCreationDict.keys():
-            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
         self.R = 5
         self.EventsAgeLimit = 0.3
         self.PolaritySeparation = True
 
-        self._Type = 'Computation'
 
-    def _Initialize(self, argsInitializationDict):
-        '''
-        Expects :
-        'Framework.StreamsGeometries' -> Dict of Streams Geometries
-        'Framework.StreamHistory' -> List of previous streams
-        'Memory.STContext' -> Access to the stream ST context
-        '''
-
-        self.CurrentShape = list(argsInitializationDict['Framework.StreamsGeometries'][argsInitializationDict['Framework.StreamHistory'][-1]])
+    def _Initialize(self):
+        self.CurrentShape = list(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
         self.NEventsMap = np.zeros(self.CurrentShape)
         self.DetMap = np.zeros(self.CurrentShape)
         self.FlowMap = np.zeros(self.CurrentShape + [2])
         self.NormMap = np.zeros(self.CurrentShape)
         self.RegMap = np.zeros(self.CurrentShape)
-        self.STContext = argsInitializationDict['Memory.STContext']
+        self.STContext = self.Framework.Tools[self._CreationReferences['Memory']].STContext
 
     def _OnEvent(self, event):
         self.ComputeFullFlow(event)

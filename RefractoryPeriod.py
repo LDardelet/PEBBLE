@@ -1,25 +1,21 @@
 import numpy as np
 
 class Refractory:
-    def __init__(self, argsCreationDict):
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to filter events from spike trains.
         Expects nothing.
         '''
-
+        self._ReferencesAsked = ['Memory']
+        self._Name = Name
+        self._Framework = Framework
         self._Type = 'Filter'
+        self._CreationReferences = dict(argsCreationReferences)
 
         self.Period = 0.06 # Given is seconds
 
-        for key in argsCreationDict.keys():
-            self.__dict__[key.split('.')[2]] = argsCreationDict[key]
-
-    def _Initialize(self, argsInitializationDict):
-        '''
-        Requires:
-        'Memory.Self' -> Gets Access to a memory tool, that should contain a STContext class variable
-        '''
-        self.Memory = argsInitializationDict['Memory.Self']
+    def _Initialize(self):
+        self.Memory = self._Framework.Tools[self._CreationReferences['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 

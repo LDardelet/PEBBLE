@@ -54,15 +54,20 @@ def ComputeNewItems(InitialList, NewElement, Area = 0, IntersectingArea = 0):
     return NewParts, IntersectionParts, Area, IntersectingArea
 
 
-def DrawSubdivision(List, fig = None, ax = None):
+def DrawSubdivision(List, fig = None, ax = None, singleColor = False):
     if fig == None:
         fig = plt.figure()
         ax = fig.add_subplot(111, aspect='equal')
 
+    
     r = lambda: random.randint(0,255)
     
     for part in List:
-        ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = '#%02X%02X%02X' % (r(),r(),r())))
+        if singleColor:
+            ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = 'r'))
+        else:
+            ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = '#%02X%02X%02X' % (r(),r(),r())))
+
     ax.autoscale(True)
     fig.show()
     return fig, ax
@@ -164,8 +169,8 @@ def CreateDensityProjection(PartsList, IntersectingPartsList, resolution = 10): 
     xLenght = Limits[2] - Limits[0]
     yLenght = Limits[3] - Limits[1]
 
-    nX = int(xLenght*resolution) + 1
-    nY = int(yLenght*resolution) + 1
+    nX = int(xLenght*resolution)
+    nY = int(yLenght*resolution)
 
     Density = np.zeros((nX, nY))
     print "Meshgrid created"
@@ -174,8 +179,8 @@ def CreateDensityProjection(PartsList, IntersectingPartsList, resolution = 10): 
         if nItem % 64 == 0:
             sys.stdout.write("Filling .. {0}%\r".format(int(100.*nItem/nItems)))
             sys.stdout.flush()
-        for x in range(int(resolution*(Part[0] - Limits[0])), int(resolution*(Part[2] - Limits[0])) +1):
-            for y in range(int(resolution*(Part[1] - Limits[1])), int(resolution*(Part[3] - Limits[1])) +1):
+        for x in range(int(resolution*(Part[0] - Limits[0])), int(resolution*(Part[2] - Limits[0]))):
+            for y in range(int(resolution*(Part[1] - Limits[1])), int(resolution*(Part[3] - Limits[1]))):
                 Density[x,y] += 1
         nItem += 1
     print "Filling complete."

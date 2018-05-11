@@ -19,7 +19,14 @@ class PM:
 
         self.DisplayCanvas = FigureCanvasTkAgg(self.Display, self.MainWindow)
         self.DisplayCanvas.show()
-        self.DisplayCanvas.get_tk_widget().grid(row = 0, column = 0, rowspan = 8)
+        self.DisplayCanvas.get_tk_widget().grid(row = 1, column = 0, rowspan = 8)
 
+        self.MainWindow.bind('<Escape>', lambda event: self._on_closing())
+        self.MainWindow.protocol('WM_DELETE_WINDOW', self._on_closing)
+        
+
+    def _OnClosing(self):
+        self.MainWindow.quit()
+        self.MainWindow.destroy()
 
 Pm = PM()

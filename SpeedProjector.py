@@ -4,21 +4,25 @@ import sys
 import matplotlib.pyplot as plt
 
 class Projector:
-    def __init__(self, argsCreationDict):
+    def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Tool to create a 2D projection of the STContext onto a plane t = cst along different speeds.
         Should allow to recove the actual speed and generator of the movement
-        Expects:
         '''
-        self.R_Projection = 0.5
-        self.ExpansionFactor = 4.
-
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
         self._Type = 'Computation'
+        self._CreationReferences = dict(argsCreationReferences)
 
-    def _Initialize(self, argsInitializationDict):
+        self.R_Projection = 0.5
+        self.ExpansionFactor = 1.
+
         self.BinDt = 0.002
         self.Precision_aimed = 0.5
         self.Initial_dv_MAX = 160.
+
+    def _Initialize(self):
 
         self.ActiveSpeeds = []
         self.Speeds = []
@@ -68,10 +72,11 @@ class Projector:
             self.ExpandableBunch = 1
             for speed_id in self.ActiveSpeeds:
                 if self.AssumedInitialized[speed_id] == 0:
-                    if (event.timestamp - self.SpeedStartTime[speed_id])*max(2., self.SpeedNorms[speed_id]) >= self.ExpansionFactor * np.sqrt(2):
+                    #if (event.timestamp - self.SpeedStartTime[speed_id])*max(2., self.SpeedNorms[speed_id]) >= self.ExpansionFactor * np.sqrt(2):
+                    if (event.timestamp - self.SpeedStartTime[speed_id])*max(1., abs(self.Speeds[speed_id]).min()) >= self.ExpansionFactor:
                         self.AssumedInitialized[speed_id] = event.timestamp
                     else:
-                        if not (event.timestamp - self.SpeedStartTime[speed_id]) > 0.1:
+                        if True or not (event.timestamp - self.SpeedStartTime[speed_id]) > 0.1:
                             self.ExpandableBunch *= 0
                 self.ProjectEventWithSpeed(event, speed_id)
 
@@ -86,7 +91,7 @@ class Projector:
                 self.NormalizedAreasHistory += [(np.array(self.Areas)/np.array(self.NEventsBySpeed)).tolist()]
                 self.NormalizedIntersectingAreasHistory += [(np.array(self.IntersectingAreas)/np.array(self.Areas)).tolist()]
 
-                if event.timestamp - self.TsArgMin > 0.3 and self.NormalizedIntersectingAreasHistory[-1][self.ArgMinArea] > 1.:
+                if True and event.timestamp - self.TsArgMin > 0.1 and self.NormalizedIntersectingAreasHistory[-1][self.ArgMinArea] > 1.:
                     self.ExpandableBunch = 1
 
                 if self.MinArea > self.MinRunArea[-1]:
@@ -136,6 +141,8 @@ class Projector:
                     except:
                         self.ZonePartsIDs[n_speed][key] = []
                         self.ZonePartsIDs[n_speed][key] += [ID]
+
+        self.IntersectingPartsList[n_speed] += IntersectingParts
 
         if self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea: # Possible check needed for this line, but seems to work better without the AssumedInitialized condition
         #if self.AssumedInitialized[n_speed] != 0 and self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea:

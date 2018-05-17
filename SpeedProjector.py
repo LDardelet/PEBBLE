@@ -3,7 +3,275 @@ import geometry
 import sys
 import matplotlib.pyplot as plt
 
-class Projector:
+class ProjectorV2:
+    def __init__(self, Name, Framework, argsCreationReferences):
+        '''
+        Tool to create a 2D projection of the STContext onto a plane t = cst along different speeds.
+        Should allow to recove the actual speed and generator of the movement
+        '''
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
+        self._Type = 'Computation'
+        self._CreationReferences = dict(argsCreationReferences)
+
+        self.R_Projection = 0.5
+        self.ExpansionFactor = 1.
+
+        self.BinDt = 0.100
+        self.Precision_aimed = 0.5
+        self.Initial_dv_MAX = 160.
+
+        self.DensityDefinition = 10 # In dpp
+        self.MaskDensityRatio = 0.3
+
+        self.GroundTS = 0.8
+
+    def _Initialize(self):
+
+        self.ActiveSpeeds = []
+        self.Speeds = []
+
+        self.ToInitializeSpeed = []
+        self.SpeedStartTime = []
+        self.SpeedNorms = []
+        self.OWAST = [] # Stands for "Observation Window at Start Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
+        self.DensitiesMaps = []
+        self.Masks = []
+        self.PresenceMaps = []
+
+        self.DensitiesMaxValues = []
+
+        StreamGeometry = self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]]
+        self.DefaultObservationWindow = [0., 0., float(StreamGeometry[0]+1), float(StreamGeometry[1]+1)]
+
+        self.LocalPaddings = []
+        self.InitializedAt = []
+        self.NEventsBySpeed = []
+        self.Displacements = []
+        self.Consistencies = []
+        self.RelativeMeanStreaks = []
+
+        self.SpeedsChangesTs = []
+        self.SpeedsChangesIndexes = [None]
+        self.SpeedsExpanded  = [[]]
+
+        self.AddExponentialSeeds(vx_center = 0., vy_center = 0., v_max_observed = self.Initial_dv_MAX, v_min_observed = self.Precision_aimed*2, add_center = True)
+
+        self.LastTsSave = 0.
+        self.TsHistory = []
+        self.ConsistencyHistory = []
+        self.RelativeMeanStreaksHistory = []
+
+        self.SetTS = self.DynamicMinTSSet
+
+    def _OnEvent(self, event):
+        self.SetTS(event.timestamp)
+        if event.timestamp > self.GroundTS:
+            if len(self.ToInitializeSpeed) > 0:
+                for speed_id in self.ToInitializeSpeed:
+                    self.SpeedStartTime[speed_id] = event.timestamp
+                self.ToInitializeSpeed = []
+
+            for speed_id in self.ActiveSpeeds:
+                if self.InitializedAt[speed_id] == 0:
+                    if (event.timestamp - self.SpeedStartTime[speed_id])*max(1., abs(self.Speeds[speed_id]).min()) >= self.ExpansionFactor:
+                        self.InitializedAt[speed_id] = event.timestamp
+                self.ProjectEventWithSpeed(event, speed_id)
+
+            if event.timestamp - self.LastTsSave >= self.BinDt:
+                self.LastTsSave = event.timestamp
+                self.TsHistory += [event.timestamp]
+                
+                for speed_id in self.ActiveSpeeds:
+                    self.ComputeMask(speed_id)
+                    self.ComputeConsistency(speed_id)
+                    self.ComputeRelativeMeanStreaks(speed_id)
+                
+                self.ConsistencyHistory += [list(self.Consistencies)]
+                self.RelativeMeanStreaksHistory += [list(self.RelativeMeanStreaks)]
+
+        return event
+
+    def ProjectEventWithSpeed(self, event, speed_id):
+        self.UpdateDisplacement(event.timestamp, speed_id)
+        x0 = event.location[0] - self.Displacements[speed_id][0]
+        y0 = event.location[1] - self.Displacements[speed_id][1]
+        
+        OW = self.OWAST[speed_id]
+        if not (OW[0] <= x0 <= OW[2] and OW[1] <= y0 <= OW[3]):
+            return None
+
+        Map = self.DensitiesMaps[speed_id]
+        for x in range(int(self.DensityDefinition*((x0 - self.R_Projection) - OW[0])), int(self.DensityDefinition*((x0 + self.R_Projection) - OW[0]))):
+            for y in range(int(self.DensityDefinition*((y0 - self.R_Projection) - OW[1])), int(self.DensityDefinition*((y0 + self.R_Projection) - OW[1]))):
+                Map[x,y] += 1
+
+    def UpdateDisplacement(self, t, speed_id):
+        self.Displacements[speed_id] = (t - self.SpeedStartTime[speed_id])*self.Speeds[speed_id]
+
+    def ComputeMask(self, speed_id):
+        Density = self.DensitiesMaps[speed_id]
+        self.PresenceMaps[speed_id] = Density > 0
+
+        self.CurrentStreakMap = Density - self.PresenceMaps[speed_id]
+
+        self.Masks[speed_id] = self.CurrentStreakMap > self.CurrentStreakMap.max()*self.MaskDensityRatio
+
+    def ComputeConsistency(self, speed_id):
+        Mask = self.Masks[speed_id]
+        self.Consistencies[speed_id] = float((Mask[1:-1,1:-1]*Mask[2:,1:-1]*Mask[:-2,1:-1]*Mask[1:-1,:-2]*Mask[1:-1,2:]).sum())/max(1, Mask.sum())
+
+    def ComputeRelativeMeanStreaks(self, speed_id):
+        Displacement = np.linalg.norm(self.Displacements[speed_id])
+        Density = self.DensitiesMaps[speed_id]
+        MeanStreak = float(self.CurrentStreakMap.sum())/max(1, (self.CurrentStreakMap > 0).sum())
+
+        self.RelativeMeanStreaks[speed_id] = MeanStreak/max(1, Displacement)
+
+    def ComputeInterestCentersWithSpeeds(self, n_points, consistency_limit = 0.5, dSpaceRatio = 2.):
+        PossibleIDsByConsistency = np.where(np.array(self.Consistencies) > consistency_limit)[0]
+
+        InitialCenters = []
+        InitialVariances = []
+        InitialSpeedsAssociated = []
+
+        for local_id in np.argsort(-np.array(self.RelativeMeanStreaks)[PossibleIDsByConsistency]): # We sort by -RelativeMeanStreaks to get the highest MeansStreaks first
+            speed_id = PossibleIDsByConsistency[local_id]
+            if self.RelativeMeanStreaks[speed_id] >= 1.:
+                continue
+            Xs, Ys = np.where(self.Masks[speed_id])
+            Xs = np.array(Xs, dtype = float) / self.DensityDefinition + self.Displacements[speed_id][0] + self.OWAST[speed_id][0]
+            Ys = np.array(Ys, dtype = float) / self.DensityDefinition + self.Displacements[speed_id][1] + self.OWAST[speed_id][1]
+            N_Points = Xs.shape[0]
+            Xmean = Xs.mean()
+            Ymean = Ys.mean()
+            dX = dSpaceRatio * np.sqrt(float(((Xs - Xmean)**2).sum())/N_Points)
+            dY = dSpaceRatio * np.sqrt(float(((Ys - Ymean)**2).sum())/N_Points)
+            
+            InitialCenters += [np.array([Xmean, Ymean])]
+            InitialVariances += [np.array([dX, dY])]
+            InitialSpeedsAssociated += [speed_id]
+
+        NObjectsFound = 0
+        FinalCenters = []
+        FinalVariances = []
+        FinalSpeeds = []
+        FinalSpeedsAverage = []
+
+        for Center, Variances, SpeedId in zip(InitialCenters, InitialVariances, InitialSpeedsAssociated):
+            FoundSimilarObject = False
+            for nObject in range(NObjectsFound):
+                nSpeedsInObject = len(FinalSpeeds[nObject])
+                if 0.8 <= Variances[0] / FinalVariances[nObject][0] <= 1.2 and 0.8 <= Variances[1] / FinalVariances[nObject][1] <= 1.2:
+                    if (abs(Center - FinalCenters[nObject]) < FinalVariances[nObject]/dSpaceRatio).all():
+                        if np.linalg.norm(self.Speeds[SpeedId] - FinalSpeedsAverage[nObject])/max(1, np.linalg.norm(FinalSpeedsAverage[nObject])) <= 1.:
+                            FinalCenters[nObject] = (FinalCenters[nObject]*nSpeedsInObject + Center)/(nSpeedsInObject+1)
+                            FinalVariances[nObject] = (FinalVariances[nObject]*nSpeedsInObject + Variances)/(nSpeedsInObject+1)
+                            FinalSpeeds[nObject] += [SpeedId]
+                            FinalSpeedsAverage[nObject] = (FinalSpeedsAverage[nObject]*nSpeedsInObject + self.Speeds[SpeedId])/(nSpeedsInObject+1)
+
+                            FoundSimilarObject = True
+                            break
+                        else:
+                            print "Speeds"
+                    else:
+                        print "Center"
+                else:
+                    print "Variances"
+
+            if not FoundSimilarObject and NObjectsFound < n_points:
+                NObjectsFound += 1
+                FinalCenters += [Center]
+                FinalVariances += [Variances]
+                FinalSpeeds += [[SpeedId]]
+                FinalSpeedsAverage += [self.Speeds[SpeedId]]
+                
+        Boxes = [[Center[0] - Variances[0], Center[1] - Variances[1], Center[0] + Variances[0], Center[1] + Variances[1]] for Center, Variances in zip(FinalCenters, FinalVariances)]
+        return Boxes, FinalSpeeds
+
+    def PlotCurrentInterestRegions(self, f, ax, n_points = 5):
+        Boxes, SpeedsIDs = self.ComputeInterestCentersWithSpeeds(n_points)
+        n = 0
+        for Box, ConcernedSpeedsIDs in zip(Boxes, SpeedsIDs):
+            n += 1
+            ax.plot([Box[0], Box[0]], [Box[1], Box[3]], 'grey')
+            ax.plot([Box[2], Box[2]], [Box[1], Box[3]], 'grey')
+            ax.plot([Box[0], Box[2]], [Box[1], Box[1]], 'grey')
+            ax.plot([Box[0], Box[2]], [Box[3], Box[3]], 'grey')
+
+            ax.text(Box[0] + 1, Box[1] + 1, "Box # {0}\n".format(n) + "\n".join(["Vx = {0:.1f}, Vy = {1:.1f}, id = {2}".format(self.Speeds[speed_id][0], self.Speeds[speed_id][1], speed_id) for speed_id in ConcernedSpeedsIDs]), color = 'grey')
+
+    def AddSeed(self, speed, localpadding, OW, force = False):
+        if force:
+            for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+        else:
+            for PreviousSpeed in self.Speeds:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+
+        speed_id = len(self.Speeds)
+        self.ActiveSpeeds += [speed_id]
+        self.ToInitializeSpeed += [speed_id]
+        self.Speeds += [speed]
+        self.LocalPaddings += [localpadding]
+
+        self.SpeedStartTime += [0]
+
+        self.SpeedNorms += [np.linalg.norm(speed)]
+        self.DensitiesMaps += [self.CreateEmptyDensityMap(OW[2] - OW[0], OW[3] - OW[1])]
+        self.PresenceMaps += [None]
+        self.Masks += [None]
+        self.InitializedAt += [0]
+        self.NEventsBySpeed += [0]
+        self.OWAST += [OW]
+
+        self.Displacements += [None]
+        self.Consistencies += [0]
+        self.RelativeMeanStreaks += [0]
+
+        return True
+
+    def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., v_min_observed = 1., v_max_observed = 100., add_center = True): #observed are referenced to the center
+        center_speed = np.array([vx_center, vy_center])
+
+        MaxSpeedTried = v_max_observed
+        v_seed = 2.*v_min_observed
+        seeds = [0.]
+        i = 1
+        while v_seed**i <= MaxSpeedTried:
+            seeds += [v_seed**i]
+            i += 1
+        print "Seeds : ", seeds
+        if add_center:
+            self.AddSeed(center_speed, (-v_seed, -v_seed, v_seed, v_seed), OW = self.DefaultObservationWindow)
+        
+        for dvx in seeds:
+            for dvy in seeds:
+                if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, v_seed), -max(dvy/2, v_seed), max(dvx, v_seed), max(dvy, v_seed)), OW = self.DefaultObservationWindow)
+                    if dvx != 0.:
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, v_seed), -max(dvy/2, v_seed), max(dvx/2, v_seed), max(dvy, v_seed)), OW = self.DefaultObservationWindow)
+                    if dvy != 0:
+                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, v_seed), -max(dvy, v_seed), max(dvx/2, v_seed), max(dvy/2, v_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, v_seed), -max(dvy, v_seed), max(dvx, v_seed), max(dvy/2, v_seed)), OW = self.DefaultObservationWindow)
+        print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+
+    def DynamicMinTSSet(self, ts):
+        self.LastTsSave = self.GroundTS
+        self.SpeedsChangesTs += [self.GroundTS]
+
+        self.SetTS = self.GBFunction
+
+    def GBFunction(*kwargs):
+        return None
+
+    def CreateEmptyDensityMap(self, SizeX, SizeY):
+        return np.zeros((int((SizeX + 2*self.R_Projection) * self.DensityDefinition), int((SizeY + 2*self.R_Projection) * self.DensityDefinition)))
+
+class ProjectorV1:
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Tool to create a 2D projection of the STContext onto a plane t = cst along different speeds.
@@ -22,6 +290,8 @@ class Projector:
         self.Precision_aimed = 0.5
         self.Initial_dv_MAX = 160.
 
+        self.DensityDefinition = 5 # In dpp
+
     def _Initialize(self):
 
         self.ActiveSpeeds = []
@@ -35,6 +305,7 @@ class Projector:
         self.ZonePartsIDs = []
         self.Areas = []
         self.IntersectingAreas = []
+        self.Densities = []
         self.LocalPaddings = []
         self.AssumedInitialized = []
         self.NEventsBySpeed = []
@@ -51,6 +322,7 @@ class Projector:
         self.ArgMinAreaHistory = []
         self.NormalizedAreasHistory = []
         self.NormalizedIntersectingAreasHistory = []
+        self.PartsNumberHistory = []
 
         self.MinArea = 1.
         self.ArgMinArea = -1
@@ -90,6 +362,8 @@ class Projector:
                 self.ArgMinAreaHistory += [self.ArgMinArea]
                 self.NormalizedAreasHistory += [(np.array(self.Areas)/np.array(self.NEventsBySpeed)).tolist()]
                 self.NormalizedIntersectingAreasHistory += [(np.array(self.IntersectingAreas)/np.array(self.Areas)).tolist()]
+                self.PartsNumberHistory += [[len(PartList) for PartList in self.PartsList]]
+                #self.UpdateDensities()
 
                 if True and event.timestamp - self.TsArgMin > 0.1 and self.NormalizedIntersectingAreasHistory[-1][self.ArgMinArea] > 1.:
                     self.ExpandableBunch = 1
@@ -148,6 +422,10 @@ class Projector:
         #if self.AssumedInitialized[n_speed] != 0 and self.Areas[n_speed]/self.NEventsBySpeed[n_speed] < self.MinArea:
             self.ArgMinArea = n_speed
             self.MinArea = self.Areas[n_speed]/self.NEventsBySpeed[n_speed]
+    
+    def UpdateDensities(self):
+        for speed_id in self.ActiveSpeeds:
+            self.Densities[speed_id] = geometry.CreateDensityProjection(self.PartsList[speed_id], self.IntersectingPartsList[speed_id], self.DensityDefinition, verbose = False)
 
     def ClearUselessSpeeds(self, event):
         conserve_top = max(5, int(len(self.ActiveSpeeds)/9))
@@ -200,6 +478,7 @@ class Projector:
         self.SpeedNorms += [np.linalg.norm(speed)]
         self.PartsList += [[]]
         self.IntersectingPartsList += [[]]
+        self.Densities += [None]
         self.ZonePartsIDs += [{}]
         self.Areas += [0]
         self.IntersectingAreas += [0]

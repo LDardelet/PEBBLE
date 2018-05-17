@@ -39,7 +39,7 @@ class Framework:
             -> FlowComputer : Computes the optical flow of a stream of events
 
     '''
-    def __init__(self, ProjectFile = None, verboseRatio = 10000):
+    def __init__(self, ProjectFile = None, onlyRawData = False, verboseRatio = 10000):
         self.ProjectFile = ProjectFile
         self.Modified = False
 
@@ -54,7 +54,7 @@ class Framework:
 
         if not ProjectFile is None:
             try:
-                self.LoadProject(ProjectFile)
+                self.LoadProject(ProjectFile, onlyRawData = onlyRawData)
             except e:
                 print e
                 print "Unable to load project, check self._ProjectRawData for file integrity"
@@ -73,6 +73,9 @@ class Framework:
                 ans = raw_input('Unsaved changes. Please enter a file name, or leave blank to discard : ')
             if ans != '':
                 self.SaveProject(ans)
+
+    def ReRun(self):
+        self.RunStream(self.StreamHistory[-1])
 
     def RunStream(self, StreamName, resume = False):
         if not resume:
@@ -113,7 +116,7 @@ class Framework:
         self.ToolsOrder = {}
         self.ToolsList = []
 
-    def LoadProject(self, ProjectFile = None, enable_easy_access = True):
+    def LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
         self._GenerateEmptyProject()
 
         if ProjectFile is None:
@@ -121,6 +124,9 @@ class Framework:
         else:
             data = pickle.load(open(ProjectFile, 'rb'))
             self._ProjectRawData = data
+
+        if onlyRawData:
+            return None
 
         for tool_name in data.keys():
             fileLoaded = __import__(data[tool_name]['File'])

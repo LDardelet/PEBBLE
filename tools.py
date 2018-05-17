@@ -207,6 +207,71 @@ def CreateMovingCircleStream(Speed, angle, gitter = 0., screen_size = [200, 200]
             TimeStamps[Xs[i], Ys[i], Ps[i]] = np.inf
     return Stream, tuple(screen_size + [2])
 
+def CreateDuoCirclesStream(Speed1, angle1, Speed2, angle2, gitter = 0., screen_size = [200, 200], circle_radius = [20,20]):
+    center_position = np.array(screen_size)/2
+    Stream = []
+    TimeStamps = np.inf*np.ones(screen_size+[2]+[2])
+
+    u1 = np.array([-np.sin(angle1), np.cos(angle1)])
+    v1 = np.array([np.cos(angle1), np.sin(angle1)])
+    P1 = center_position - v1*np.linalg.norm(center_position)/1.5
+    u2 = np.array([-np.sin(angle2), np.cos(angle2)])
+    v2 = np.array([np.cos(angle2), np.sin(angle2)])
+    P2 = center_position - v2*np.linalg.norm(center_position)/1.5
+    print "Creating circles duo, moving at vx_1 = {0} and vy_1 = {1}, and vx_2 = {2} and vy_2 = {3}.".format(Speed1*np.cos(angle1), Speed1*np.sin(angle1), Speed2*np.cos(angle2), Speed2*np.sin(angle2))
+
+    for x in range(screen_size[0]):
+        for y in range(screen_size[1]):
+            X = np.array([x,y])
+            l1 = ((X - P1)*u1).sum()
+            l2 = ((X - P2)*u2).sum()
+            if abs(l1) < circle_radius[0]:
+                delta1 = np.sqrt(circle_radius[0]**2 - l1 ** 2)
+                dP_on1 = ((X - P1)*v1).sum() - delta1
+                if dP_on1 > 0:
+                    if gitter != 0:
+                        error = random.expovariate(1./(gitter*(1./Speed1)))
+                    else:
+                        error = 0
+                    TimeStamps[x,y,0,0] = dP_on1/Speed1 + error
+                dP_off1 = ((X - P1)*v1).sum() + delta1
+                if dP_off1 > 0:
+                    if gitter != 0:
+                        error = random.expovariate(1./(gitter*(1./Speed1)))
+                    else:
+                        error = 0
+                    TimeStamps[x,y,1,0] = dP_off1/Speed1 + error
+            if abs(l2) < circle_radius[1]:
+                delta2 = np.sqrt(circle_radius[1]**2 - l2 ** 2)
+                dP_on2 = ((X - P2)*v2).sum() - delta2
+                if dP_on2 > 0:
+                    th_ts = dP_on2/Speed2 # Now we check that the correcponding point is not behind the other circle
+                    P1_at_ts = P1 + v1 * Speed1 * th_ts
+                    if np.linalg.norm(X - P1_at_ts) > circle_radius[0]:
+                        if gitter != 0:
+                            error = random.expovariate(1./(gitter*(1./Speed2)))
+                        else:
+                            error = 0
+                        TimeStamps[x,y,0,1] = dP_on2/Speed2 + error
+                dP_off2 = ((X - P2)*v2).sum() + delta2
+                if dP_off2 > 0:
+                    th_ts = dP_off2/Speed2
+                    P1_at_ts = P1 + v1 * Speed1 * th_ts
+                    if np.linalg.norm(X - P1_at_ts) > circle_radius[0]:
+                        if gitter != 0:
+                            error = random.expovariate(1./(gitter*(1./Speed2)))
+                        else:
+                            error = 0
+                        TimeStamps[x,y,1,1] = dP_off2/Speed2 + error
+
+    while TimeStamps.min() < np.inf:
+        Xs, Ys, Ps, Circle = np.where(TimeStamps == TimeStamps.min())
+        for i in range(Xs.shape[0]):
+            Stream += [Event(TimeStamps[Xs[i], Ys[i], Ps[i], Circle[i]], np.array([Xs[i], Ys[i]]), Ps[i])]
+            TimeStamps[Xs[i], Ys[i], Ps[i], Circle[i]] = np.inf
+    return Stream, tuple(screen_size + [2])
+
+
 def CreateMovingBarStream(Speed, angle, gitter = 0., screen_size = [200, 200], bar_size = [10, 40]):
 #Gitter is given as a ratio of the time between two spiking pixels
     
@@ -476,11 +541,16 @@ def peek(f, length=1):
 
 def RandomStream(geometry = None, vmax = 100., gitterrange = 1.):
     if geometry is None:
-        geometry = random.choice(['Circle', 'Bar'])
+        geometry = random.choice(['Circle', 'Bar', 'Duo'])
     speednorm = random.random()*vmax
     angle = random.random()*2*np.pi
     gitter = random.random()*gitterrange
-    return 'Create-{3}#{0:.1f}#{1:.3f}#{2:.1f}'.format(speednorm,angle,gitter, geometry)
+    StreamName = 'Create-{0}#{1:.1f}#{2:.3f}'.format(geometry, speednorm, angle)
+    if geometry == 'Duo':
+        StreamName += '#{0:.1f}#{1:.3f}'.format(random.random()*vmax, random.random()*2*np.pi)
+    StreamName += '#{0:.1f}'.format(gitter)
+    return StreamName
+
 
 def CompareStreamsOld(S1, S2, geometry, deltaTMax):
 	TS1 = 0

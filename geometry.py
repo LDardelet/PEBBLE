@@ -61,13 +61,40 @@ def DrawSubdivision(List, fig = None, ax = None, singleColor = False):
 
     
     r = lambda: random.randint(0,255)
+    if singleColor:
+        color = '#%02X%02X%02X' % (r(),r(),r())
     
     for part in List:
         if singleColor:
-            ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = 'r'))
+            ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = color))
         else:
             ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = '#%02X%02X%02X' % (r(),r(),r())))
 
+    ax.autoscale(True)
+    fig.show()
+    return fig, ax
+
+def DrawSuccessiveSubdivisions(List, PartsNumberHistory, add_mean_position = True):
+    UselessSteps = (np.array(PartsNumberHistory) == PartsNumberHistory[-1]).sum() - 1
+    if UselessSteps > 0:
+        PartsNumberHistory = list(PartsNumberHistory[:-UselessSteps])
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, aspect = 'equal')
+
+    N_Steps = len(PartsNumberHistory)
+    History = [0] + PartsNumberHistory
+    for n_step in range(N_Steps):
+        Mean_position = np.array([0.,0.])
+        Sum_Area = 0
+        color = '#%02X%02X%02X' % (int(n_step*200./N_Steps)+25, 0, 0)
+        for part in List[History[n_step]:History[n_step + 1]]:
+            Area = (part[2] - part[0])*(part[3]-part[1])
+            Mean_position += Area*np.array([part[2] + part[0], part[3] + part[1]])/2
+            Sum_Area += Area
+            ax.add_patch(patches.Rectangle((part[0], part[1]), part[2]-part[0], part[3]-part[1], color = color))
+        if add_mean_position:
+            ax.plot(Mean_position[0]/Sum_Area, Mean_position[1]/Sum_Area, marker  ='v', color = color)
     ax.autoscale(True)
     fig.show()
     return fig, ax
@@ -161,8 +188,9 @@ def GetMinMaxAreaValues(PartsList):
         yMax = max(yMax, Part[3])
     return xMin, yMin, xMax, yMax
 
-def CreateDensityProjection(PartsList, IntersectingPartsList, resolution = 10): # resolution in dpp
-    FinalList = PartsList + IntersectingPartsList
+def CreateDensityProjection(PartsList, IntersectingPartsList, resolution = 10, verbose = True): # resolution in dpp
+    #FinalList = PartsList + IntersectingPartsList
+    FinalList = IntersectingPartsList
     nItems = len(FinalList)
     Limits = GetMinMaxAreaValues(PartsList)
 
@@ -173,15 +201,17 @@ def CreateDensityProjection(PartsList, IntersectingPartsList, resolution = 10): 
     nY = int(yLenght*resolution)
 
     Density = np.zeros((nX, nY))
-    print "Meshgrid created"
+    if verbose:
+        print "Meshgrid created"
     nItem = 0
     for Part in FinalList:
-        if nItem % 64 == 0:
+        if verbose and nItem % 64 == 0:
             sys.stdout.write("Filling .. {0}%\r".format(int(100.*nItem/nItems)))
             sys.stdout.flush()
         for x in range(int(resolution*(Part[0] - Limits[0])), int(resolution*(Part[2] - Limits[0]))):
             for y in range(int(resolution*(Part[1] - Limits[1])), int(resolution*(Part[3] - Limits[1]))):
                 Density[x,y] += 1
         nItem += 1
-    print "Filling complete."
+    if verbose:
+        print "Filling complete."
     return Density

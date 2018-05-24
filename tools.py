@@ -313,7 +313,7 @@ def CreateMovingBarStream(Speed, angle, gitter = 0., screen_size = [200, 200], b
     return Stream, tuple(screen_size + [2])
 
 def load_data_dat(filename, y_invert = True, header_size = 42):
-    if '.dat' in filename:
+    if '.dat' in filename or '.es' in filename:
         all_ts, coords, all_p, rem = readATIS_td(filename)
         all_x = coords[:,0]
         all_y = coords[:,1]

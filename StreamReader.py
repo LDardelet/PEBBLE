@@ -21,7 +21,7 @@ class Reader:
         if '.csv' in self.StreamName: # TODO
             print "csv load is  not workin yet"
             self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_csv(self.StreamName)
-        elif '.dat' in self.StreamName:
+        elif '.dat' in self.StreamName or '.es' in self.StreamName:
             self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_dat(self.StreamName)
         elif 'Create-' in self.StreamName:
             if 'Bar' in self.StreamName:

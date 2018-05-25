@@ -178,7 +178,7 @@ def CreateMovingCircleStream(Speed, angle, gitter = 0., screen_size = [200, 200]
     u = np.array([-np.sin(angle), np.cos(angle)])
     v = np.array([np.cos(angle), np.sin(angle)])
     print "Creating moving circle with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle))
-    P = center_position - v*np.linalg.norm(center_position)/1.5
+    P = center_position - v*(center_position.min() - circle_radius - 5)
 
     for x in range(screen_size[0]):
         for y in range(screen_size[1]):
@@ -214,10 +214,10 @@ def CreateDuoCirclesStream(Speed1, angle1, Speed2, angle2, gitter = 0., screen_s
 
     u1 = np.array([-np.sin(angle1), np.cos(angle1)])
     v1 = np.array([np.cos(angle1), np.sin(angle1)])
-    P1 = center_position - v1*np.linalg.norm(center_position)/1.5
+    P1 = center_position - v1*(center_position.min() - circle_radius[0] - 5)
     u2 = np.array([-np.sin(angle2), np.cos(angle2)])
     v2 = np.array([np.cos(angle2), np.sin(angle2)])
-    P2 = center_position - v2*np.linalg.norm(center_position)/1.5
+    P2 = center_position - v2*(center_position.min() - circle_radius[1] - 5)
     print "Creating circles duo, moving at vx_1 = {0} and vy_1 = {1}, and vx_2 = {2} and vy_2 = {3}.".format(Speed1*np.cos(angle1), Speed1*np.sin(angle1), Speed2*np.cos(angle2), Speed2*np.sin(angle2))
 
     for x in range(screen_size[0]):
@@ -283,6 +283,7 @@ def CreateMovingBarStream(Speed, angle, gitter = 0., screen_size = [200, 200], b
     v = np.array([np.cos(angle), np.sin(angle)])
     print "Creating moving bar with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle))
     
+    P = center_position - v*(center_position.min() - bar_size[0] - 5)
     P = center_position - v*np.linalg.norm(center_position)/1.5
 
     P_on = P + bar_size[0]*v
@@ -539,7 +540,7 @@ def peek(f, length=1):
     f.seek(pos)
     return data
 
-def RandomStream(geometry = None, vmax = 100., gitterrange = 1.):
+def RandomStream(geometry = None, vmax = 80., gitterrange = 1.):
     if geometry is None:
         geometry = random.choice(['Circle', 'Bar', 'Duo'])
     speednorm = random.random()*vmax

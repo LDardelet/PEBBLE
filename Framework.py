@@ -74,35 +74,45 @@ class Framework:
             if ans != '':
                 self.SaveProject(ans)
 
-    def ReRun(self):
-        self.RunStream(self.StreamHistory[-1])
+    def ReRun(self, stop_at = np.inf):
+        self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
-    def RunStream(self, StreamName, resume = False):
+    def RunStream(self, StreamName, stop_at = np.inf, resume = False):
         if not resume:
             self.StreamHistory += [StreamName]
             self.Initialize()
 
         self.Running = True
-        while self.Running:
-            self.NextEvent()
+        self.Paused = False
+        while self.Running and not self.Paused:
+            t = self.NextEvent()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
-                    print "Interrupted."
-                    break
+                    self.Paused = True
+            if t > stop_at:
+                self.Paused = True
         if not self.Running:
             print "Main loop finished without error."
+        if self.Paused:
+            print "Paused."
 
-    def Resume(self):
-        self.RunStream(self.StreamHistory[-1], resume = True)
+    def Resume(self, stop_at = np.inf):
+        self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
     def NextEvent(self):
         PropagatedEvent = None
+        t = None
         for tool_name in self.ToolsList:
             PropagatedEvent = self.Tools[tool_name]._OnEvent(PropagatedEvent)
             if PropagatedEvent is None:
                 break
+            else:
+                if t is None:
+                    t = PropagatedEvent.timestamp
+        return t
+
 
 #### Project Management ####
 

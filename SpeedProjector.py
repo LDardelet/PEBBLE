@@ -3,6 +3,164 @@ import geometry
 import sys
 import matplotlib.pyplot as plt
 
+class ProjectorV4:
+    def __init__(self, Name, Framework, argsCreationReferences):
+        '''
+        Tool to create a 2D projection of the STContext onto a plane t = cst along different speeds.
+        Should allow to recove the actual speed and generator of the movement
+        '''
+        self._ReferencesAsked = []
+        self._Name = Name
+        self._Framework = Framework
+        self._Type = 'Computation'
+        self._CreationReferences = dict(argsCreationReferences)
+
+        self.Precision_aimed = 10.
+        self.Initial_dv_MAX = 200.
+
+        self.GroundTS = 0.
+
+    def _Initialize(self):
+
+        self.ActiveSpeeds = []
+        self.Speeds = []
+
+        self.ToInitializeSpeed = []
+        self.SpeedStartTime = []
+        self.SpeedNorms = []
+        self.AllowedDeltaTRanges = []
+        self.LocalPaddings = []
+        self.OWAST = [] # Stands for "Observation Window at Start Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
+
+        StreamGeometry = self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]]
+        self.DefaultObservationWindow = [0., 0., float(StreamGeometry[0]+1), float(StreamGeometry[1]+1)]
+
+        self.Displacements = []
+
+        self.ConfirmedProjections = []
+        self.CurrentProjections = []
+        self.CumulatedDisplacement = []
+        self.CumulatedError = []
+        self.CumulatedTimeDisplacement = []
+        self.NEventsMatched = []
+
+        self.AddExponentialSeeds(vx_center = 0., vy_center = 0., v_max_observed = self.Initial_dv_MAX, v_min_observed = self.Precision_aimed*2, add_center = True)
+
+    def _OnEvent(self, event):
+        if event.timestamp > self.GroundTS:
+            if len(self.ToInitializeSpeed) > 0:
+                for speed_id in self.ToInitializeSpeed:
+                    self.SpeedStartTime[speed_id] = event.timestamp
+                self.ToInitializeSpeed = []
+
+            for speed_id in self.ActiveSpeeds:
+                self.ProjectEventWithSpeed(event, speed_id)
+        return event
+
+    def ProjectEventWithSpeed(self, event, speed_id):
+        self.UpdateDisplacement(event.timestamp, speed_id)
+        x0 = event.location[0] - self.Displacements[speed_id][0]
+        y0 = event.location[1] - self.Displacements[speed_id][1]
+        
+        OW = self.OWAST[speed_id]
+        if not (OW[0] <= x0 <= OW[2] and OW[1] <= y0 <= OW[3]):
+            return None
+
+        StartID = 0
+        for CurrentProjection in self.CurrentProjections[speed_id]:
+            if event.timestamp - CurrentProjection[2] >= self.AllowedDeltaTRanges[speed_id][1]:
+                StartID += 1
+            else:
+                break
+        self.CurrentProjections[speed_id] = self.CurrentProjections[speed_id][StartID:]
+
+        Projection = np.array([x0, y0, event.timestamp, 0])
+
+        if len(self.CurrentProjections[speed_id]) > 0:
+            AvailableProjections = np.array(self.CurrentProjections[speed_id])
+            TDiffs = event.timestamp - AvailableProjections[:,2]
+            TimeCoherentProjections = np.where((TDiffs >= self.AllowedDeltaTRanges[speed_id][0]))[0]
+            if TimeCoherentProjections.shape[0] > 1:
+                PositionsDiffs = Projection[:2] - AvailableProjections[TimeCoherentProjections, :2]
+                NormsDiffs = np.linalg.norm(PositionsDiffs, axis = 1)
+                
+                ChoosenLocalID = NormsDiffs.argmin()
+                if NormsDiffs[ChoosenLocalID] < 1.:
+                    ChoosenGlobalID = TimeCoherentProjections[ChoosenLocalID]
+                    if AvailableProjections[ChoosenGlobalID, 3] == 0:
+                        self.ConfirmedProjections[speed_id] += [np.array(AvailableProjections[ChoosenGlobalID, :3])]
+                        AvailableProjections[ChoosenGlobalID, 3] = 1
+                    self.CumulatedDisplacement[speed_id] += PositionsDiffs[ChoosenLocalID]
+                    self.CumulatedTimeDisplacement[speed_id] += TDiffs[ChoosenGlobalID]
+                    self.CumulatedError[speed_id] += np.linalg.norm(PositionsDiffs[ChoosenLocalID]) / (TDiffs[ChoosenGlobalID])
+
+                    self.NEventsMatched[speed_id] += 1
+        self.CurrentProjections[speed_id] += [Projection]
+
+    def UpdateDisplacement(self, t, speed_id):
+        self.Displacements[speed_id] = (t - self.SpeedStartTime[speed_id])*self.Speeds[speed_id]
+
+    def AddSeed(self, speed, localpadding, OW, force = False):
+        if force:
+            for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+        else:
+            for PreviousSpeed in self.Speeds:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+
+        speed_id = len(self.Speeds)
+        self.ActiveSpeeds += [speed_id]
+        self.ToInitializeSpeed += [speed_id]
+        self.Speeds += [speed]
+        self.LocalPaddings += [localpadding]
+
+        self.SpeedStartTime += [0]
+
+        self.SpeedNorms += [np.linalg.norm(speed)]
+        if self.SpeedNorms[-1] != 0.:
+            self.AllowedDeltaTRanges += [[(1./2)/self.SpeedNorms[-1], (2./1)/self.SpeedNorms[-1]]]
+        else:
+            self.AllowedDeltaTRanges += [[1./min(self.LocalPaddings[-1]), np.inf]]
+        self.OWAST += [OW]
+
+        self.Displacements += [None]
+
+        self.NEventsMatched += [0]
+        self.CumulatedDisplacement += [np.array([0., 0.])]
+        self.CumulatedTimeDisplacement += [0]
+        self.CumulatedError += [0]
+        self.CurrentProjections += [[]]
+        self.ConfirmedProjections += [[]]
+
+        return True
+
+    def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., v_min_observed = 1., v_max_observed = 100., add_center = True): #observed are referenced to the center
+        center_speed = np.array([vx_center, vy_center])
+
+        MaxSpeedTried = v_max_observed
+        self.V_seed = 2*v_min_observed
+        seeds = [0.]
+        i = 0
+        while self.V_seed**i <= MaxSpeedTried:
+            seeds += [self.V_seed*(2**i)]
+            i += 1
+        print "Seeds : ", seeds
+        if add_center:
+            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindow)
+        
+        for dvx in seeds:
+            for dvy in seeds:
+                if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                    if dvx != 0.:
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                    if dvy != 0:
+                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+        print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+
 class ProjectorV3:
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
@@ -19,13 +177,13 @@ class ProjectorV3:
         self.ExpansionFactor = 1.
 
         self.BinDt = 0.100
-        self.Precision_aimed = 0.5
-        self.Initial_dv_MAX = 160.
+        self.Precision_aimed = 10.
+        self.Initial_dv_MAX = 920.
 
-        self.DensityDefinition = 3 # In dpp
+        self.DensityDefinition = 1 # In dpp
         self.MaskDensityRatio = 0.3
 
-        self.GroundTS = 0.8
+        self.GroundTS = 0.
 
     def _Initialize(self):
 
@@ -50,6 +208,9 @@ class ProjectorV3:
         self.Displacements = []
         self.Consistencies = []
         self.RelativeMeanStreaks = []
+
+        self.NEventsMatched = []
+        self.CumulatedAwaitingTime = []
 
         self.SpeedsChangesTs = []
         self.SpeedsChangesIndexes = [None]
@@ -95,6 +256,8 @@ class ProjectorV3:
             for y in range(int(self.DensityDefinition*((y0 - self.R_Projection) - OW[1])), int(self.DensityDefinition*((y0 + self.R_Projection) - OW[1]))):
                 if self.AllowedDeltaTRanges[speed_id][0] <= event.timestamp - LandingTsMap[x,y] < self.AllowedDeltaTRanges[speed_id][1]:
                     StreakMap[x,y] += 1
+                    self.CumulatedAwaitingTime[speed_id] -= LandingTsMap[x,y] - event.timestamp
+                    self.NEventsMatched[speed_id] += 1
                 LandingTsMap[x,y] = event.timestamp
 
     def UpdateDisplacement(self, t, speed_id):
@@ -201,7 +364,7 @@ class ProjectorV3:
 
         self.SpeedNorms += [np.linalg.norm(speed)]
         if self.SpeedNorms[-1] != 0.:
-            self.AllowedDeltaTRanges += [[0.25/self.SpeedNorms[-1], 4./self.SpeedNorms[-1]]]
+            self.AllowedDeltaTRanges += [[(1./2)/self.SpeedNorms[-1], (2./1)/self.SpeedNorms[-1]]]
         else:
             self.AllowedDeltaTRanges += [[1./min(self.LocalPaddings[-1]), np.inf]]
         self.LandingTSsMaps += [-np.inf*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
@@ -215,31 +378,34 @@ class ProjectorV3:
         self.Consistencies += [0]
         self.RelativeMeanStreaks += [0]
 
+        self.NEventsMatched += [0]
+        self.CumulatedAwaitingTime += [0]
+
         return True
 
     def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., v_min_observed = 1., v_max_observed = 100., add_center = True): #observed are referenced to the center
         center_speed = np.array([vx_center, vy_center])
 
         MaxSpeedTried = v_max_observed
-        v_seed = 2.*v_min_observed
+        self.V_seed = 2*v_min_observed
         seeds = [0.]
-        i = 1
-        while v_seed**i <= MaxSpeedTried:
-            seeds += [v_seed**i]
+        i = 0
+        while self.V_seed**i <= MaxSpeedTried:
+            seeds += [self.V_seed*(2**i)]
             i += 1
         print "Seeds : ", seeds
         if add_center:
-            self.AddSeed(center_speed, (-v_seed, -v_seed, v_seed, v_seed), OW = self.DefaultObservationWindow)
+            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindow)
         
         for dvx in seeds:
             for dvy in seeds:
                 if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
-                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, v_seed), -max(dvy/2, v_seed), max(dvx, v_seed), max(dvy, v_seed)), OW = self.DefaultObservationWindow)
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
                     if dvx != 0.:
-                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, v_seed), -max(dvy/2, v_seed), max(dvx/2, v_seed), max(dvy, v_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
                     if dvy != 0:
-                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, v_seed), -max(dvy, v_seed), max(dvx/2, v_seed), max(dvy/2, v_seed)), OW = self.DefaultObservationWindow)
-                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, v_seed), -max(dvy, v_seed), max(dvx, v_seed), max(dvy/2, v_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
 
     def DynamicMinTSSet(self, ts):

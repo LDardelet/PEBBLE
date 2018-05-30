@@ -15,8 +15,8 @@ class ProjectorV4:
         self._Type = 'Computation'
         self._CreationReferences = dict(argsCreationReferences)
 
-        self.Precision_aimed = 10.
-        self.Initial_dv_MAX = 200.
+        self.Precision_aimed = 2.
+        self.Initial_dv_MAX = 80.
 
         self.GroundTS = 0.
 
@@ -177,10 +177,10 @@ class ProjectorV3:
         self.ExpansionFactor = 1.
 
         self.BinDt = 0.100
-        self.Precision_aimed = 10.
-        self.Initial_dv_MAX = 920.
+        self.Precision_aimed = 2.
+        self.Initial_dv_MAX = 80.
 
-        self.DensityDefinition = 1 # In dpp
+        self.DensityDefinition = 3 # In dpp
         self.MaskDensityRatio = 0.3
 
         self.GroundTS = 0.
@@ -211,6 +211,7 @@ class ProjectorV3:
 
         self.NEventsMatched = []
         self.CumulatedAwaitingTime = []
+        self.TimeFilteredEvents = []
 
         self.SpeedsChangesTs = []
         self.SpeedsChangesIndexes = [None]
@@ -252,12 +253,14 @@ class ProjectorV3:
         StreakMap = self.StreaksMaps[speed_id]
         LandingTsMap = self.LandingTSsMaps[speed_id]
 
-        for x in range(int(self.DensityDefinition*((x0 - self.R_Projection) - OW[0])), int(self.DensityDefinition*((x0 + self.R_Projection) - OW[0]))):
-            for y in range(int(self.DensityDefinition*((y0 - self.R_Projection) - OW[1])), int(self.DensityDefinition*((y0 + self.R_Projection) - OW[1]))):
+        for x in range(int(np.floor(self.DensityDefinition*((x0 - self.R_Projection) - OW[0]))), int(np.ceil(self.DensityDefinition*((x0 + self.R_Projection) - OW[0])))):
+            for y in range(int(np.floor(self.DensityDefinition*((y0 - self.R_Projection) - OW[1]))), int(np.ceil(self.DensityDefinition*((y0 + self.R_Projection) - OW[1])))):
                 if self.AllowedDeltaTRanges[speed_id][0] <= event.timestamp - LandingTsMap[x,y] < self.AllowedDeltaTRanges[speed_id][1]:
                     StreakMap[x,y] += 1
                     self.CumulatedAwaitingTime[speed_id] -= LandingTsMap[x,y] - event.timestamp
                     self.NEventsMatched[speed_id] += 1
+                else:
+                    self.TimeFilteredEvents[speed_id] += 1
                 LandingTsMap[x,y] = event.timestamp
 
     def UpdateDisplacement(self, t, speed_id):
@@ -371,6 +374,7 @@ class ProjectorV3:
         self.StreaksMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
         self.Masks += [None]
         self.InitializedAt += [0]
+        self.TimeFilteredEvents += [0]
         self.NEventsBySpeed += [0]
         self.OWAST += [OW]
 

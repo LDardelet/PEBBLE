@@ -3,6 +3,305 @@ import geometry
 import sys
 import matplotlib.pyplot as plt
 
+
+class LocalProjector:
+
+    def __init__(self, Name, Framework, argsCreationReferences):
+        '''
+        Tool to create a 2D projection of the STContext onto a plane t = cst along different speeds.
+        Should allow to recove the actual speed and generator of the movement
+        '''
+        self._ReferencesAsked = ['Memory']
+        self._Name = Name
+        self._Framework = Framework
+        self._Type = 'Computation'
+        self._CreationReferences = dict(argsCreationReferences)
+
+
+        self.R_Projection = 0.5
+        self.ExpansionFactor = 1.
+
+        self.BinDt = 0.100
+        self.Precision_aimed = 4.
+        self.Initial_dv_MAX = 300.
+
+        self.DensityDefinition = 3 # In dpp
+        self.MaskDensityRatio = 0.3
+
+        self.AskLocationAtTS = 0.100
+        self.SnapshotDt = 0.001
+
+        self.DecayRatio = 2.
+        self.SpeedModRatio = 0.02
+
+    def _Initialize(self):
+
+        self.ActiveSpeeds = []
+        self.Speeds = []
+
+        self.ToInitializeSpeed = []
+        self.SpeedStartTime = []
+        self.SpeedNorms = []
+        self.SpeedTimeConstants = []
+        self.Displacements = []
+
+        self.OWAST = [] # Stands for "Observation Window at Start Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
+        self.DecayingMaps = []
+        self.StreaksMaps = []
+        self.MeanPositionsReferences = []
+        self.MeanPositionTimeReferences = []
+        self.CurrentMeanPositions = []
+
+        StreamGeometry = self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]]
+
+        self.LastConsideredEventsTs = []
+        self.LocalPaddings = []
+
+        self.LastSnapshotT = 0.
+        self.DMSnaps = []
+        self.SMSnaps = []
+        self.PosSnaps = []
+        self.TsSnaps = []
+
+        self.SpeedsChangesHistory = []
+
+        self.Started = False
+
+    def _OnEvent(self, event):
+        if not self.Started:
+            if event.timestamp >= self.AskLocationAtTS:
+                self.AskLocationAndStart()
+                self.LastSnapshotT = event.timestamp
+            return event
+
+        if len(self.ToInitializeSpeed) > 0:
+            for speed_id in self.ToInitializeSpeed:
+                self.SpeedStartTime[speed_id] = event.timestamp
+                self.SpeedsChangesHistory[speed_id] += [(event.timestamp, np.array(self.Speeds[speed_id]))]
+            self.ToInitializeSpeed = []
+
+        for speed_id in self.ActiveSpeeds:
+            self.ProjectEventWithSpeed(event, speed_id)
+
+        if event.timestamp - self.LastSnapshotT >= self.SnapshotDt:
+            self.DMSnaps += [[]]
+            self.SMSnaps += [[]]
+            self.PosSnaps += [[]]
+            for speed_id in self.ActiveSpeeds:
+                DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
+                if DeltaT != 0.:
+                    self.LastConsideredEventsTs[speed_id] = event.timestamp
+                    self.DecayingMaps[speed_id] = self.DecayingMaps[speed_id]*np.e**(-(DeltaT/self.SpeedTimeConstants[speed_id]))
+                self.DMSnaps[-1] += [np.array(self.DecayingMaps[speed_id])]
+                self.SMSnaps[-1] += [np.array(self.StreaksMaps[speed_id])]
+                self.PosSnaps[-1] += [np.array(self.CurrentMeanPositions[speed_id])]
+            self.LastSnapshotT = event.timestamp
+            self.TsSnaps += [event.timestamp]
+
+        return event
+
+    def ProjectEventWithSpeed(self, event, speed_id):
+        self.UpdateDisplacement(event.timestamp, speed_id)
+        x0 = event.location[0] - self.Displacements[speed_id][0]
+        y0 = event.location[1] - self.Displacements[speed_id][1]
+        
+        OW = self.OWAST[speed_id]
+        if not (OW[0] <= x0 <= OW[2] and OW[1] <= y0 <= OW[3]):
+            return None
+
+        DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
+        EvolutionFactor = np.e**(-(DeltaT/self.SpeedTimeConstants[speed_id]))
+
+        self.LastConsideredEventsTs[speed_id] = event.timestamp
+
+        self.DecayingMaps[speed_id] = self.DecayingMaps[speed_id] * EvolutionFactor
+
+        for x in range(int(np.floor(self.DensityDefinition*((x0 - self.R_Projection) - OW[0]))), int(np.ceil(self.DensityDefinition*((x0 + self.R_Projection) - OW[0])))):
+            for y in range(int(np.floor(self.DensityDefinition*((y0 - self.R_Projection) - OW[1]))), int(np.ceil(self.DensityDefinition*((y0 + self.R_Projection) - OW[1])))):
+                self.DecayingMaps[speed_id][x,y] += 1
+                self.StreaksMaps[speed_id][x,y] += 1
+
+        self.CurrentMeanPositions[speed_id] = self.GetMeanPosition(speed_id)
+
+        if self.MeanPositionsReferences[speed_id] is None:
+            if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
+                self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
+                self.MeanPositionTimeReferences[speed_id] = event.timestamp
+            return None
+
+        if event.timestamp - self.SpeedStartTime[speed_id] < 2*self.SpeedTimeConstants[speed_id]:
+            return None
+        CurrentError = self.CurrentMeanPositions[speed_id] - self.MeanPositionsReferences[speed_id]
+        if False and abs(CurrentError).max() < 1.:
+            return None
+        TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
+        SpeedError = CurrentError / TimeEllapsed
+
+        self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
+
+
+    def GetMeanPosition(self, speed_id, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
+        if self.DecayingMaps[speed_id].max() <= threshold:
+            return None
+        Xs, Ys = np.where(self.DecayingMaps[speed_id] > threshold)
+        Weights = self.DecayingMaps[speed_id][Xs, Ys]
+        return np.array([(Weights*Xs).sum() / (self.DensityDefinition*Weights.sum()), (Weights*Ys).sum() / (self.DensityDefinition*Weights.sum())])
+
+    def UpdateDisplacement(self, t, speed_id):
+        self.Displacements[speed_id] = (t - self.SpeedStartTime[speed_id])*self.Speeds[speed_id]
+
+    def AskLocationAndStart(self, TW = 0.03):
+        STContext = self._Framework.Tools[self._CreationReferences['Memory']].STContext.max(axis = 2)
+        Mask = STContext > STContext.max() - TW
+
+        self.SelectionLocation = None
+        self.SelectionCorner = None
+
+        self.CenterLocationPoint = None
+        self.WindowLines = []
+
+        self.SelectionFigure, self.SelectionAx = plt.subplots(1,1)
+        self.SelectionAx.imshow(np.transpose(Mask), origin = 'lower')
+        
+        cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
+
+        while not self.Started:
+            raw_input("Pressed 'Enter' to resume, once the window is confirmed")
+            
+        #plt.close(self.SelectionFigure.number)
+        self.SelectionFigure.canvas.mpl_disconnect(cid)
+        del self.SelectionFigure
+        del self.SelectionAx
+        del self.CenterLocationPoint
+        del self.WindowLines
+        del self.SelectionLocation
+        del self.SelectionCorner
+
+    def ModifySpeed(self, speed_id, NewSpeed, t):
+        self.Speeds[speed_id] = NewSpeed
+        self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
+        self.SpeedTimeConstants[speed_id] = self.DecayRatio/self.SpeedNorms[speed_id]
+        self.SpeedsChangesHistory[speed_id] += [(t, np.array(self.Speeds[speed_id]))]
+
+    def _LocationSelection(self, ev):
+        if ev.button == 1:
+            print "Selecting x = {0}, y = {1} for center location".format(int(ev.xdata + 0.5), int(ev.ydata + 0.5))
+            if not self.SelectionLocation is None:
+                self.CenterLocationPoint.set_data(int(ev.xdata + 0.5), int(ev.ydata + 0.5))
+            else:
+                self.CenterLocationPoint = self.SelectionAx.plot(int(ev.xdata + 0.5), int(ev.ydata + 0.5), 'rv')[0]
+            self.SelectionLocation = np.array([int(ev.xdata + 0.5), int(ev.ydata + 0.5)])
+            if not self.SelectionCorner is None:
+                Ranges = abs(self.SelectionCorner - self.SelectionLocation)
+                print "Current window Size : dx = {0}, dy = {1}".format(Ranges[0], Ranges[1])
+                OW = [self.SelectionLocation[0] - Ranges[0], self.SelectionLocation[1] - Ranges[1], self.SelectionLocation[0] + Ranges[0], self.SelectionLocation[1] + Ranges[1]]
+                self._UpdateOWDrawing(OW)
+        elif ev.button == 3:
+            print "Selecting x = {0}, y = {1} as a corner".format(int(ev.xdata + 0.5), int(ev.ydata + 0.5))
+            self.SelectionCorner = np.array([int(ev.xdata + 0.5), int(ev.ydata + 0.5)])
+            if not self.SelectionLocation is None:
+                Ranges = abs(self.SelectionCorner - self.SelectionLocation)
+                print "Current window Size : dx = {0}, dy = {1}".format(Ranges[0], Ranges[1])
+                OW = [self.SelectionLocation[0] - Ranges[0], self.SelectionLocation[1] - Ranges[1], self.SelectionLocation[0] + Ranges[0], self.SelectionLocation[1] + Ranges[1]]
+                self._UpdateOWDrawing(OW)
+        elif ev.button == 2:
+            if not self.SelectionLocation is None and not self.SelectionCorner is None:
+                Ranges = abs(self.SelectionCorner - self.SelectionLocation)
+                OW = [self.SelectionLocation[0] - Ranges[0], self.SelectionLocation[1] - Ranges[1], self.SelectionLocation[0] + Ranges[0], self.SelectionLocation[1] + Ranges[1]]
+                print "Confirmed Window : "
+                print "x : {0} -> {1}".format(OW[0], OW[2])
+                print "y : {0} -> {1}".format(OW[1], OW[3])
+                self.DefaultObservationWindow = list(OW)
+                self.AddExponentialSeeds(vx_center = 0., vy_center = 0., v_max_observed = self.Initial_dv_MAX, v_min_observed = self.Precision_aimed*2, add_center = True)
+
+                self.Started = True
+            else:
+                print "Please select the Observation Window"
+        self.SelectionFigure.canvas.show()
+
+    def _UpdateOWDrawing(self, OW):
+        OW[0] -= 0.5
+        OW[1] -= 0.5
+        OW[2] += 0.5
+        OW[3] += 0.5
+        if len(self.WindowLines) == 0:
+            self.WindowLines += [self.SelectionAx.plot([OW[0], OW[2]], [OW[1], OW[1]], 'r')[0]]
+            self.WindowLines += [self.SelectionAx.plot([OW[2], OW[2]], [OW[1], OW[3]], 'r')[0]]
+            self.WindowLines += [self.SelectionAx.plot([OW[2], OW[0]], [OW[3], OW[3]], 'r')[0]]
+            self.WindowLines += [self.SelectionAx.plot([OW[0], OW[0]], [OW[3], OW[1]], 'r')[0]]
+        else:
+            self.WindowLines[0].set_data([OW[0], OW[2]], [OW[1], OW[1]])
+            self.WindowLines[1].set_data([OW[2], OW[2]], [OW[1], OW[3]])
+            self.WindowLines[2].set_data([OW[2], OW[0]], [OW[3], OW[3]])
+            self.WindowLines[3].set_data([OW[0], OW[0]], [OW[3], OW[1]])
+
+    def AddSeed(self, speed, localpadding, OW, force = False):
+        if force:
+            for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+        else:
+            for PreviousSpeed in self.Speeds:
+                if (abs(speed - PreviousSpeed) < 0.001).all():
+                    return False
+
+        speed_id = len(self.Speeds)
+        self.ActiveSpeeds += [speed_id]
+        self.ToInitializeSpeed += [speed_id]
+        self.Speeds += [speed]
+        self.LocalPaddings += [localpadding]
+
+        self.SpeedStartTime += [0]
+
+        self.SpeedNorms += [np.linalg.norm(speed)]
+
+        if self.SpeedNorms[-1] != 0.:
+            self.SpeedTimeConstants += [self.DecayRatio/self.SpeedNorms[-1]]
+        else:
+            self.SpeedTimeConstants += [self.DecayRatio/abs(np.array(self.LocalPaddings[-1])).min()]
+        self.OWAST += [OW]
+
+        self.Displacements += [None]
+        self.LastConsideredEventsTs += [0]
+        self.DecayingMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
+        self.StreaksMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
+
+        self.CurrentMeanPositions += [None]
+        self.MeanPositionsReferences += [None]
+        self.MeanPositionTimeReferences += [None]
+
+        self.SpeedsChangesHistory += [[]]
+
+        return True
+
+    def CreateUnitaryMap(self, SizeX, SizeY):
+        return np.ones((int((SizeX + 2*self.R_Projection) * self.DensityDefinition), int((SizeY + 2*self.R_Projection) * self.DensityDefinition)))
+
+    def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., v_min_observed = 1., v_max_observed = 100., add_center = True): #observed are referenced to the center
+        center_speed = np.array([vx_center, vy_center])
+
+        MaxSpeedTried = v_max_observed
+        self.V_seed = 2*v_min_observed
+        seeds = [0.]
+        i = 0
+        while self.V_seed**i <= MaxSpeedTried:
+            seeds += [self.V_seed*(2**i)]
+            i += 1
+        print "Seeds : ", seeds
+        if add_center:
+            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindow)
+        
+        for dvx in seeds:
+            for dvy in seeds:
+                if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                    if dvx != 0.:
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                    if dvy != 0:
+                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+        print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+
 class ProjectorV4:
     def __init__(self, Name, Framework, argsCreationReferences):
         '''

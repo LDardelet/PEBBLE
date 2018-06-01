@@ -270,7 +270,7 @@ class Framework:
                 self._ProjectRawData[Name]['Order'] = 0
             NumberTaken = False
             for tool_name in self._ProjectRawData.keys():
-                if tool_name != Name and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name].keys():
+                if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name]['Order']:
                     NumberTaken = True
             if NumberTaken:
                 print "Compiling new order."

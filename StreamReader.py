@@ -18,6 +18,7 @@ class Reader:
             print "Recovered previous stream data."
             return None
 
+        self.CurrentStream = []
         if '.csv' in self.StreamName: # TODO
             print "csv load is  not workin yet"
             self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_csv(self.StreamName)

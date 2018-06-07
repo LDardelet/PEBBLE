@@ -38,6 +38,7 @@ class LocalProjector:
 
         self.ActiveSpeeds = []
         self.Speeds = []
+        self.DefaultObservationWindows = []
 
         self.ToInitializeSpeed = []
         self.SpeedStartTime = []
@@ -166,7 +167,7 @@ class LocalProjector:
         cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
 
         while not self.Started:
-            raw_input("Pressed 'Enter' to resume, once the window is confirmed")
+            raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
             
         #plt.close(self.SelectionFigure.number)
         self.SelectionFigure.canvas.mpl_disconnect(cid)
@@ -211,10 +212,17 @@ class LocalProjector:
                 print "Confirmed Window : "
                 print "x : {0} -> {1}".format(OW[0], OW[2])
                 print "y : {0} -> {1}".format(OW[1], OW[3])
-                self.DefaultObservationWindow = list(OW)
+                self.DefaultObservationWindows += [list(OW)]
                 self.AddExponentialSeeds(vx_center = 0., vy_center = 0., v_max_observed = self.Initial_dv_MAX, v_min_observed = self.Precision_aimed*2, add_center = True)
 
                 self.Started = True
+
+                self.SelectionLocation = None
+                self.SelectionCorner = None
+
+                self.CenterLocationPoint = None
+                self.WindowLines = []
+
             else:
                 print "Please select the Observation Window"
         self.SelectionFigure.canvas.show()
@@ -235,15 +243,7 @@ class LocalProjector:
             self.WindowLines[2].set_data([OW[2], OW[0]], [OW[3], OW[3]])
             self.WindowLines[3].set_data([OW[0], OW[0]], [OW[3], OW[1]])
 
-    def AddSeed(self, speed, localpadding, OW, force = False):
-        if force:
-            for PreviousSpeed in np.array(self.Speeds)[self.ActiveSpeeds]:
-                if (abs(speed - PreviousSpeed) < 0.001).all():
-                    return False
-        else:
-            for PreviousSpeed in self.Speeds:
-                if (abs(speed - PreviousSpeed) < 0.001).all():
-                    return False
+    def AddSeed(self, speed, localpadding, OW):
 
         speed_id = len(self.Speeds)
         self.ActiveSpeeds += [speed_id]
@@ -289,17 +289,17 @@ class LocalProjector:
             i += 1
         print "Seeds : ", seeds
         if add_center:
-            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindow)
+            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindows[-1])
         
         for dvx in seeds:
             for dvy in seeds:
                 if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
-                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindows[-1])
                     if dvx != 0.:
-                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindows[-1])
                     if dvy != 0:
-                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
-                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindow)
+                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
 
 class ProjectorV4:

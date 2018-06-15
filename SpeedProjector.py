@@ -29,11 +29,13 @@ class LocalProjector:
         self.MaskDensityRatio = 0.3
 
         self.AskLocationAtTS = 0.100
-        self.SnapshotDt = 0.001
+        self.SnapshotDt = 0.05
 
         self.DecayRatio = 2.
         self.SpeedModRatio = 0.02
 
+        self.ModSpeeds = False
+    
     def _Initialize(self):
 
         self.ActiveSpeeds = []
@@ -122,23 +124,25 @@ class LocalProjector:
                 self.DecayingMaps[speed_id][x,y] += 1
                 self.StreaksMaps[speed_id][x,y] += 1
 
-        self.CurrentMeanPositions[speed_id] = self.GetMeanPosition(speed_id)
+        if self.ModSpeeds:
 
-        if self.MeanPositionsReferences[speed_id] is None:
-            if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
-                self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
-                self.MeanPositionTimeReferences[speed_id] = event.timestamp
-            return None
+            self.CurrentMeanPositions[speed_id] = self.GetMeanPosition(speed_id)
 
-        if event.timestamp - self.SpeedStartTime[speed_id] < 2*self.SpeedTimeConstants[speed_id]:
-            return None
-        CurrentError = self.CurrentMeanPositions[speed_id] - self.MeanPositionsReferences[speed_id]
-        if False and abs(CurrentError).max() < 1.:
-            return None
-        TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
-        SpeedError = CurrentError / TimeEllapsed
-
-        self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
+            if self.MeanPositionsReferences[speed_id] is None:
+                if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
+                    self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
+                    self.MeanPositionTimeReferences[speed_id] = event.timestamp
+                return None
+    
+            if event.timestamp - self.SpeedStartTime[speed_id] < 2*self.SpeedTimeConstants[speed_id]:
+                return None
+            CurrentError = self.CurrentMeanPositions[speed_id] - self.MeanPositionsReferences[speed_id]
+            if False and abs(CurrentError).max() < 1.:
+                return None
+            TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
+            SpeedError = CurrentError / TimeEllapsed
+    
+            self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
 
 
     def GetMeanPosition(self, speed_id, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
@@ -298,8 +302,9 @@ class LocalProjector:
                     if dvx != 0.:
                         self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindows[-1])
                     if dvy != 0:
-                        self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
                         self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                        if dvx != 0:
+                            self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
 
 class ProjectorV4:

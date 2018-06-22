@@ -3,6 +3,7 @@ import geometry
 import sys
 import matplotlib.pyplot as plt
 
+import Plotting_methods
 
 class LocalProjector:
 
@@ -29,12 +30,14 @@ class LocalProjector:
         self.MaskDensityRatio = 0.3
 
         self.AskLocationAtTS = 0.100
-        self.SnapshotDt = 0.05
+        self.SnapshotDt = 0.1
 
         self.DecayRatio = 2.
-        self.SpeedModRatio = 0.02
+        self.SpeedModRatio = 0.05
 
-        self.ModSpeeds = False
+        self.KeepBestSpeeds = 3
+
+        self.ModSpeeds = True
     
     def _Initialize(self):
 
@@ -44,29 +47,36 @@ class LocalProjector:
 
         self.ToInitializeSpeed = []
         self.SpeedStartTime = []
+        self.SpeedProjectionTime = []
         self.SpeedNorms = []
         self.SpeedTimeConstants = []
         self.Displacements = []
 
-        self.OWAST = [] # Stands for "Observation Window at Start Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
+        self.OWAPT = [] # Stands for "Observation Window at Projection Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
         self.DecayingMaps = []
         self.StreaksMaps = []
         self.MeanPositionsReferences = []
         self.MeanPositionTimeReferences = []
         self.CurrentMeanPositions = []
 
+        self.Zones = {}
+        self.ToCleanZones = []
+
         StreamGeometry = self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]]
 
         self.LastConsideredEventsTs = []
         self.LocalPaddings = []
+        self.InitialSpeeds = []
 
         self.LastSnapshotT = 0.
         self.DMSnaps = []
         self.SMSnaps = []
         self.PosSnaps = []
         self.TsSnaps = []
+        self.DisplacementSnaps = []
 
         self.SpeedsChangesHistory = []
+        self.CurrentBaseDisplacement = []
 
         self.Started = False
 
@@ -80,6 +90,7 @@ class LocalProjector:
         if len(self.ToInitializeSpeed) > 0:
             for speed_id in self.ToInitializeSpeed:
                 self.SpeedStartTime[speed_id] = event.timestamp
+                self.SpeedProjectionTime[speed_id] = event.timestamp
                 self.SpeedsChangesHistory[speed_id] += [(event.timestamp, np.array(self.Speeds[speed_id]))]
             self.ToInitializeSpeed = []
 
@@ -90,17 +101,42 @@ class LocalProjector:
             self.DMSnaps += [[]]
             self.SMSnaps += [[]]
             self.PosSnaps += [[]]
-            for speed_id in self.ActiveSpeeds:
-                DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
-                if DeltaT != 0.:
-                    self.LastConsideredEventsTs[speed_id] = event.timestamp
-                    self.DecayingMaps[speed_id] = self.DecayingMaps[speed_id]*np.e**(-(DeltaT/self.SpeedTimeConstants[speed_id]))
-                self.DMSnaps[-1] += [np.array(self.DecayingMaps[speed_id])]
-                self.SMSnaps[-1] += [np.array(self.StreaksMaps[speed_id])]
-                self.PosSnaps[-1] += [np.array(self.CurrentMeanPositions[speed_id])]
+            self.DisplacementSnaps += [[]]
+
+            for speed_id in range(len(self.Speeds)):
+                if speed_id in self.ActiveSpeeds:
+                    DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
+                    if DeltaT != 0.:
+                        self.LastConsideredEventsTs[speed_id] = event.timestamp
+                        self.DecayingMaps[speed_id] = self.DecayingMaps[speed_id]*np.e**(-(DeltaT/self.SpeedTimeConstants[speed_id]))
+                    self.DMSnaps[-1] += [np.array(self.DecayingMaps[speed_id])]
+                    self.SMSnaps[-1] += [np.array(self.StreaksMaps[speed_id])]
+                    self.PosSnaps[-1] += [np.array(self.CurrentMeanPositions[speed_id])]
+                    self.DisplacementSnaps[-1] += [self.Displacements[speed_id]]
+                else:
+                    self.DMSnaps[-1] += [None]
+                    self.SMSnaps[-1] += [None]
+                    self.PosSnaps[-1] += [None]
+                    self.DisplacementSnaps[-1] += [None]
+
             self.LastSnapshotT = event.timestamp
             self.TsSnaps += [event.timestamp]
 
+            self._Framework.Tools[self._CreationReferences['Memory']].GetSnapshot()
+
+        for Zone in self.ToCleanZones:
+            CanBeCleansed = True
+            for speed_id in self.Zones[Zone]:
+                if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
+                    CanBeCleansed = False
+                    break
+            if CanBeCleansed:
+                MeanValues = [float(self.StreaksMaps[speed_id].sum())/(self.StreaksMaps[speed_id] > 0).sum() for speed_id in self.Zones[Zone]]
+                SortedIDs = np.argsort(MeanValues)
+                for local_speed_id in SortedIDs[:-self.KeepBestSpeeds]:
+                    self.ActiveSpeeds.remove(self.Zones[Zone][local_speed_id])
+                print "Cleansed {0} speed considered wrong for zone {1}".format(len(SortedIDs[:-self.KeepBestSpeeds].tolist()), Zone)
+                self.ToCleanZones.remove(Zone)
         return event
 
     def ProjectEventWithSpeed(self, event, speed_id):
@@ -108,7 +144,7 @@ class LocalProjector:
         x0 = event.location[0] - self.Displacements[speed_id][0]
         y0 = event.location[1] - self.Displacements[speed_id][1]
         
-        OW = self.OWAST[speed_id]
+        OW = self.OWAPT[speed_id]
         if not (OW[0] <= x0 <= OW[2] and OW[1] <= y0 <= OW[3]):
             return None
 
@@ -134,7 +170,7 @@ class LocalProjector:
                     self.MeanPositionTimeReferences[speed_id] = event.timestamp
                 return None
     
-            if event.timestamp - self.SpeedStartTime[speed_id] < 2*self.SpeedTimeConstants[speed_id]:
+            if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
                 return None
             CurrentError = self.CurrentMeanPositions[speed_id] - self.MeanPositionsReferences[speed_id]
             if False and abs(CurrentError).max() < 1.:
@@ -143,7 +179,10 @@ class LocalProjector:
             SpeedError = CurrentError / TimeEllapsed
     
             self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
-
+        
+        if event.timestamp - self.SpeedProjectionTime[speed_id] > 3*self.SpeedTimeConstants[speed_id]:
+            self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
+            self.SpeedProjectionTime[speed_id] = event.timestamp
 
     def GetMeanPosition(self, speed_id, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
         if self.DecayingMaps[speed_id].max() <= threshold:
@@ -153,7 +192,7 @@ class LocalProjector:
         return np.array([(Weights*Xs).sum() / (self.DensityDefinition*Weights.sum()), (Weights*Ys).sum() / (self.DensityDefinition*Weights.sum())])
 
     def UpdateDisplacement(self, t, speed_id):
-        self.Displacements[speed_id] = (t - self.SpeedStartTime[speed_id])*self.Speeds[speed_id]
+        self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
 
     def AskLocationAndStart(self, TW = 0.03):
         STContext = self._Framework.Tools[self._CreationReferences['Memory']].STContext.max(axis = 2)
@@ -185,7 +224,7 @@ class LocalProjector:
     def ModifySpeed(self, speed_id, NewSpeed, t):
         self.Speeds[speed_id] = NewSpeed
         self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
-        self.SpeedTimeConstants[speed_id] = self.DecayRatio/self.SpeedNorms[speed_id]
+        self.SpeedTimeConstants[speed_id] = min(1./self.Precision_aimed, self.DecayRatio/self.SpeedNorms[speed_id])
         self.SpeedsChangesHistory[speed_id] += [(t, np.array(self.Speeds[speed_id]))]
 
     def _LocationSelection(self, ev):
@@ -253,9 +292,11 @@ class LocalProjector:
         self.ActiveSpeeds += [speed_id]
         self.ToInitializeSpeed += [speed_id]
         self.Speeds += [speed]
+        self.InitialSpeeds += [np.array(speed)]
         self.LocalPaddings += [localpadding]
 
         self.SpeedStartTime += [0]
+        self.SpeedProjectionTime += [0]
 
         self.SpeedNorms += [np.linalg.norm(speed)]
 
@@ -263,7 +304,7 @@ class LocalProjector:
             self.SpeedTimeConstants += [self.DecayRatio/self.SpeedNorms[-1]]
         else:
             self.SpeedTimeConstants += [self.DecayRatio/abs(np.array(self.LocalPaddings[-1])).min()]
-        self.OWAST += [OW]
+        self.OWAPT += [OW]
 
         self.Displacements += [None]
         self.LastConsideredEventsTs += [0]
@@ -274,7 +315,11 @@ class LocalProjector:
         self.MeanPositionsReferences += [None]
         self.MeanPositionTimeReferences += [None]
 
+        self.CurrentBaseDisplacement += [np.array([0.,0.])]
+
         self.SpeedsChangesHistory += [[]]
+
+        self.Zones[tuple(OW)] += [speed_id]
 
         return True
 
@@ -282,6 +327,11 @@ class LocalProjector:
         return np.ones((int((SizeX + 2*self.R_Projection) * self.DensityDefinition), int((SizeY + 2*self.R_Projection) * self.DensityDefinition)))
 
     def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., v_min_observed = 1., v_max_observed = 100., add_center = True): #observed are referenced to the center
+
+        Zone = self.DefaultObservationWindows[-1]
+        self.ToCleanZones += [tuple(Zone)]
+        self.Zones[tuple(Zone)] = []
+
         center_speed = np.array([vx_center, vy_center])
 
         MaxSpeedTried = v_max_observed
@@ -293,18 +343,18 @@ class LocalProjector:
             i += 1
         print "Seeds : ", seeds
         if add_center:
-            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = self.DefaultObservationWindows[-1])
+            self.AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = Zone)
         
         for dvx in seeds:
             for dvy in seeds:
                 if (dvx > 0 or dvy > 0) and dvx**2 + dvy**2 <= MaxSpeedTried**2:
-                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                    self.AddSeed(center_speed + np.array([dvx, dvy]), (-max(dvx/2, self.V_seed), -max(dvy/2, self.V_seed), max(dvx, self.V_seed), max(dvy, self.V_seed)), OW = Zone)
                     if dvx != 0.:
-                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                        self.AddSeed(center_speed + np.array([-dvx, dvy]), (-max(dvx, self.V_seed), -max(dvy/2, self.V_seed), max(dvx/2, self.V_seed), max(dvy, self.V_seed)), OW = Zone)
                     if dvy != 0:
-                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                        self.AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
                         if dvx != 0:
-                            self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = self.DefaultObservationWindows[-1])
+                            self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
 
 class ProjectorV4:

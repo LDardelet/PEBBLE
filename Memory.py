@@ -5,7 +5,6 @@ class Memory:
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to handle ST-context memory.
-        Requires :
         '''
         self._ReferencesAsked = []
         self._Name = Name
@@ -18,6 +17,8 @@ class Memory:
         self.PreviousTsAtLocation = - np.inf
         self.LastEvent = Event(-np.inf, [0,0], 0)
 
+        self.Snapshots = []
+
     def _OnEvent(self, event):
         self.LastEvent = Event(original = event)
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
@@ -26,3 +27,6 @@ class Memory:
         self.STContext[position] = self.LastEvent.timestamp
 
         return event
+
+    def GetSnapshot(self):
+        self.Snapshots += [(self.LastEvent.timestamp, np.array(self.STContext))]

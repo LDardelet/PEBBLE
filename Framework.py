@@ -9,6 +9,8 @@ import types
 from event import Event
 import tools
 
+from Plotting_methods import *
+
 TypesLimits = {'Input':1}
 NonRunningTools = ['Input']
 
@@ -96,7 +98,7 @@ class Framework:
         if not self.Running:
             print "Main loop finished without error."
         if self.Paused:
-            print "Paused."
+            print "Paused at t = {0:.2f}.".format(t)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)

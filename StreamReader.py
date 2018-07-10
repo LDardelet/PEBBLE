@@ -13,7 +13,7 @@ class Reader:
 
     def _Initialize(self):
         self.StreamName = self._Framework.StreamHistory[-1]
-        if len(self._Framework.StreamHistory) > 1 and self.StreamName == self._Framework.StreamHistory[-2]:
+        if len(self._Framework.StreamHistory) > 1 and self.StreamName == self._Framework.StreamHistory[-2] and self.StreamName in self._Framework.StreamsGeometries.keys():
             self.nEvents = -1
             print "Recovered previous stream data."
             return None

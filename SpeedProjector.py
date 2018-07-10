@@ -25,14 +25,14 @@ class LocalProjector:
         self.BinDt = 0.100
 
         self.HalfNumberOfSpeeds = 3
-        self.Initial_dv_MAX = 1000
+        self.Initial_dv_MAX = 300
         self.Relative_precision_aimed = 0.01
         self.Precision_aimed = self.Relative_precision_aimed*self.Initial_dv_MAX
 
         self.DensityDefinition = 3 # In dpp
         self.MaskDensityRatio = 0.3
 
-        self.AskLocationAtTS = 0.07
+        self.AskLocationAtTS = 0.01
         self.SnapshotDt = 0.01
 
         self.DecayRatio = 2.
@@ -41,6 +41,7 @@ class LocalProjector:
         self.KeepBestSpeeds = 3
 
         self.ModSpeeds = True
+        self.UpdatePT = False
     
     def _Initialize(self):
 
@@ -58,10 +59,16 @@ class LocalProjector:
         self.OWAPT = [] # Stands for "Observation Window at Projection Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
         self.DecayingMaps = []
         self.StreaksMaps = []
-        self.MeanPositionsReferences = []
-        self.MeanPositionTimeReferences = []
-        self.CurrentMeanPositions = []
 
+        self.MeanPositionsReferences = []
+        self.SecondOrderMeanPositionsReferences = []
+        self.SecondOrderWeightsReferences = []
+        self.MeanPositionTimeReferences = []
+
+        self.CurrentMeanPositions = []
+        self.CurrentSecondOrderMeanPositions = []
+
+        self.NZones = 0
         self.Zones = {}
         self.ToCleanZones = []
 
@@ -173,6 +180,9 @@ class LocalProjector:
                 if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
                     self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
                     self.MeanPositionTimeReferences[speed_id] = event.timestamp
+
+                    self.SecondOrderMeanPositionsReferences[speed_id], self.SecondOrderWeightsReferences[speed_id] = self.GetSecondOrderMeanPosition(speed_id, self.MeanPositionsReferences[speed_id])
+
                 return None
     
             if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
@@ -185,17 +195,42 @@ class LocalProjector:
     
             self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
         
-        if event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]:
+        if self.UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]:
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 
     def GetMeanPosition(self, speed_id, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
         if self.DecayingMaps[speed_id].max() <= threshold:
-            return None
+            return None, None
         Xs, Ys = np.where(self.DecayingMaps[speed_id] > threshold)
         Weights = self.DecayingMaps[speed_id][Xs, Ys]
         return np.array([(Weights*Xs).sum() / (self.DensityDefinition*Weights.sum()), (Weights*Ys).sum() / (self.DensityDefinition*Weights.sum())])
+
+    def GetSecondOrderMeanPosition(self, speed_id, CuttingMeanPosition = None, threshold = 0.):
+        if not CuttingMeanPosition is None:
+            Xm, Ym = np.array(np.rint(self.DensityDefinition * CuttingMeanPosition), dtype = int)
+        else:
+            Xm, Ym = np.array(np.rint(self.DensityDefinition * self.GetMeanPosition(speed_id)), dtype = int)
+        if Xm is None:
+            return None, None
+
+        Map = self.DecayingMaps[speed_id]
+        LocalMaps = [Map[:Xm, :Ym], Map[Xm:, :Ym], Map[Xm:, Ym:], Map[:Xm, Ym:]]
+        LocalShifts = [np.array([0., 0.]), np.array([Xm, 0.]), np.array([Xm, Ym]), np.array([0., Ym])]
+        
+        MeansPos = []
+        WeightsSums = []
+        for LocalMap, LocalShift in zip(LocalMaps, LocalShifts):
+            Xs, Ys = np.where(LocalMap > threshold)
+            if Xs.shape[0] == 0:
+                MeansPos += [None]
+                WeightsSums += [0.]
+            else:
+                Weights = LocalMap[Xs, Ys]
+                MeansPos += [(LocalShift + np.array([(Weights*Xs).sum() / Weights.sum(), (Weights*Ys).sum() / Weights.sum()])) / self.DensityDefinition]
+                WeightsSums += [Weights.sum()]
+        return MeansPos, WeightsSums
 
     def UpdateDisplacement(self, t, speed_id):
         self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
@@ -320,7 +355,10 @@ class LocalProjector:
         self.StreaksMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
 
         self.CurrentMeanPositions += [None]
+        self.CurrentSecondOrderMeanPositions += [None]
         self.MeanPositionsReferences += [None]
+        self.SecondOrderMeanPositionsReferences += [None]
+        self.SecondOrderWeightsReferences += [None]
         self.MeanPositionTimeReferences += [None]
 
         self.CurrentBaseDisplacement += [np.array([0.,0.])]
@@ -336,7 +374,8 @@ class LocalProjector:
 
     def AddExponentialSeeds(self, vx_center = 0., vy_center = 0., add_center = True): #observed are referenced to the center
 
-        Zone = self.DefaultObservationWindows[-1]
+        Zone = self.DefaultObservationWindows[-1] + [self.NZones]
+        self.NZones += 1
         self.ToCleanZones += [tuple(Zone)]
         self.Zones[tuple(Zone)] = []
 

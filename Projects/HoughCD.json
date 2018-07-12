@@ -14,11 +14,11 @@ S'Memory'
 p8
 ssS'Class'
 p9
-S'Clicker'
+S'HoughCD'
 p10
 sS'File'
 p11
-S'PointRecorder'
+S'HoughCornerDetector'
 p12
 sS'Order'
 p13

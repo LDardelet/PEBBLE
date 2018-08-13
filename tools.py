@@ -466,6 +466,7 @@ def readATIS_td(file_name, orig_at_zero = True, drop_negative_dt = True, verbose
             index_neg = []
             just_dropped = False
             ii = 0
+            dNEvents = timestamps.size / 100
             while ii < (timestamps.size - 1):
                 dt = timestamps[ii+1] - timestamps[ii]
                 if dt <= 0:  # alors ts en ii+1 plus petit que ii

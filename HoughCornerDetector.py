@@ -18,7 +18,7 @@ class HoughCD:
         self._Type = 'Analysis'
         self._CreationReferences = dict(argsCreationReferences)
 
-        self.BinDt = 0.01
+        self.BinDt = 0.002
 
         self.ExpositionDt = 0.004
         self.FirstPictureAt = 0.01

@@ -3,6 +3,8 @@ import geometry
 import sys
 import matplotlib.pyplot as plt
 
+from HoughCornerDetector import GetCorners
+from scipy import ndimage
 import Plotting_methods
 
 class LocalProjector:
@@ -25,23 +27,26 @@ class LocalProjector:
         self.BinDt = 0.100
 
         self.HalfNumberOfSpeeds = 3
-        self.Initial_dv_MAX = 300
+        self.Initial_dv_MAX = 800
         self.Relative_precision_aimed = 0.01
         self.Precision_aimed = self.Relative_precision_aimed*self.Initial_dv_MAX
 
         self.DensityDefinition = 3 # In dpp
         self.MaskDensityRatio = 0.3
 
-        self.AskLocationAtTS = 0.01
-        self.SnapshotDt = 0.01
+        self.AskLocationAtTS = 0.010
+        self.SnapshotDt = 0.005
 
-        self.DecayRatio = 2.
-        self.SpeedModRatio = 0.05
+        self.DecayRatio = 5.
 
         self.KeepBestSpeeds = 3
 
         self.ModSpeeds = True
-        self.UpdatePT = False
+        self.SpeedModRatio = 0.02
+        self.RelativeCorrectionThreshold = 0.0 # Relative distance (to ObservationRadius) over which correction speed is made. 0 implies that mod speed is applied in any situation
+        self.UpdatePT = True
+
+        self.DynamicPositionReference = True
     
     def _Initialize(self):
 
@@ -57,16 +62,23 @@ class LocalProjector:
         self.Displacements = []
 
         self.OWAPT = [] # Stands for "Observation Window at Projection Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
+        self.ObservationRadiuses = []
         self.DecayingMaps = []
         self.StreaksMaps = []
 
         self.MeanPositionsReferences = []
-        self.SecondOrderMeanPositionsReferences = []
-        self.SecondOrderWeightsReferences = []
+        self.DMReferences = []
+        self.DMGradientReferences = []
+        self.SpeedAngleReferences = []
+        self.SpeedReferences = []
+        self.ModSpeedPixels = []
+        self.LowerPartModSpeed = []
+        #self.SecondOrderMeanPositionsReferences = []
+        #self.SecondOrderWeightsReferences = []
         self.MeanPositionTimeReferences = []
 
         self.CurrentMeanPositions = []
-        self.CurrentSecondOrderMeanPositions = []
+        #self.CurrentSecondOrderMeanPositions = []
 
         self.NZones = 0
         self.Zones = {}
@@ -147,7 +159,7 @@ class LocalProjector:
                 SortedIDs = np.argsort(MeanValues)
                 for local_speed_id in SortedIDs[:-self.KeepBestSpeeds]:
                     self.ActiveSpeeds.remove(self.Zones[Zone][local_speed_id])
-                print "Cleansed {0} speed considered wrong for zone {1}".format(len(SortedIDs[:-self.KeepBestSpeeds].tolist()), Zone)
+                print "Cleansed {0} speed considered wrong for zone {1} at t = {2}".format(len(SortedIDs[:-self.KeepBestSpeeds].tolist()), Zone, event.timestamp)
                 self.ToCleanZones.remove(Zone)
         return event
 
@@ -178,36 +190,82 @@ class LocalProjector:
 
             if self.MeanPositionsReferences[speed_id] is None:
                 if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
+                    self.DMReferences[speed_id] = np.array(self.DecayingMaps[speed_id])
+
+                    self.GetModSpeedValuesFor(speed_id)
+
+                    #self.MeanPositionsReferences[speed_id] = self.ObservationRadiuses[speed_id]
                     self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
                     self.MeanPositionTimeReferences[speed_id] = event.timestamp
 
-                    self.SecondOrderMeanPositionsReferences[speed_id], self.SecondOrderWeightsReferences[speed_id] = self.GetSecondOrderMeanPosition(speed_id, self.MeanPositionsReferences[speed_id])
+                    #self.SecondOrderMeanPositionsReferences[speed_id], self.SecondOrderWeightsReferences[speed_id] = self.GetSecondOrderMeanPosition(speed_id, self.MeanPositionsReferences[speed_id])
 
                 return None
     
             if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
                 return None
-            CurrentError = self.CurrentMeanPositions[speed_id] - self.MeanPositionsReferences[speed_id]
-            if False and abs(CurrentError).max() < 1.:
+            if self.DynamicPositionReference:
+                PositionReference = self.ComputeDynamicPositionReference(speed_id)
+            else:
+                PositionReference = self.MeanPositionsReferences[speed_id]
+
+            CurrentError = self.CurrentMeanPositions[speed_id] - PositionReference
+            if (abs(CurrentError) < self.ObservationRadiuses[speed_id] * self.RelativeCorrectionThreshold).all():
                 return None
             TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
             SpeedError = CurrentError / TimeEllapsed
     
-            self.ModifySpeed(speed_id, self.Speeds[speed_id] + SpeedError*self.SpeedModRatio, event.timestamp)
+            self.ModifySpeed(speed_id, SpeedError, event.timestamp)
         
         if self.UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]:
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 
-    def GetMeanPosition(self, speed_id, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
-        if self.DecayingMaps[speed_id].max() <= threshold:
+    def ModifySpeed(self, speed_id, SpeedError, t):
+        #NewSpeed = self.Speeds[speed_id] + SpeedError * self.SpeedModRatio
+        NewSpeed = self.Speeds[speed_id] + SpeedError * self.DecayRatio / (self.DecayingMaps[speed_id].sum() / self.DensityDefinition ** 2)
+        self.Speeds[speed_id] = NewSpeed
+        self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
+        self.SpeedTimeConstants[speed_id] = min(1./self.Precision_aimed, self.DecayRatio/self.SpeedNorms[speed_id])
+        self.SpeedsChangesHistory[speed_id] += [(t, np.array(self.Speeds[speed_id]))]
+
+    def ComputeDynamicPositionReference(self, speed_id):
+        NewTheta = GetSpeedAngle(self.Speeds[speed_id])
+        Gx, Gy = self.DMGradientReferences[speed_id]
+
+        RefMap = self.DMReferences[speed_id]
+        ModSpeedMap = np.zeros(RefMap.shape)
+        TopPart = abs(np.cos(NewTheta) * Gx + np.sin(NewTheta) * Gy)
+        ModSpeedMap[self.ModSpeedPixels[speed_id]] = RefMap[self.ModSpeedPixels[speed_id]] * TopPart[self.ModSpeedPixels[speed_id]] / self.LowerPartModSpeed[speed_id]
+
+        return self.GetMeanPosition(None, ModSpeedMap)
+    
+    def GetModSpeedValuesFor(self, speed_id, KSize = 1):
+        Kernel = np.ones((2 * KSize + 1, 2 * KSize + 1))/((2 * KSize + 1)**2)
+        SmoothedMap = ndimage.convolve(self.DecayingMaps[speed_id], np.array(Kernel), mode='constant', cval=0.0)
+
+        self.DMGradientReferences[speed_id] = np.gradient(SmoothedMap)
+        self.SpeedAngleReferences[speed_id] = GetSpeedAngle(self.Speeds[speed_id])
+        self.SpeedReferences[speed_id] = np.array(self.Speeds[speed_id])
+        UsefulPixels = np.where(SmoothedMap > 0)
+
+        LowerPart = abs(np.cos(self.SpeedAngleReferences[speed_id]) * self.DMGradientReferences[speed_id][0][UsefulPixels] + np.sin(self.SpeedAngleReferences[speed_id]) * self.DMGradientReferences[speed_id][1][UsefulPixels])
+        AllowedPixels = np.where(LowerPart != 0)[0]
+
+        self.ModSpeedPixels[speed_id] = [UsefulPixels[0][AllowedPixels], UsefulPixels[1][AllowedPixels]]
+        self.LowerPartModSpeed[speed_id] = LowerPart[AllowedPixels]
+
+    def GetMeanPosition(self, speed_id, Map = None, threshold = 0.): # Threshold should allow to get only the relevant points in case the speed is correcly estimated (e**-1 \simeq 0.3)
+        if Map is None:
+            Map = self.DecayingMaps[speed_id]
+        if Map.max() <= threshold:
             return None, None
-        Xs, Ys = np.where(self.DecayingMaps[speed_id] > threshold)
-        Weights = self.DecayingMaps[speed_id][Xs, Ys]
+        Xs, Ys = np.where(Map > threshold)
+        Weights = Map[Xs, Ys]
         return np.array([(Weights*Xs).sum() / (self.DensityDefinition*Weights.sum()), (Weights*Ys).sum() / (self.DensityDefinition*Weights.sum())])
 
-    def GetSecondOrderMeanPosition(self, speed_id, CuttingMeanPosition = None, threshold = 0.):
+    def _GetSecondOrderMeanPosition(self, speed_id, CuttingMeanPosition = None, threshold = 0.):
         if not CuttingMeanPosition is None:
             Xm, Ym = np.array(np.rint(self.DensityDefinition * CuttingMeanPosition), dtype = int)
         else:
@@ -235,7 +293,7 @@ class LocalProjector:
     def UpdateDisplacement(self, t, speed_id):
         self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
 
-    def AskLocationAndStart(self, TW = 0.005):
+    def AskLocationAndStart(self, TW = 0.01):
         STContext = self._Framework.Tools[self._CreationReferences['Memory']].STContext.max(axis = 2)
         Mask = STContext > STContext.max() - TW
 
@@ -250,24 +308,68 @@ class LocalProjector:
         
         cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
 
-        while not self.Started:
-            raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
-            
-        #plt.close(self.SelectionFigure.number)
-        self.SelectionFigure.canvas.mpl_disconnect(cid)
-        plt.close(self.SelectionFigure.number)
-        del self.SelectionFigure
-        del self.SelectionAx
-        del self.CenterLocationPoint
-        del self.WindowLines
-        del self.SelectionLocation
-        del self.SelectionCorner
+        raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
+        if not self.Started:
+            print "Autoselecting corners."
+            self.AutoSelectCorners()
+            plt.pause(0.1)
+            del self.CenterLocationPoint
+            del self.WindowLines
+            del self.SelectionLocation
+            del self.SelectionCorner
+        else:
+            self.SelectionFigure.canvas.mpl_disconnect(cid)
+            plt.close(self.SelectionFigure.number)
+            del self.SelectionFigure
+            del self.SelectionAx
+            del self.CenterLocationPoint
+            del self.WindowLines
+            del self.SelectionLocation
+            del self.SelectionCorner
 
-    def ModifySpeed(self, speed_id, NewSpeed, t):
-        self.Speeds[speed_id] = NewSpeed
-        self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
-        self.SpeedTimeConstants[speed_id] = min(1./self.Precision_aimed, self.DecayRatio/self.SpeedNorms[speed_id])
-        self.SpeedsChangesHistory[speed_id] += [(t, np.array(self.Speeds[speed_id]))]
+    def AutoSelectCorners(self):
+        STContext = self._Framework.Tools[self._CreationReferences['Memory']].STContext.max(axis = 2)
+        Corners, edges = GetCorners(np.array(np.transpose(STContext > STContext.max() - 0.004)*200, dtype = np.uint8), Tini = 100)
+        NewPoints = []
+
+        Feature0Index = np.array(Corners)[:,0].argmax()
+        NewPoints += [Corners[Feature0Index]]
+        Corners.pop(Feature0Index)
+        
+        Feature1Index = np.array(Corners)[:,1].argmax()
+        NewPoints += [Corners[Feature1Index]]
+        Corners.pop(Feature1Index)
+        
+        Feature2Index = np.array(Corners)[:,0].argmin()
+        NewPoints += [Corners[Feature2Index]]
+        Corners.pop(Feature2Index)
+        
+        NewPoints += [Corners[0]]
+
+        for P in NewPoints:
+            self.SelectionLocation = np.array(P)
+            self.CenterLocationPoint = self.SelectionAx.plot(P[0], P[1], 'rv')[0]
+
+            Ranges = np.array([15,15])
+            self.SelectionCorner = self.SelectionLocation + Ranges
+
+            OW = [self.SelectionLocation[0] - Ranges[0], self.SelectionLocation[1] - Ranges[1], self.SelectionLocation[0] + Ranges[0], self.SelectionLocation[1] + Ranges[1]]
+            self._UpdateOWDrawing(OW)
+
+            print "Confirmed Window : "
+            print "x : {0} -> {1}".format(OW[0], OW[2])
+            print "y : {0} -> {1}".format(OW[1], OW[3])
+            self.DefaultObservationWindows += [list(OW)]
+            self.AddExponentialSeeds(vx_center = 0., vy_center = 0., add_center = True)
+            
+            self.Started = True
+            
+            self.SelectionLocation = None
+            self.SelectionCorner = None
+            
+            self.CenterLocationPoint = None
+            self.WindowLines = []
+
 
     def _LocationSelection(self, ev):
         if ev.button == 1:
@@ -277,6 +379,7 @@ class LocalProjector:
             else:
                 self.CenterLocationPoint = self.SelectionAx.plot(int(ev.xdata + 0.5), int(ev.ydata + 0.5), 'rv')[0]
             self.SelectionLocation = np.array([int(ev.xdata + 0.5), int(ev.ydata + 0.5)])
+            self.SelectionCorner = self.SelectionLocation + np.array([11,11])
             if not self.SelectionCorner is None:
                 Ranges = abs(self.SelectionCorner - self.SelectionLocation)
                 print "Current window Size : dx = {0}, dy = {1}".format(Ranges[0], Ranges[1])
@@ -309,7 +412,7 @@ class LocalProjector:
                 self.WindowLines = []
 
             else:
-                print "Please select the Observation Window"
+                print "AutoSelecting corners"
         self.SelectionFigure.canvas.show()
 
     def _UpdateOWDrawing(self, OW):
@@ -348,6 +451,7 @@ class LocalProjector:
         else:
             self.SpeedTimeConstants += [self.DecayRatio/abs(np.array(self.LocalPaddings[-1])).min()]
         self.OWAPT += [OW]
+        self.ObservationRadiuses += [np.array([OW[2] - OW[0], OW[3] - OW[1]], dtype = float)/2]
 
         self.Displacements += [None]
         self.LastConsideredEventsTs += [0]
@@ -355,10 +459,16 @@ class LocalProjector:
         self.StreaksMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
 
         self.CurrentMeanPositions += [None]
-        self.CurrentSecondOrderMeanPositions += [None]
+        #self.CurrentSecondOrderMeanPositions += [None]
         self.MeanPositionsReferences += [None]
-        self.SecondOrderMeanPositionsReferences += [None]
-        self.SecondOrderWeightsReferences += [None]
+        self.DMReferences += [None]
+        self.DMGradientReferences += [None]
+        self.SpeedAngleReferences += [None]
+        self.SpeedReferences += [None]
+        self.ModSpeedPixels += [None]
+        self.LowerPartModSpeed += [None]
+        #self.SecondOrderMeanPositionsReferences += [None]
+        #self.SecondOrderWeightsReferences += [None]
         self.MeanPositionTimeReferences += [None]
 
         self.CurrentBaseDisplacement += [np.array([0.,0.])]
@@ -401,6 +511,13 @@ class LocalProjector:
                         if dvx != 0:
                             self.AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+
+def GetSpeedAngle(Speed):
+    if Speed[0] == 0:
+        Theta = np.pi/2 + np.pi * (Speed[1] < 0)  
+    else:                                       
+        Theta = np.arctan(Speed[1] / Speed[0]) + np.pi * (Speed[0] < 0)
+    return Theta
 
 class ProjectorV4:
     def __init__(self, Name, Framework, argsCreationReferences):

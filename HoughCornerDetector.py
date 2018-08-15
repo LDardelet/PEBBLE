@@ -12,23 +12,23 @@ class HoughCD:
         '''
         Class to record points in a sequence
         '''
-        self._ReferencesAsked = ['Memory']
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Analysis'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = ['Memory']
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Analysis'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
-        self.BinDt = 0.002
+        self._BinDt = 0.002
 
-        self.ExpositionDt = 0.004
-        self.FirstPictureAt = 0.01
+        self._ExpositionDt = 0.004
+        self._FirstPictureAt = 0.01
 
     def _Initialize(self):
 
         self.RecordedPoints = []
-        self.CurrentT = self.FirstPictureAt - self.BinDt
+        self.CurrentT = self._FirstPictureAt - self._BinDt
 
-        self.Mem = self._Framework.Tools[self._CreationReferences['Memory']]
+        self.Mem = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.Tini = 100
         self.Edges = []
         self.Grays = []
@@ -38,10 +38,10 @@ class HoughCD:
         atexit.register(self._OnClosing)
 
     def _OnEvent(self, event):
-        if event.timestamp > self.CurrentT + self.BinDt:
+        if event.timestamp > self.CurrentT + self._BinDt:
             self.CurrentT = event.timestamp
 
-            self.gray_image = np.array(np.transpose(self.Mem.STContext.max(axis = 2) > event.timestamp - self.ExpositionDt)*200, dtype = np.uint8)
+            self.gray_image = np.array(np.transpose(self.Mem.STContext.max(axis = 2) > event.timestamp - self._ExpositionDt)*200, dtype = np.uint8)
 
             Corners, edges = GetCorners(np.array(self.gray_image), self.Tini)
             self.Edges += [edges]
@@ -73,11 +73,11 @@ class HoughCD:
 
     def SaveRecordedData(self):
         DataDict = {}
-        DataDict['StreamName'] = self._Framework.StreamHistory[-1]
+        StreamName = self.__Framework__.StreamHistory[-1]
+        DataDict['StreamName'] = StreamName
         DataDict['RecordedPoints'] = list(self.RecordedPoints)
         DataDict['RecordingDate'] = datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')
 
-        StreamName = self._Framework.StreamHistory[-1]
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '_hough.gnd'
         SaveName = '/'.join(NameParts[:-1]) + '/' + NewName

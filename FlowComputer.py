@@ -9,25 +9,25 @@ class FlowComputer:
         '''
         Tool to compute the optical flow.
         '''
-        self._ReferencesAsked = ['Memory']
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Computation'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = ['Memory']
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Computation'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
-        self.R = 5
-        self.EventsAgeLimit = 0.3
-        self.PolaritySeparation = True
+        self._R = 5
+        self._EventsAgeLimit = 0.3
+        self._PolaritySeparation = True
 
 
     def _Initialize(self):
-        self.CurrentShape = list(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
+        self.CurrentShape = list(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.NEventsMap = np.zeros(self.CurrentShape)
         self.DetMap = np.zeros(self.CurrentShape)
         self.FlowMap = np.zeros(self.CurrentShape + [2])
         self.NormMap = np.zeros(self.CurrentShape)
         self.RegMap = np.zeros(self.CurrentShape)
-        self.STContext = self.Framework.Tools[self._CreationReferences['Memory']].STContext
+        self.STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext
 
     def _OnEvent(self, event):
         self.ComputeFullFlow(event)
@@ -36,12 +36,12 @@ class FlowComputer:
 
 
     def ComputeFullFlow(self, event):
-        if self.PolaritySeparation:
-            Patch = (tools.PatchExtraction(self.STContext, event.location, self.R))[:,:,event.polarity] #for polarity separation
+        if self._PolaritySeparation:
+            Patch = (tools.PatchExtraction(self.STContext, event.location, self._R))[:,:,event.polarity] #for polarity separation
         else:
-            Patch = (tools.PatchExtraction(self.STContext, event.location, self.R)).max(axis = 2)
+            Patch = (tools.PatchExtraction(self.STContext, event.location, self._R)).max(axis = 2)
         
-        Positions = np.where(Patch > Patch.max() - self.EventsAgeLimit)
+        Positions = np.where(Patch > Patch.max() - self._EventsAgeLimit)
         self.NEventsMap[event.location[0], event.location[1], event.polarity] = Positions[0].shape[0]
         if self.NEventsMap[event.location[0], event.location[1], event.polarity] > 2:
             Ts = Patch[Positions]

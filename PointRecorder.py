@@ -10,21 +10,20 @@ class Clicker:
         '''
         Class to record points in a sequence
         '''
-        self._ReferencesAsked = ['Memory']
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Analysis'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = ['Memory']
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Analysis'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
-        self.BinDt = 0.01
-        self.FirstPictureAt = 0.01
+        self._BinDt = 0.01
+        self._FirstPictureAt = 0.01
 
     def _Initialize(self):
+        self._Mem = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
 
         self.RecordedPoints = []
-        self.CurrentT = self.FirstPictureAt - self.BinDt
-
-        self.Mem = self._Framework.Tools[self._CreationReferences['Memory']]
+        self.CurrentT = self._FirstPictureAt - self._BinDt
 
         self.Figure = plt.figure()
         self.Ax = self.Figure.add_subplot(1,1,1)
@@ -35,17 +34,17 @@ class Clicker:
         atexit.register(self._OnClosing)
 
     def _OnEvent(self, event):
-        if event.timestamp > self.CurrentT + self.BinDt:
+        if event.timestamp > self.CurrentT + self._BinDt:
             self.CurrentT = event.timestamp
             if self.Image is None:
-                self.Image = self.Ax.imshow(np.transpose(self.Mem.STContext.max(axis = 2) > event.timestamp - self.BinDt/2), origin = 'lower')
+                self.Image = self.Ax.imshow(np.transpose(self._Mem.STContext.max(axis = 2) > event.timestamp - self._BinDt/2), origin = 'lower')
             else:
-                self.Image.set_data(np.transpose(self.Mem.STContext.max(axis = 2) > event.timestamp - self.BinDt/2))
+                self.Image.set_data(np.transpose(self._Mem.STContext.max(axis = 2) > event.timestamp - self._BinDt/2))
             self.NewID = 0
             self.Recording = True
-            self.NewPoints = [[None, self.Mem.LastEvent.timestamp, 0, 0]]
+            self.NewPoints = [[None, self._Mem.LastEvent.timestamp, 0, 0]]
             self.Ps = [self.Ax.plot(self.NewPoints[-1][2], self.NewPoints[-1][3], 'vr')[0]]
-            self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Framework.Tools[self._CreationReferences['Memory']].LastEvent.timestamp))
+            self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp))
 
             self.CurrentCIDButt = self.Figure.canvas.mpl_connect('button_press_event', self.RecordEvent)
             self.CurrentCIDKey = self.Figure.canvas.mpl_connect('key_press_event', self.RecordEvent)
@@ -70,17 +69,17 @@ class Clicker:
                 self.Ps[self.NewID].set_color('k')
                 self.NewID += 1
                 if len(self.NewPoints) == self.NewID:
-                    self.NewPoints += [[None, self.Mem.LastEvent.timestamp, 0, 0]]
+                    self.NewPoints += [[None, self._Mem.LastEvent.timestamp, 0, 0]]
                     self.Ps += [self.Ax.plot(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3], 'vr')[0]]
                 else:
                     self.Ps[self.NewID].set_color('r')
 
-                self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Framework.Tools[self._CreationReferences['Memory']].LastEvent.timestamp))
+                self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp))
             elif event.key == 'left' and self.NewID >= 1:
                 self.Ps[self.NewID].set_color('k')
                 self.NewID -= 1
                 self.Ps[self.NewID].set_color('r')
-                self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Framework.Tools[self._CreationReferences['Memory']].LastEvent.timestamp))
+                self.Ax.set_title("Currently setting NewID = {0} at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp))
             elif event.key == 'down':
                 for Point in self.NewPoints:
                     if not Point[0] is None:
@@ -103,7 +102,7 @@ class Clicker:
                 self.Ps[self.NewID].remove()
                 self.Ps.pop(self.NewID)
                 if len(self.NewPoints) == self.NewID:
-                    self.NewPoints += [[None, self.Mem.LastEvent.timestamp, 0, 0]]
+                    self.NewPoints += [[None, self._Mem.LastEvent.timestamp, 0, 0]]
                     self.Ps += [self.Ax.plot(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3], 'vr')[0]]
                 else:
                     self.Ps[self.NewID].set_color('r')
@@ -111,11 +110,11 @@ class Clicker:
 
     def SaveRecordedData(self):
         DataDict = {}
-        DataDict['StreamName'] = self._Framework.StreamHistory[-1]
+        DataDict['StreamName'] = self.__Framework__.StreamHistory[-1]
         DataDict['RecordedPoints'] = list(self.RecordedPoints)
         DataDict['RecordingDate'] = datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')
 
-        StreamName = self._Framework.StreamHistory[-1]
+        StreamName = self.__Framework__.StreamHistory[-1]
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '.gnd'
         SaveName = '/'.join(NameParts[:-1]) + '/' + NewName

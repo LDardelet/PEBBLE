@@ -7,51 +7,52 @@ class DisplayHandler:
         '''
         Class to handle the stream Display.
         '''
-        self._ReferencesAsked = []
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Display'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = []
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Display'
+        self.__CreationReferences__ = dict(argsCreationReferences)
+        self.__Started__ = False
 
-        self._PostTransporters = {'Event':tools.SendEvent, 'Segment':tools.SendSegment}
+        self.__PostTransporters__ = {'Event':tools.SendEvent, 'Segment':tools.SendSegment}
+
         self._MainAddress =  ("localhost", 54242)
-        self._Socket = None
-
-        atexit.register(self.EndTransmission)
 
     def _Initialize(self):
+        self.Socket = None
+        atexit.register(self.EndTransmission)
+        self.PostBox = []
+
         DisplayUp = tools.IsDisplayUp()
         if not DisplayUp:
             print "Aborting initialization process"
-            self._Initialized = False
+            self.__Started__ = False
             return False
 
         print "Initializing DisplayHandler sockets."
-        tools.DestroySocket(self._Socket)
-        self._Socket = tools.GetDisplaySocket(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
+        tools.DestroySocket(self.Socket)
+        self.Socket = tools.GetDisplaySocket(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
 
-        tools.CleanMapForStream(self._Socket)
+        tools.CleanMapForStream(self.Socket)
 
-        tools.SendStreamData(self._Framework.ProjectFile, self._Framework.StreamHistory[-1], self._Socket)
+        tools.SendStreamData(self.__Framework__.ProjectFile, self.__Framework__.StreamHistory[-1], self.Socket)
         self.MainUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 
-        self.PostBox = []
-
-        self._Initialized = True
+        self.__Started__ = True
 
 
     def _OnEvent(self, event):
-        if not self._Initialized:
-            return event
-        self.PostBox += [event]
-        self.Post()
+        if self.__Started__:
+            self.PostBox += [event]
+            self.Post()
 
         return event
 
     def Post(self):
         for item in self.PostBox:
-            self._PostTransporters[item.__class__.__name__](item, self.MainUDP, self._MainAddress, self._Socket)
+            self.__PostTransporters__[item.__class__.__name__](item, self.MainUDP, self._MainAddress, self.Socket)
         self.PostBox = []
 
     def EndTransmission(self):
-        tools.DestroySocket(self._Socket)
+        if not self.Socket is None:
+            tools.DestroySocket(self.Socket)

@@ -12,7 +12,19 @@ from matplotlib import collections  as mc
 
 import datetime
 
-def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel = True, AddFeatureIdLabel = True):
+def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel = True, AddFeatureIdLabel = True, GivenColors = None):
+    if GivenColors is None:
+        GivenColors = [None for speed_id in SpeedIDs]
+
+    SortedSpeedIDs = []
+    for ZoneID in range(len(S.Zones.keys())):
+        for Zone in S.Zones.keys():
+            if Zone[4] == ZoneID:
+                for speed_id in S.Zones[Zone]:
+                    if speed_id in SpeedIDs:
+                        SortedSpeedIDs += [speed_id]
+                break
+
     Vxs = [];Vys = [];Tss = []
     for speed_id in SpeedIDs:
         Tss += [[]]
@@ -29,25 +41,23 @@ def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel 
     axy.set_title('Vy Benchmark')
     maxTs = 0
     minTs = np.inf
-    for i in range(len(SpeedIDs)):
-        maxTs = max(maxTs, max(Tss[i]))
-        minTs = min(minTs, min(Tss[i]))
+
+    for n_speed, speed_id in enumerate(SortedSpeedIDs):
+        maxTs = max(maxTs, max(Tss[n_speed]))
+        minTs = min(minTs, min(Tss[n_speed]))
+        label = ''
         if AddSpeedIdLabel or AddFeatureIdLabel:
-            label = ''
             if AddFeatureIdLabel:
-                for Zone in S.Zones.keys():
-                    if SpeedIDs[i] in S.Zones[Zone]:
-                        Feature_id = Zone[4]
-                label += 'Feature {0}'.format(Feature_id + 1)
+                label += 'Feature {0}'.format(n_speed + 1)
                 if AddSpeedIdLabel:
                     label += ', '
             if AddSpeedIdLabel:
-                label += 'ID = {0}'.format(SpeedIDs[i])
-            axx.plot(Tss[i], Vxs[i], label = label)
-            axy.plot(Tss[i], Vys[i], label = label)
-        else:
-            axx.plot(Tss[i], Vxs[i])
-            axy.plot(Tss[i], Vys[i])
+                label += 'ID = {0}'.format(speed_id)
+        axx.plot(Tss[n_speed], Vxs[n_speed], label = label, color = GivenColors[n_speed])
+        if GivenColors[n_speed] is None:
+            GivenColors[n_speed] = axx.get_lines()[-1].get_color()
+        axy.plot(Tss[n_speed], Vys[n_speed], label = label, color = GivenColors[n_speed])
+    
 
     D = None
     if not GroundTruthFile is None:
@@ -77,14 +87,14 @@ def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel 
             Ys = np.array(PointList)[:,2]
             VxTh = ((Xs - Xs.mean())**2).sum()/((TsTh - TsTh.mean()) * (Xs - Xs.mean())).sum()
             VyTh = ((Ys - Ys.mean())**2).sum()/((TsTh - TsTh.mean()) * (Ys - Ys.mean())).sum()
-            axx.plot([minTs, maxTs], [VxTh, VxTh], '--', label = 'Ground truth, Feature {0}'.format(PointID + 1))
-            axy.plot([minTs, maxTs], [VyTh, VyTh], '--', label = 'Ground truth, Feature {0}'.format(PointID + 1))
+            axx.plot([minTs, maxTs], [VxTh, VxTh], '--', label = 'Ground truth, Feature {0}'.format(PointID + 1), color = GivenColors[PointID])
+            axy.plot([minTs, maxTs], [VyTh, VyTh], '--', label = 'Ground truth, Feature {0}'.format(PointID + 1), color = GivenColors[PointID])
     axx.legend()
     axx.set_xlabel('t(s)')
     axx.set_ylabel('vx(px/s)')
     axy.set_xlabel('t(s)')
     axy.set_ylabel('vy(px/s)')
-    return f, axs, D
+    return f, axs, GivenColors
 
 def Plot3dSurface(M, ax = None):
     if ax is None:

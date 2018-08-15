@@ -6,21 +6,21 @@ class Refractory:
         Class to filter events from spike trains.
         Expects nothing.
         '''
-        self._ReferencesAsked = ['Memory']
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Filter'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = ['Memory']
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Filter'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
-        self.Period = 0.06 # Given is seconds
+        self._Period = 0.06 # Given is seconds
 
     def _Initialize(self):
-        self.Memory = self._Framework.Tools[self._CreationReferences['Memory']]
+        self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 
     def _OnEvent(self, event):
-        if event.timestamp - self.Memory.STContext[event.location[0], event.location[1], event.polarity] >= self.Period:
+        if event >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
             self.AllowedEvents += 1
             return event
         else:

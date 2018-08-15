@@ -5,15 +5,15 @@ class Reader:
         '''
         Class to read events streams files.
         '''
-        self._ReferencesAsked = []
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Input'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = []
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Input'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
     def _Initialize(self):
-        self.StreamName = self._Framework.StreamHistory[-1]
-        if len(self._Framework.StreamHistory) > 1 and self.StreamName == self._Framework.StreamHistory[-2] and self.StreamName in self._Framework.StreamsGeometries.keys():
+        self.StreamName = self.__Framework__.StreamHistory[-1]
+        if len(self.__Framework__.StreamHistory) > 1 and self.StreamName == self.__Framework__.StreamHistory[-2] and self.StreamName in self.__Framework__.StreamsGeometries.keys():
             self.nEvents = -1
             print "Recovered previous stream data."
             return None
@@ -21,20 +21,20 @@ class Reader:
         self.CurrentStream = []
         if '.csv' in self.StreamName: # TODO
             print "csv load is  not workin yet"
-            self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_csv(self.StreamName)
+            self.CurrentStream, self.__Framework__.StreamsGeometries[self.StreamName] = tools.load_data_csv(self.StreamName)
         elif '.dat' in self.StreamName or '.es' in self.StreamName:
-            self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.load_data_dat(self.StreamName)
+            self.CurrentStream, self.__Framework__.StreamsGeometries[self.StreamName] = tools.load_data_dat(self.StreamName)
         elif 'Create-' in self.StreamName:
             if 'Bar' in self.StreamName:
-                self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.CreateMovingBarStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
+                self.CurrentStream, self.__Framework__.StreamsGeometries[self.StreamName] = tools.CreateMovingBarStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
             elif 'Circle' in self.StreamName:
-                self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.CreateMovingCircleStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
+                self.CurrentStream, self.__Framework__.StreamsGeometries[self.StreamName] = tools.CreateMovingCircleStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]))
             elif 'Duo' in self.StreamName:
-                self.CurrentStream, self._Framework.StreamsGeometries[self.StreamName] = tools.CreateDuoCirclesStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]), float(self.StreamName.split('#')[4]), float(self.StreamName.split('#')[5]))
+                self.CurrentStream, self.__Framework__.StreamsGeometries[self.StreamName] = tools.CreateDuoCirclesStream(float(self.StreamName.split('#')[1]), float(self.StreamName.split('#')[2]), float(self.StreamName.split('#')[3]), float(self.StreamName.split('#')[4]), float(self.StreamName.split('#')[5]))
         else:
             print "No valid loading function found for this type of stream. Initiating empty stream {0}.".format(self.StreamName)
             self.CurrentStream = []
-            self._Framework.StreamsGeometries[self.StreamName] = (1,1,2)
+            self.__Framework__.StreamsGeometries[self.StreamName] = (1,1,2)
 
         self.nEvents = -1
         self.NEvents = len(self.CurrentStream)
@@ -46,5 +46,5 @@ class Reader:
             self.nEvents += 1
             return self.CurrentStream[self.nEvents]
         except IndexError:
-            self._Framework.Running = False
+            self.__Framework__.Running = False
             print "Input reached EOF."

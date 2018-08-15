@@ -6,15 +6,14 @@ class Memory:
         '''
         Class to handle ST-context memory.
         '''
-        self._ReferencesAsked = []
-        self._Name = Name
-        self._Framework = Framework
-        self._Type = 'Memory'
-        self._CreationReferences = dict(argsCreationReferences)
+        self.__ReferencesAsked__ = []
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__Type__ = 'Memory'
+        self.__CreationReferences__ = dict(argsCreationReferences)
 
     def _Initialize(self):
-        self.STContext = -np.inf*np.ones(self._Framework.StreamsGeometries[self._Framework.StreamHistory[-1]])
-        self.PreviousTsAtLocation = - np.inf
+        self.STContext = -np.inf*np.ones(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.LastEvent = Event(-np.inf, [0,0], 0)
 
         self.Snapshots = []
@@ -23,7 +22,6 @@ class Memory:
         self.LastEvent = Event(original = event)
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
 
-        self.PreviousTsAtLocation = self.STContext[position[0], position[1], :].max()
         self.STContext[position] = self.LastEvent.timestamp
 
         return event

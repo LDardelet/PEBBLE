@@ -24,7 +24,7 @@ class Framework:
     Finally, each tool contains an '_OnEvent' method processing each event. It must only have 'event' as argument - apart from 'self' - and all variables must have be stored inside, prior to this.
     '_OnEvent' can be seen as a filter, thus it must return the event incase one wants the processing of the current event to go on with the following tools.
 
-    Finally, each tool must declare a '_Type' variable, to disclaim to the framework what kind to job is processed.
+    Finally, each tool must declare a '__Type__' variable, to disclaim to the framework what kind to job is processed.
     For the special type 'Input', no '_OnEvent' method is currently needed.
 
     Currently implemented tools :
@@ -45,7 +45,7 @@ class Framework:
         self.ProjectFile = ProjectFile
         self.Modified = False
 
-        self._Type = 'Framework'
+        self.__Type__ = 'Framework'
 
         self.StreamsGeometries = {}
         self.StreamHistory = []
@@ -176,12 +176,13 @@ class Framework:
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
 
-            NewType = self.Tools[tool_name]._Type
+            NewType = self.Tools[tool_name].__Type__
             if NewType not in self.Types.keys():
                 self.Types[NewType] = 0
             self.Types[NewType] += 1
             if NewType in TypesLimits.keys() and self.Types[NewType] > TypesLimits[NewType]:
                 print "Project contains too many {0} types, aborting Projectfile loading.".format(NewType)
+                continue
             print "Created tool {0}.".format(tool_name)
 
     def _UpdateToolsParameters(self, tool_name):
@@ -259,9 +260,9 @@ class Framework:
 
             PossibleVariables = []
             for var in TmpClass.__dict__.keys():
-                if var[0] != '_':
+                if var[0] != '__':
                     PossibleVariables += [var]
-            if TmpClass._Type != 'Input':
+            if TmpClass.__Type__ != 'Input':
                 print "Enter the tool order number :"                             # Order definition
                 entry = ''
                 while entry == '':
@@ -284,7 +285,7 @@ class Framework:
                 print ""
 
             self._ProjectRawData[Name]['CreationReferences'] = {}
-            if len(ReferencesAsked) > 0:
+            if ReferencesAsked:
                 print "Fill tool name for the needed references. Currently available tool names:"
                 for key in self._ProjectRawData.keys():
                     print " * {0}".format(key)
@@ -298,10 +299,10 @@ class Framework:
                 print "No particular reference needed for this tool."
             print ""
             self._ProjectRawData[Name]['ExternalParameters'] = {}
-            if len(PossibleVariables) > 0:
+            if PossibleVariables:
                 print "Current tool parameters :"
                 for var in PossibleVariables:
-                    print " * {0} : {1}".format(var, TmpClass.__dict__[var])
+                    print " * {0} : {1}".format(var[1:], TmpClass.__dict__[var])
                 entryvar = 'nothing'
                 while entryvar != '':
                     print "Enter variable to change :"
@@ -349,14 +350,14 @@ class Framework:
         for tool_name in self.ToolsList:
             filename = inspect.getfile(self.Tools[tool_name].__class__)
             print "# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename)
-            print "     Type : {0}".format(self.Tools[tool_name]._Type)
-            if len(self._ToolsCreationReferences[tool_name].items()) > 0:
+            print "     Type : {0}".format(self.Tools[tool_name].__Type__)
+            if self._ToolsCreationReferences[tool_name]:
                 print "     Creation References:"
                 for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
                     print "         -> Access to {0} from tool {1}".format(argName, toolReference)
             else:
                 print "     No creation reference."
-            if len(self._ToolsExternalParameters[tool_name].items()) > 0:
+            if self._ToolsExternalParameters[tool_name]:
                 print "     Modified Parameters:"
                 for var, value in  self._ToolsExternalParameters[tool_name].items():
                     print "         -> {0} = {1}".format(var, value)

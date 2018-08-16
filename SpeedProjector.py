@@ -25,8 +25,6 @@ class LocalProjector:
         self._R_Projection = 0.5
         self._ExpansionFactor = 1.
 
-        self._BinDt = 0.100
-
         self._HalfNumberOfSpeeds = 3
         self._Initial_dv_MAX = 800
         self._Relative_precision_aimed = 0.01
@@ -214,7 +212,7 @@ class LocalProjector:
     
             self.ModifySpeed(speed_id, SpeedError, event.timestamp)
         
-        if self.UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
+        if self._UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
@@ -291,7 +289,7 @@ class LocalProjector:
         self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
 
     def AskLocationAndStart(self, TW = 0.01):
-        STContext = self.__Framework__.Tools[self._CreationReferences__['Memory']].STContext.max(axis = 2)
+        STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.max(axis = 2)
         Mask = STContext > STContext.max() - TW
 
         self.SelectionLocation = None
@@ -325,7 +323,7 @@ class LocalProjector:
             del self.SelectionCorner
 
     def AutoSelectCorners(self):
-        STContext = self.__Framework__.Tools[self._CreationReferences__['Memory']].STContext.max(axis = 2)
+        STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.max(axis = 2)
         Corners, edges = GetCorners(np.array(np.transpose(STContext > STContext.max() - 0.004)*200, dtype = np.uint8), Tini = 100)
         NewPoints = []
 

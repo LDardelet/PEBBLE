@@ -28,3 +28,6 @@ class Memory:
 
     def GetSnapshot(self):
         self.Snapshots += [(self.LastEvent.timestamp, np.array(self.STContext))]
+
+    def CreateSnapshot(self):
+        return np.array(self.STContext)

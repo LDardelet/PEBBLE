@@ -208,12 +208,17 @@ class LocalProjector:
             if (abs(CurrentError) < self.ObservationRadiuses[speed_id] * self._RelativeCorrectionThreshold).all():
                 return None
             TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
+            #TimeEllapsed = event.timestamp - self.SpeedProjectionTime[speed_id]
+
             SpeedError = CurrentError / TimeEllapsed
     
             self.ModifySpeed(speed_id, SpeedError, event.timestamp)
         
         if self._UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
+            #self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id]) + (self.MeanPositionsReferences[speed_id] - self.CurrentMeanPositions[speed_id])
+            self.MeanPositionTimeReferences[speed_id] = event.timestamp - self.SpeedTimeConstants[speed_id]
+
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 

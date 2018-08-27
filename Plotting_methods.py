@@ -64,7 +64,7 @@ def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel 
         with open(GroundTruthFile, 'rb') as openfile:
             D = json.load(openfile)
     else:
-        StreamName = S._Framework.StreamHistory[-1]
+        StreamName = S.__Framework__.StreamHistory[-1]
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '_hough.gnd'
         LoadName = '/'.join(NameParts[:-1]) + '/' + NewName
@@ -119,7 +119,7 @@ def PlotCurrentStreaksMaps(SpeedProjector, ZoneNumber = 0, MaxRatio = 0.3):
 
     f, axs = plt.subplots(len(SeedsX), len(SeedsX))
     OW = S.OWAPT[S.Zones.values()[ZoneNumber][0]]
-    f.suptitle("Zone number {0}, at t = {1}\nx : {2} -> {3}\ny : {4} -> {5}".format(ZoneNumber, S._Framework.Tools[S._CreationReferences['Memory']].LastEvent.timestamp, OW[0], OW[2], OW[1], OW[3]))
+    f.suptitle("Zone number {0}, at t = {1}\nx : {2} -> {3}\ny : {4} -> {5}".format(ZoneNumber, S.__Framework__.Tools[S.__CreationReferences__['Memory']].LastEvent.timestamp, OW[0], OW[2], OW[1], OW[3]))
     for Zone in S.Zones.keys():
         if Zone[4] == ZoneNumber:
             break
@@ -147,7 +147,7 @@ def PlotDecayingMaps(SpeedProjector, ZoneNumber = 0):
 
     f, axs = plt.subplots(len(SeedsX), len(SeedsX))
     OW = S.OWAPT[S.Zones.values()[ZoneNumber][0]]
-    f.suptitle("Zone number {0}, at t = {1}\nx : {2} -> {3}\ny : {4} -> {5}".format(ZoneNumber, S._Framework.Tools[S._CreationReferences['Memory']].LastEvent.timestamp, OW[0], OW[2], OW[1], OW[3]))
+    f.suptitle("Zone number {0}, at t = {1}\nx : {2} -> {3}\ny : {4} -> {5}".format(ZoneNumber, S.__Framework__.Tools[S.__CreationReferences__['Memory']].LastEvent.timestamp, OW[0], OW[2], OW[1], OW[3]))
     for Zone in S.Zones.keys():
         if Zone[4] == ZoneNumber:
             break
@@ -255,7 +255,7 @@ def GenerateTrackingGif(F, S, SpeedIDs, tMax = np.inf, Folder = '/home/dardelet/
     print "\r > Done.          "
     GifFile = 'tracking_'+datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')+'.gif'
     print "Generating gif."
-    os.system('convert -delay {0} -loop 0 '.format(int(1000*S.SnapshotDt))+Folder+'*.png ' + Folder + GifFile)
+    os.system('convert -delay {0} -loop 0 '.format(int(1000*S._SnapshotDt))+Folder+'*.png ' + Folder + GifFile)
     os.system('kde-open ' + Folder + GifFile)
 
     ans = raw_input('Rate this result (1-nice/0-bad/(d)elete) : ')
@@ -357,7 +357,7 @@ def PlotPositionTracking(S, SpeedIDs, GroundTruthFile = None, SnapshotsTss = [],
         with open(GroundTruthFile, 'rb') as openfile:
             D = json.load(openfile)
     else:
-        StreamName = S._Framework.StreamHistory[-1]
+        StreamName = S.__Framework__.StreamHistory[-1]
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '.gnd'
         LoadName = '/'.join(NameParts[:-1]) + '/' + NewName

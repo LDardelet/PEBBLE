@@ -33,7 +33,7 @@ class LocalProjector:
         self._MaskDensityRatio = 0.3
 
         self._AskLocationAtTS = 0.010
-        self._SnapshotDt = 0.005
+        self._SnapshotDt = 0.001
 
         self._DecayRatio = 5.
 
@@ -42,9 +42,9 @@ class LocalProjector:
         self._ModSpeeds = True
         self._SpeedModRatio = 0.02
         self._RelativeCorrectionThreshold = 0.0 # Relative distance (to ObservationRadius) over which correction speed is made. 0 implies that mod speed is applied in any situation
-        self._UpdatePT = True
+        self._UpdatePT = False
 
-        self._DynamicPositionReference = True
+        self._DynamicPositionReference = False
     
     def _Initialize(self):
 
@@ -57,6 +57,8 @@ class LocalProjector:
         self.SpeedStartTime = []
         self.SpeedProjectionTime = []
         self.SpeedNorms = []
+        self.SpeedErrors = []
+        self.AimedSpeeds = []
         self.SpeedTimeConstants = []
         self.Displacements = []
 
@@ -93,6 +95,8 @@ class LocalProjector:
         self.PosSnaps = []
         self.TsSnaps = []
         self.DisplacementSnaps = []
+        self.SpeedErrorSnaps = []
+        self.AimedSpeedSnaps = []
 
         self.SpeedsChangesHistory = []
         self.ProjectionTimesHistory = []
@@ -121,6 +125,8 @@ class LocalProjector:
             self.SMSnaps += [[]]
             self.PosSnaps += [[]]
             self.DisplacementSnaps += [[]]
+            self.SpeedErrorSnaps += [[]]
+            self.AimedSpeedSnaps += [[]]
 
             for speed_id in range(len(self.Speeds)):
                 if speed_id in self.ActiveSpeeds:
@@ -132,11 +138,15 @@ class LocalProjector:
                     self.SMSnaps[-1] += [np.array(self.StreaksMaps[speed_id])]
                     self.PosSnaps[-1] += [np.array(self.CurrentMeanPositions[speed_id])]
                     self.DisplacementSnaps[-1] += [self.Displacements[speed_id]]
+                    self.SpeedErrorSnaps[-1] += [np.array(self.SpeedErrors[speed_id])]
+                    self.AimedSpeedSnaps[-1] += [np.array(self.AimedSpeeds[speed_id])]
                 else:
                     self.DMSnaps[-1] += [None]
                     self.SMSnaps[-1] += [None]
                     self.PosSnaps[-1] += [None]
                     self.DisplacementSnaps[-1] += [None]
+                    self.SpeedErrorSnaps[-1] += [np.array([0., 0.])]
+                    self.AimedSpeedSnaps[-1] += [np.array([0., 0.])]
 
             self.LastSnapshotT = event.timestamp
             self.TsSnaps += [event.timestamp]
@@ -179,8 +189,9 @@ class LocalProjector:
                 self.DecayingMaps[speed_id][x,y] += 1
                 self.StreaksMaps[speed_id][x,y] += 1
 
+        if self._UpdatePT:
+            CanUpdatePT = False
         if self._ModSpeeds:
-
             self.CurrentMeanPositions[speed_id] = self.GetMeanPosition(speed_id)
 
             if self.MeanPositionsReferences[speed_id] is None:
@@ -197,7 +208,8 @@ class LocalProjector:
 
                 return None
     
-            if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
+            #if event.timestamp - self.SpeedStartTime[speed_id] < self.SpeedTimeConstants[speed_id]:
+            if event.timestamp - self.MeanPositionTimeReferences[speed_id] < self.SpeedTimeConstants[speed_id]:
                 return None
             if self._DynamicPositionReference:
                 PositionReference = self.ComputeDynamicPositionReference(speed_id)
@@ -210,21 +222,24 @@ class LocalProjector:
             TimeEllapsed = event.timestamp - self.MeanPositionTimeReferences[speed_id]
             #TimeEllapsed = event.timestamp - self.SpeedProjectionTime[speed_id]
 
-            SpeedError = CurrentError / TimeEllapsed
+            self.SpeedErrors[speed_id] = CurrentError / TimeEllapsed
+            self.AimedSpeeds[speed_id] = self.Speeds[speed_id] + self.SpeedErrors[speed_id]
+            if (abs(self.SpeedErrors[speed_id]) < 0.01*abs(self.Speeds[speed_id])).all():
+                CanUpdatePT = True
     
-            self.ModifySpeed(speed_id, SpeedError, event.timestamp)
+            self.ModifySpeed(speed_id, event.timestamp)
         
-        if self._UpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
+        if self._UpdatePT and CanUpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
-            #self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id]) + (self.MeanPositionsReferences[speed_id] - self.CurrentMeanPositions[speed_id])
-            self.MeanPositionTimeReferences[speed_id] = event.timestamp - self.SpeedTimeConstants[speed_id]
+            #self.MeanPositionTimeReferences[speed_id] = event.timestamp - self.SpeedTimeConstants[speed_id]
+            self.MeanPositionTimeReferences[speed_id] = event.timestamp
 
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 
-    def ModifySpeed(self, speed_id, SpeedError, t):
+    def ModifySpeed(self, speed_id, t):
         #NewSpeed = self.Speeds[speed_id] + SpeedError * self.SpeedModRatio
-        NewSpeed = self.Speeds[speed_id] + SpeedError / (self.DecayingMaps[speed_id].sum() / self._DensityDefinition ** 2)
+        NewSpeed = self.Speeds[speed_id] + self.SpeedErrors[speed_id] / (0.3 * self.DecayingMaps[speed_id].sum() / self._DensityDefinition ** 2)
         self.Speeds[speed_id] = NewSpeed
         self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
         self.SpeedTimeConstants[speed_id] = min(1./self._Precision_aimed, self._DecayRatio/self.SpeedNorms[speed_id])
@@ -308,7 +323,7 @@ class LocalProjector:
         
         cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
 
-        raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
+        #raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
         if not self.__Started__:
             print "Autoselecting corners."
             self.AutoSelectCorners()
@@ -445,6 +460,8 @@ class LocalProjector:
         self.ProjectionTimesHistory += [[0]]
 
         self.SpeedNorms += [np.linalg.norm(speed)]
+        self.SpeedErrors += [np.array([0., 0.])]
+        self.AimedSpeeds += [np.array(speed)]
 
         if self.SpeedNorms[-1] != 0.:
             self.SpeedTimeConstants += [self._DecayRatio/self.SpeedNorms[-1]]

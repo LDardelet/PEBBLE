@@ -98,7 +98,7 @@ class Framework:
         if not self.Running:
             print "Main loop finished without error."
         if self.Paused:
-            print "Paused at t = {0:.2f}.".format(t)
+            print "Paused at t = {0:.3f}.".format(t)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
@@ -225,7 +225,7 @@ class Framework:
             classFound = False
             PossibleClasses = []
             for key in fileLoaded.__dict__.keys():
-                if type(fileLoaded.__dict__[key]) is types.ClassType:
+                if type(fileLoaded.__dict__[key]) is types.ClassType and key[0] != '_':
                     PossibleClasses += [key]
                     if key == entry:
                         classFound = True
@@ -256,11 +256,11 @@ class Framework:
                                                                                   # Loading the class to get the references needed and parameters
 
             TmpClass = fileLoaded.__dict__[self._ProjectRawData[Name]['Class']](Name, self, {})
-            ReferencesAsked = TmpClass._ReferencesAsked
+            ReferencesAsked = TmpClass.__ReferencesAsked__
 
             PossibleVariables = []
             for var in TmpClass.__dict__.keys():
-                if var[0] != '__':
+                if var[0] == '_' and var[1] != '_':
                     PossibleVariables += [var]
             if TmpClass.__Type__ != 'Input':
                 print "Enter the tool order number :"                             # Order definition

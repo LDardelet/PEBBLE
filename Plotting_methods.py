@@ -12,21 +12,37 @@ from matplotlib import collections  as mc
 
 import datetime
 
-def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel = True, AddFeatureIdLabel = True, GivenColors = None):
+def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel = True, AddFeatureIdLabel = True, GivenColors = None, PlotUpdatePTMarkers = True):
     if GivenColors is None:
         GivenColors = [None for speed_id in SpeedIDs]
 
+#    SortedSpeedIDs = []
+#    for ZoneID in range(len(S.Zones.keys())):
+#        for Zone in S.Zones.keys():
+#            if Zone[4] == ZoneID:
+#                for speed_id in S.Zones[Zone]:
+#                    if speed_id in SpeedIDs:
+#                        SortedSpeedIDs += [speed_id]
+#                break
+    ZonesAsked = {}
     SortedSpeedIDs = []
     for ZoneID in range(len(S.Zones.keys())):
+        FoundOneIDForZone = False
         for Zone in S.Zones.keys():
+            ZonesAsked[Zone[4]] = False
             if Zone[4] == ZoneID:
                 for speed_id in S.Zones[Zone]:
                     if speed_id in SpeedIDs:
+                        if FoundOneIDForZone:
+                            SeveralIDsForOneZone = True
                         SortedSpeedIDs += [speed_id]
+                        FoundOneIDForZone = True
+                        ZonesAsked[Zone[4]] = True
                 break
+    print 'ZonesAsked : ', ZonesAsked
 
     Vxs = [];Vys = [];Tss = []
-    for speed_id in SpeedIDs:
+    for speed_id in SortedSpeedIDs:
         Tss += [[]]
         Vxs += [[]]
         Vys += [[]]
@@ -34,11 +50,15 @@ def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel 
             Tss[-1] += [Change[0]]
             Vxs[-1] += [Change[1][0]]
             Vys[-1] += [Change[1][1]]
-    f, axs = plt.subplots(1,2)
-    axx = axs[0]
-    axy = axs[1]
+    f, axs = plt.subplots(2,2)
+    axx = axs[0,0]
+    axy = axs[0,1]
+    axEx = axs[1,0]
+    axEy = axs[1,1]
     axx.set_title('Vx Benchmark')
     axy.set_title('Vy Benchmark')
+    axEx.set_title('Error in Vx')
+    axEy.set_title('Error in Vy')
     maxTs = 0
     minTs = np.inf
 
@@ -57,7 +77,23 @@ def PlotConvergence(S, SpeedIDs = None, GroundTruthFile = None, AddSpeedIdLabel 
         if GivenColors[n_speed] is None:
             GivenColors[n_speed] = axx.get_lines()[-1].get_color()
         axy.plot(Tss[n_speed], Vys[n_speed], label = label, color = GivenColors[n_speed])
-    
+        
+        axx.plot(S.TsSnaps, np.array(S.AimedSpeedSnaps)[:,speed_id,0], color = GivenColors[n_speed], marker = '.')
+        axy.plot(S.TsSnaps, np.array(S.AimedSpeedSnaps)[:,speed_id,1], color = GivenColors[n_speed], marker = '.')
+
+        axEx.plot(S.TsSnaps, np.array(S.SpeedErrorSnaps)[:,speed_id,0], color = GivenColors[n_speed])
+        axEy.plot(S.TsSnaps, np.array(S.SpeedErrorSnaps)[:,speed_id,1], color = GivenColors[n_speed])
+
+        if S._UpdatePT and PlotUpdatePTMarkers:
+            PTH = S.ProjectionTimesHistory[speed_id]
+            SpeedTss = np.array(Tss[n_speed])
+            for Update in PTH:
+                try:
+                    Index_At_PTChange = (SpeedTss > Update).tolist().index(True)
+                except:
+                    Index_At_PTChange = -1
+                axx.plot(Update, Vxs[n_speed][Index_At_PTChange], color = GivenColors[n_speed], marker = '^')
+                axy.plot(Update, Vys[n_speed][Index_At_PTChange], color = GivenColors[n_speed], marker = '^')
 
     D = None
     if not GroundTruthFile is None:
@@ -182,8 +218,13 @@ def PlotTracking(S, SpeedIDs, SnapsIDs, orientation = 'horizontal', cmap = None,
             if orientation == 'vertical':
                 axs = axs.T
 
+    n_x_legend = len(SnapsIDs)/2
+    n_y_legend = len(SpeedIDs) - 1
+                
+    if orientation == 'horizontal':
+        n_x_legend, n_y_legend = n_y_legend, n_x_legend
     for n_y_ini, speed_id in enumerate(SpeedIDs):
-        Ref = S.MeanPositionsReferences[speed_id]*S.DensityDefinition
+        Ref = S.MeanPositionsReferences[speed_id]*S._DensityDefinition
         if orientation == 'horizontal' and AddIDs:
             axs[n_y_ini,0].set_ylabel("ID = {0}".format(speed_id))
         for n_x_ini, snap_id in enumerate(SnapsIDs):
@@ -191,7 +232,11 @@ def PlotTracking(S, SpeedIDs, SnapsIDs, orientation = 'horizontal', cmap = None,
                 n_x, n_y = n_x_ini, n_y_ini
             else:
                 n_y, n_x = n_x_ini, n_y_ini
-            axs[n_x, n_y].plot(Ref[0], Ref[1], markertypes[0], color = markercolors[0], markersize = markersize)
+            if n_x == n_x_legend and n_y == n_y_legend:
+                label = 'Reference position'
+            else:
+                label = None
+            axs[n_x, n_y].plot(Ref[0], Ref[1], markertypes[0], color = markercolors[0], markersize = markersize, label = label)
 
             Snap = S.DMSnaps[snap_id][speed_id]
             if cmap is None:
@@ -202,13 +247,19 @@ def PlotTracking(S, SpeedIDs, SnapsIDs, orientation = 'horizontal', cmap = None,
             Xs, Ys = np.where(Snap > 0)
             Weights = Snap[Xs, Ys]
             Xm, Ym = (Weights*Xs).sum() / Weights.sum(), (Weights*Ys).sum() / Weights.sum()
-            axs[n_x, n_y].plot(Xm, Ym, markertypes[1], color = markercolors[1], markersize = markersize)
+            if n_x == n_x_legend and n_y == n_y_legend:
+                label = 'Instant mean position'
+            else:
+                label = None
+            axs[n_x, n_y].plot(Xm, Ym, markertypes[1], color = markercolors[1], markersize = markersize, label = label)
 
             tSnap = S.TsSnaps[snap_id]
             Title = "t = {0:.2}s\nA = {1:.1f}".format(tSnap, Weights.sum())
             if AddIDs and orientation == 'vertical' and n_x_ini == 0:
                 Title = "ID = {0}\n".format(speed_id) + Title
             axs[n_x, n_y].set_title(Title)
+    axs[n_x_legend,n_y_legend].legend(loc=9, bbox_to_anchor=(0.5, -0.3), ncol=2)
+
 def CreateTrackingShot(F, S, SpeedIDs, SnapshotNumber = 0, BinDt = 0.005, fontsize = 15, ax_given = None, cmap = None, addSpeedIDs = False, removeTicks = True):
     if ax_given is None:
         f, ax = plt.subplots(1,1)

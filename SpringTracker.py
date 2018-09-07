@@ -32,7 +32,8 @@ class Tracker:
 
         self._MinBuildingCos = -0.7 # Avoids having points not following each other in the proper order
 
-        self.Centers = np.array([[353, 138], [255, 246], [371, 344], [463, 227]])
+        #self.Centers = np.array([[353, 138], [255, 246], [371, 344], [463, 227]])
+        self.Centers = np.array([[241, 163]])
 
     def _Initialize(self):
         self.DefaultRadius = int(self._StringDefaultNPoints/2 * (self._MaxDistanceHandled + self._MinDistancePerPoint)/2)
@@ -40,6 +41,8 @@ class Tracker:
         self.BuildingStrings = TypedList(_String)
         self.InitializedStrings = TypedList(_String)
         self.nStrings = 0
+
+        return True
 
     def _OnEvent(self, event):
         # First if no string is initialized and the event is not located in one of the predefined centers, we leave the module

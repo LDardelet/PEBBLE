@@ -13,14 +13,17 @@ class Refractory:
         self.__CreationReferences__ = dict(argsCreationReferences)
 
         self._Period = 0.06 # Given is seconds
+        self._Active = True
 
     def _Initialize(self):
         self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 
+        return True
+
     def _OnEvent(self, event):
-        if event >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
+        if not self._Active or event >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
             self.AllowedEvents += 1
             return event
         else:

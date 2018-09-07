@@ -33,6 +33,8 @@ class Clicker:
 
         atexit.register(self._OnClosing)
 
+        return True
+
     def _OnEvent(self, event):
         if event.timestamp > self.CurrentT + self._BinDt:
             self.CurrentT = event.timestamp

@@ -17,17 +17,21 @@ class DisplayHandler:
         self.__PostTransporters__ = {'Event':tools.SendEvent, 'Segment':tools.SendSegment}
 
         self._MainAddress =  ("localhost", 54242)
+        self.Socket = None
+
+        self._CompulsoryModule = False
 
     def _Initialize(self):
+        if not self.Socket is None:
+            self.EndTransmission()
         self.Socket = None
-        atexit.register(self.EndTransmission)
         self.PostBox = []
 
         DisplayUp = tools.IsDisplayUp()
         if not DisplayUp:
             print "Aborting initialization process"
             self.__Started__ = False
-            return False
+            return not self._CompulsoryModule
 
         print "Initializing DisplayHandler sockets."
         tools.DestroySocket(self.Socket)
@@ -39,7 +43,13 @@ class DisplayHandler:
         self.MainUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 
         self.__Started__ = True
+        atexit.register(self.EndTransmission)
 
+        return True
+
+    def Restart(self):
+        self.EndTransmission()
+        self._Initialize()
 
     def _OnEvent(self, event):
         if self.__Started__:

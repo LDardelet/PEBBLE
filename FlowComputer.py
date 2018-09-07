@@ -29,6 +29,8 @@ class FlowComputer:
         self.RegMap = np.zeros(self.CurrentShape)
         self.STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext
 
+        return True
+
     def _OnEvent(self, event):
         self.ComputeFullFlow(event)
 

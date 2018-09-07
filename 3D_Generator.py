@@ -39,6 +39,8 @@ class Map3D:
 
         self.PointsCreationFailuresReasons = {'R':0, 'N' :0, 'Dneg': 0, 'Outside':0}
 
+        return True
+
     def _OnEvent(self, event):
         R_Value = self.FlowComputer.RegMap[event.location[0], event.location[1], event.polarity]
         if R_Value < self.R_threshold:

@@ -24,6 +24,8 @@ class Stretcher:
         self.SelectedFunction = self.ModFunctions[self._FuncType]
         self.TimeStart = None
 
+        return True
+
     def _OnEvent(self, event):
         if self.TimeStart is None:
             self.__Started = True

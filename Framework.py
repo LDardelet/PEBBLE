@@ -66,7 +66,11 @@ class Framework:
 
     def Initialize(self):
         for tool_name in self.ToolsList:
-            self.Tools[tool_name]._Initialize()
+            InitializationAnswer = self.Tools[tool_name]._Initialize()
+            if not InitializationAnswer:
+                print "Tool {0} failed to initialize. Aborting.".format(tool_name)
+                return False
+        return True
 
     def _OnClosing(self):
         if self.Modified:
@@ -82,7 +86,9 @@ class Framework:
     def RunStream(self, StreamName, stop_at = np.inf, resume = False):
         if not resume:
             self.StreamHistory += [StreamName]
-            self.Initialize()
+            InitializationAnswer = self.Initialize()
+            if not InitializationAnswer:
+                return None
 
         self.Running = True
         self.Paused = False

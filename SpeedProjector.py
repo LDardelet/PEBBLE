@@ -19,7 +19,6 @@ class LocalProjector:
         self.__Framework__ = Framework
         self.__Type__ = 'Computation'
         self.__CreationReferences__ = dict(argsCreationReferences)
-        self.__Started__ = False
 
 
         self._R_Projection = 0.5
@@ -32,8 +31,8 @@ class LocalProjector:
         self._DensityDefinition = 3 # In dpp
         self._MaskDensityRatio = 0.3
 
-        self._AskLocationAtTS = 0.010
-        self._SnapshotDt = 0.001
+        self._AskLocationAtTS = 0.020
+        self._SnapshotDt = 0.01
 
         self._DecayRatio = 5.
 
@@ -42,12 +41,13 @@ class LocalProjector:
         self._ModSpeeds = True
         self._SpeedModRatio = 0.02
         self._RelativeCorrectionThreshold = 0.0 # Relative distance (to ObservationRadius) over which correction speed is made. 0 implies that mod speed is applied in any situation
-        self._UpdatePT = False
+        self._UpdatePT = True
 
         self._DynamicPositionReference = False
     
     def _Initialize(self):
 
+        self.__Started__ = False
         self._Precision_aimed = self._Relative_precision_aimed*self._Initial_dv_MAX
         self.ActiveSpeeds = []
         self.Speeds = []
@@ -74,12 +74,9 @@ class LocalProjector:
         self.SpeedReferences = []
         self.ModSpeedPixels = []
         self.LowerPartModSpeed = []
-        #self.SecondOrderMeanPositionsReferences = []
-        #self.SecondOrderWeightsReferences = []
         self.MeanPositionTimeReferences = []
 
         self.CurrentMeanPositions = []
-        #self.CurrentSecondOrderMeanPositions = []
 
         self.NZones = 0
         self.Zones = {}
@@ -102,11 +99,13 @@ class LocalProjector:
         self.ProjectionTimesHistory = []
         self.CurrentBaseDisplacement = []
 
+        return True
+
     def _OnEvent(self, event):
         if not self.__Started__:
             if event >= self._AskLocationAtTS:
-                self.AskLocationAndStart()
-                self.LastSnapshotT = event.timestamp
+                if self.AskLocationAndStart():
+                    self.LastSnapshotT = event.timestamp
             return event
 
         if self.ToInitializeSpeed > 0:
@@ -204,7 +203,6 @@ class LocalProjector:
                     self.MeanPositionsReferences[speed_id] = np.array(self.CurrentMeanPositions[speed_id])
                     self.MeanPositionTimeReferences[speed_id] = event.timestamp
 
-                    #self.SecondOrderMeanPositionsReferences[speed_id], self.SecondOrderWeightsReferences[speed_id] = self.GetSecondOrderMeanPosition(speed_id, self.MeanPositionsReferences[speed_id])
 
                 return None
     
@@ -239,7 +237,7 @@ class LocalProjector:
 
     def ModifySpeed(self, speed_id, t):
         #NewSpeed = self.Speeds[speed_id] + SpeedError * self.SpeedModRatio
-        NewSpeed = self.Speeds[speed_id] + self.SpeedErrors[speed_id] / (0.3 * self.DecayingMaps[speed_id].sum() / self._DensityDefinition ** 2)
+        NewSpeed = self.Speeds[speed_id] + self.SpeedErrors[speed_id] / (0.3 * (self.DecayingMaps[speed_id].sum() / self._DensityDefinition ** 2))
         self.Speeds[speed_id] = NewSpeed
         self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
         self.SpeedTimeConstants[speed_id] = min(1./self._Precision_aimed, self._DecayRatio/self.SpeedNorms[speed_id])
@@ -280,35 +278,10 @@ class LocalProjector:
         Weights = Map[Xs, Ys]
         return np.array([(Weights*Xs).sum() / (self._DensityDefinition*Weights.sum()), (Weights*Ys).sum() / (self._DensityDefinition*Weights.sum())])
 
-    def _GetSecondOrderMeanPosition(self, speed_id, CuttingMeanPosition = None, threshold = 0.): # UNUSED
-        if not CuttingMeanPosition is None:
-            Xm, Ym = np.array(np.rint(self._DensityDefinition * CuttingMeanPosition), dtype = int)
-        else:
-            Xm, Ym = np.array(np.rint(self._DensityDefinition * self.GetMeanPosition(speed_id)), dtype = int)
-        if Xm is None:
-            return None, None
-
-        Map = self.DecayingMaps[speed_id]
-        LocalMaps = [Map[:Xm, :Ym], Map[Xm:, :Ym], Map[Xm:, Ym:], Map[:Xm, Ym:]]
-        LocalShifts = [np.array([0., 0.]), np.array([Xm, 0.]), np.array([Xm, Ym]), np.array([0., Ym])]
-        
-        MeansPos = []
-        WeightsSums = []
-        for LocalMap, LocalShift in zip(LocalMaps, LocalShifts):
-            Xs, Ys = np.where(LocalMap > threshold)
-            if Xs.shape[0] == 0:
-                MeansPos += [None]
-                WeightsSums += [0.]
-            else:
-                Weights = LocalMap[Xs, Ys]
-                MeansPos += [(LocalShift + np.array([(Weights*Xs).sum() / Weights.sum(), (Weights*Ys).sum() / Weights.sum()])) / self._DensityDefinition]
-                WeightsSums += [Weights.sum()]
-        return MeansPos, WeightsSums
-
     def UpdateDisplacement(self, t, speed_id):
         self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
 
-    def AskLocationAndStart(self, TW = 0.01):
+    def AskLocationAndStart(self, TW = 0.02):
         STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.max(axis = 2)
         Mask = STContext > STContext.max() - TW
 
@@ -323,17 +296,29 @@ class LocalProjector:
         
         cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
 
-        #raw_input("Pressed 'Enter' to resume, once the windows are confirmed")
-        if not self.__Started__:
-            print "Autoselecting corners."
-            self.AutoSelectCorners()
-            plt.pause(0.1)
-            del self.CenterLocationPoint
-            del self.WindowLines
-            del self.SelectionLocation
-            del self.SelectionCorner
+        ans = raw_input("Pressed 'Enter' to resume, once the windows are confirmed, or enter a new timestamp at which restart SP : ")
+        if not len(ans):
+            if not self.__Started__:
+                print "Autoselecting corners."
+                self.AutoSelectCorners()
+                plt.pause(0.1)
+                del self.CenterLocationPoint
+                del self.WindowLines
+                del self.SelectionLocation
+                del self.SelectionCorner
+                return True
+            else:
+                self.SelectionFigure.canvas.mpl_disconnect(cid)
+                plt.close(self.SelectionFigure.number)
+                del self.SelectionFigure
+                del self.SelectionAx
+                del self.CenterLocationPoint
+                del self.WindowLines
+                del self.SelectionLocation
+                del self.SelectionCorner
+                return True
         else:
-            self.SelectionFigure.canvas.mpl_disconnect(cid)
+            self._AskLocationAtTS = float(ans)
             plt.close(self.SelectionFigure.number)
             del self.SelectionFigure
             del self.SelectionAx
@@ -341,6 +326,7 @@ class LocalProjector:
             del self.WindowLines
             del self.SelectionLocation
             del self.SelectionCorner
+            return False
 
     def AutoSelectCorners(self):
         STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.max(axis = 2)
@@ -476,7 +462,6 @@ class LocalProjector:
         self.StreaksMaps += [0*self.CreateUnitaryMap(OW[2] - OW[0], OW[3] - OW[1])]
 
         self.CurrentMeanPositions += [None]
-        #self.CurrentSecondOrderMeanPositions += [None]
         self.MeanPositionsReferences += [None]
         self.DMReferences += [None]
         self.DMGradientReferences += [None]
@@ -484,8 +469,6 @@ class LocalProjector:
         self.SpeedReferences += [None]
         self.ModSpeedPixels += [None]
         self.LowerPartModSpeed += [None]
-        #self.SecondOrderMeanPositionsReferences += [None]
-        #self.SecondOrderWeightsReferences += [None]
         self.MeanPositionTimeReferences += [None]
 
         self.CurrentBaseDisplacement += [np.array([0.,0.])]

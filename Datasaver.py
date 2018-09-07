@@ -67,6 +67,8 @@ class Saver:
 
         self._Start()
 
+        return True
+
     def _OnEvent(self, event):
         for ToolName in self._DataDict.keys():
             if not self._DataDict[ToolName][_RUNNING_STARTED_STR]:

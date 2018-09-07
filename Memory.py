@@ -18,6 +18,8 @@ class Memory:
 
         self.Snapshots = []
 
+        return True
+
     def _OnEvent(self, event):
         self.LastEvent = Event(original = event)
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])

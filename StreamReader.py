@@ -31,6 +31,7 @@ class Reader(Module):
         self._SaveStream = False
         self._BatchEventSize = 1000
         self._TryUseDefaultGeometry = True
+        self._yInvert = True
 
         self.CurrentFile = None
 
@@ -114,7 +115,8 @@ class Reader(Module):
                 self.nByte = -1
                 self._LoadNewBatch()
 
-                return None
+                if not self.__Framework__.Running:
+                    return None
 
             self.nByte += 1
             Bytes = [unpack('B', self.CurrentByteBatch[self.nByte])[0]]
@@ -122,7 +124,6 @@ class Reader(Module):
                 Overflow = Bytes[0] & 0x03
                 
                 self.PreviousEventTs += self.OverflowValue * Overflow
-                print "Overflow of {0}".format(Overflow)
                 continue
 
             for i in range(self.AditionnalBytes):
@@ -141,22 +142,38 @@ class Reader(Module):
         p = Bytes[0] & 0b00000001
         
         x = (Bytes[2] << 8) | (Bytes[1])
-        y = (Bytes[4] << 8) | (Bytes[3])
+        if self._yInvert:
+            y = self.yMax - ((Bytes[4] << 8) | (Bytes[3]))
+        else:
+            y = (Bytes[4] << 8) | (Bytes[3])
 
-        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, self.yMax - y]), int(p))
+        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
 
     def _ATIS_BYTES_ANALYSIS(self, Bytes):
+        #print "Current Batch:"
+        #print Bytes
+        #for Byte in Bytes:
+        #    print "{0:8b}".format(Byte)
+        
         td = Bytes[0] >> 2
         self.PreviousEventTs += td
 
         if Bytes[0] & 0b00000001: # if is_tc == 1
             return None
 
-        p = Bytes[0] & 0b00000010
+        p = (Bytes[0] & 0b00000010) >> 1
         x = (Bytes[2] << 8) | (Bytes[1])
-        y = (Bytes[4] << 8) | (Bytes[3])
+        if self._yInvert:
+            y = self.yMax - ((Bytes[4] << 8) | (Bytes[3]))
+        else:
+            y = (Bytes[4] << 8) | (Bytes[3])
+        #print "Gives :"
+        #print "t = {0:.6f} (td = {1:.6f})".format(self.PreviousEventTs, td)
+        #print "p = {0}".format(p)
+        #print "x = {0}".format(x)
+        #print "y = {0}".format(y)
 
-        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, self.yMax - y]), int(p))
+        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
 
     def _DealWithHeaderEs(self):
         self.CurrentGeometry = list(self.DefaultGeometry)

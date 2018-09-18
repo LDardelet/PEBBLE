@@ -8,7 +8,6 @@ import types
 import copy
 
 from event import Event
-import tools
 
 from Plotting_methods import *
 
@@ -56,11 +55,7 @@ class Framework:
         atexit.register(self._OnClosing)
 
         if not ProjectFile is None:
-            try:
-                self.LoadProject(ProjectFile, onlyRawData = onlyRawData)
-            except e:
-                print e
-                print "Unable to load project, check self._ProjectRawData for file integrity"
+            self.LoadProject(ProjectFile, onlyRawData = onlyRawData)
         else:
             self._ProjectRawData = {}
             self._GenerateEmptyProject()

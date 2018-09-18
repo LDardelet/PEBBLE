@@ -1,16 +1,16 @@
 import numpy as np
 from event import Event
 
-class Stretcher:
+from Framework import Module
+
+class Stretcher(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to modify timestamps, mofifying speed norms
         '''
-        self.__ReferencesAsked__ = []
-        self.__Name__ = Name
-        self.__Framework__ = Framework
+        Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Filter'
-        self.__CreationReferences__ = dict(argsCreationReferences)
+
         self.__Started__ = False
 
         self._FuncType__ = 'sinus'
@@ -18,7 +18,8 @@ class Stretcher:
                                 'sinus': {'Amplitude':0.8, 'Period':0.05}
                                 }
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
         self.ModFunctions = {'linear': self.LinearStretch, 'sinus':self.SinusStretch}
         
         self.SelectedFunction = self.ModFunctions[self._FuncType]

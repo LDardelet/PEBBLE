@@ -1,18 +1,19 @@
 import numpy as np
 from event import Event
 
-class Memory:
+from Framework import Module
+
+class Memory(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to handle ST-context memory.
         '''
-        self.__ReferencesAsked__ = []
-        self.__Name__ = Name
-        self.__Framework__ = Framework
+        Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Memory'
-        self.__CreationReferences__ = dict(argsCreationReferences)
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
+
         self.STContext = -np.inf*np.ones(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.LastEvent = Event(-np.inf, [0,0], 0)
 

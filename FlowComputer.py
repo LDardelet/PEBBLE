@@ -4,23 +4,25 @@ import random
 from event import Event
 import matplotlib.pyplot as plt
 
-class FlowComputer:
+from Framework import Module
+
+class FlowComputer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Tool to compute the optical flow.
         '''
+        Module.__init__(self, Name, Framework, argsCreationReferences):
         self.__ReferencesAsked__ = ['Memory']
-        self.__Name__ = Name
-        self.__Framework__ = Framework
         self.__Type__ = 'Computation'
-        self.__CreationReferences__ = dict(argsCreationReferences)
 
         self._R = 5
         self._EventsAgeLimit = 0.3
         self._PolaritySeparation = True
 
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
+
         self.CurrentShape = list(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.NEventsMap = np.zeros(self.CurrentShape)
         self.DetMap = np.zeros(self.CurrentShape)

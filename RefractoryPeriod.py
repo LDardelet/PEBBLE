@@ -1,21 +1,24 @@
 import numpy as np
 
-class Refractory:
+from Framework import Module
+
+class Refractory(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to filter events from spike trains.
         Expects nothing.
         '''
+        Module.__init__(self, Name, Framework, argsCreationReferences)
+
         self.__ReferencesAsked__ = ['Memory']
-        self.__Name__ = Name
-        self.__Framework__ = Framework
         self.__Type__ = 'Filter'
-        self.__CreationReferences__ = dict(argsCreationReferences)
 
         self._Period = 0.06 # Given is seconds
         self._Active = True
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
+
         self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0

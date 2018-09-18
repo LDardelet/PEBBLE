@@ -5,16 +5,17 @@ from BaseObjects import TypedList
 
 import matplotlib.pyplot as plt
 
-class Tracker:
+from Framework import Module
+
+class Tracker(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Tool to track features by assigning a deformable spring string minimizing its energy
         '''
+        Module.__init__(self, Name, Framework, argsCreationReferences):
         self.__ReferencesAsked__ = ['Memory']
-        self.__Name__ = Name
-        self.__Framework__ = Framework
         self.__Type__ = 'Computation'
-        self.__CreationReferences__ = dict(argsCreationReferences)
+
         self.__Started__ = False
 
         self._StringDefaultNPoints = 3
@@ -35,7 +36,9 @@ class Tracker:
         #self.Centers = np.array([[353, 138], [255, 246], [371, 344], [463, 227]])
         self.Centers = np.array([[241, 163]])
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
+
         self.DefaultRadius = int(self._StringDefaultNPoints/2 * (self._MaxDistanceHandled + self._MinDistancePerPoint)/2)
         self.BuiltCenters = [False for nCenter in range(self.Centers.shape[0])]
         self.BuildingStrings = TypedList(_String)

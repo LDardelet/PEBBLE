@@ -7,23 +7,24 @@ import atexit
 
 import cv2
 
-class HoughCD:
+from Framework import Module
+
+class HoughCD(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to record points in a sequence
         '''
+        Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__ReferencesAsked__ = ['Memory']
-        self.__Name__ = Name
-        self.__Framework__ = Framework
         self.__Type__ = 'Analysis'
-        self.__CreationReferences__ = dict(argsCreationReferences)
 
         self._BinDt = 0.002
 
         self._ExpositionDt = 0.004
         self._FirstPictureAt = 0.01
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
 
         self.RecordedPoints = []
         self.CurrentT = self._FirstPictureAt - self._BinDt

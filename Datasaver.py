@@ -4,6 +4,7 @@ import atexit
 import copy
 
 from BaseObjects import TypedList
+from Framework import Module
 
 _PERIOD_STR = '_dt'
 _LASTSAVE_STR = '_ls'
@@ -26,22 +27,21 @@ def ExtractDeeperObject(Object, VariableSteps):
     else:
         return [ExtractDeeperObject(item, VariableSteps[1:]) for item in Object.__dict__[VariableSteps[0]]]
 
-class Saver:
+class Saver(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
 	'''
         Class to filter events from spike trains.
         Expects nothing.
         '''
-        self.__ReferencesAsked__ = []
-        self.__Name__ = Name
-        self.__Framework__ = Framework
+        Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Analysis'
-        self.__CreationReferences__ = dict(argsCreationReferences)
 
         self.__MonitorableTypes__ = ['Computation', 'Filter']
 
 
-    def _Initialize(self):
+    def _Initialize(self, **kwargs):
+        Module._Initialize(self, **kwargs)
+
         self._UnsavedParameters = False
         atexit.register(self._OnClosing)
 

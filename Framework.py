@@ -5,6 +5,7 @@ import select
 import inspect
 import atexit
 import types
+import copy
 
 from event import Event
 import tools
@@ -64,9 +65,13 @@ class Framework:
             self._ProjectRawData = {}
             self._GenerateEmptyProject()
 
-    def Initialize(self):
+    def Initialize(self, **ArgsDict):
         for tool_name in self.ToolsList:
-            InitializationAnswer = self.Tools[tool_name]._Initialize()
+            ToolArgsDict = {}
+            for key, value in ArgsDict.items():
+                if tool_name in key or key[0] == '_':
+                    ToolArgsDict['_'+'_'.join(key.split('_')[1:])] = value
+            InitializationAnswer = self.Tools[tool_name]._Initialize(**ToolArgsDict)
             if not InitializationAnswer:
                 print "Tool {0} failed to initialize. Aborting.".format(tool_name)
                 return False
@@ -83,10 +88,10 @@ class Framework:
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
-    def RunStream(self, StreamName, stop_at = np.inf, resume = False):
+    def RunStream(self, StreamName, stop_at = np.inf, resume = False, **kwargs):
         if not resume:
             self.StreamHistory += [StreamName]
-            InitializationAnswer = self.Initialize()
+            InitializationAnswer = self.Initialize(**kwargs)
             if not InitializationAnswer:
                 return None
 
@@ -174,6 +179,7 @@ class Framework:
 
         print ""
         print "Successfully generated tools order"
+        print ""
         
         for tool_name in self.ToolsList:
             self.Tools[tool_name] = self._ToolsClasses[tool_name](tool_name, self, self._ToolsCreationReferences[tool_name])
@@ -189,7 +195,6 @@ class Framework:
             if NewType in TypesLimits.keys() and self.Types[NewType] > TypesLimits[NewType]:
                 print "Project contains too many {0} types, aborting Projectfile loading.".format(NewType)
                 continue
-            print "Created tool {0}.".format(tool_name)
 
     def _UpdateToolsParameters(self, tool_name):
         for key, value in self._ToolsExternalParameters[tool_name].items():
@@ -372,3 +377,39 @@ class Framework:
             print ""
             
             nOrder += 1
+
+class Module:
+    def __init__(self, Name, Framework, argsCreationReferences):
+        '''
+        Default module class.
+        Each module in the Framework should inherit this class, whose 3 main methods and main parameters are required annd defined here.
+        Type should be set manually.
+        '''
+        print "Generation of module {0}".format(Name)
+        self.__ReferencesAsked__ = []
+        self.__Name__ = Name
+        self.__Framework__ = Framework
+        self.__CreationReferences__ = dict(argsCreationReferences)
+        self.__Type__ = None
+        self.__SavedValues__ = {}
+
+    def _Initialize(self, **kwargs):
+        # First restore all prevous values
+        print " > Initializing module {0}".format(self.__Name__)
+        if self.__SavedValues__:
+            for key, value in self.__SavedValues__.items():
+                self.__dict__[key] = value
+        self.__SavedValues__ = {}
+        for key, value in kwargs.items():
+            if key[0] != '_':
+                key = '_' + key
+            if key not in self.__dict__:
+                print "Specified value {0} not previously defined in {1} of module {2}".format(key, self.__Name__, self.__class__.__name__)
+            else:
+                print "Changed specific value {0} from {1} to {2} for {3}".format(key, self.__dict__[key], value, self.__Name__)
+                self.__SavedValues__[key] = copy.copy(self.__dict__[key])
+                self.__dict__[key] = value
+        return True
+
+    def _OnEvent(self, event):
+        return event

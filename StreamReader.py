@@ -1,4 +1,3 @@
-import  tools
 import numpy as np
 from struct import unpack
 from sys import stdout
@@ -273,7 +272,7 @@ class Reader(Module):
         self.Header = False
         self.CurrentGeometry = list(self.DefaultGeometry)
         FoundHeightOrWidth = False
-        while tools.peek(self.CurrentFile) == b'%':
+        while peek(self.CurrentFile) == b'%':
             HeaderNextLine = self.CurrentFile.readline()
             self.Header = True
             if 'height' in HeaderNextLine.lower():
@@ -335,3 +334,8 @@ class Reader(Module):
             print "Closed file {0}".format(self.StreamName)
             self.CurrentFile = None
 
+def peek(f, length=1):
+    pos = f.tell()
+    data = f.read(length)
+    f.seek(pos)
+    return data

@@ -262,7 +262,10 @@ def CreateTrackingShot(F, S, SpeedDuos = None, SnapshotNumber = 0, BinDt = 0.005
         ax.imshow(np.transpose(F.Mem.Snapshots[SnapshotNumber][1].max(axis = 2) > F.Mem.Snapshots[SnapshotNumber][1].max()-BinDt), origin = 'lower', cmap = plt.get_cmap(cmap))
     for n_speed, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
-        Box = [S.OWAPT[speed_id][0] + S.DisplacementSnaps[SnapshotNumber][speed_id][0], S.OWAPT[speed_id][1] + S.DisplacementSnaps[SnapshotNumber][speed_id][1], S.OWAPT[speed_id][2] + S.DisplacementSnaps[SnapshotNumber][speed_id][0], S.OWAPT[speed_id][3] + S.DisplacementSnaps[SnapshotNumber][speed_id][1]]
+        try:
+            Box = [S.OWAPT[speed_id][0] + S.DisplacementSnaps[SnapshotNumber][speed_id][0], S.OWAPT[speed_id][1] + S.DisplacementSnaps[SnapshotNumber][speed_id][1], S.OWAPT[speed_id][2] + S.DisplacementSnaps[SnapshotNumber][speed_id][0], S.OWAPT[speed_id][3] + S.DisplacementSnaps[SnapshotNumber][speed_id][1]]
+        except:
+            continue
         
         ax.plot([Box[0], Box[0]], [Box[1], Box[3]], 'r')
         ax.plot([Box[0], Box[2]], [Box[3], Box[3]], 'r')
@@ -336,7 +339,10 @@ def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap,
 
     for n_speed, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
-        Box = [S.OWAPT[speed_id][0] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][1] + S.DisplacementSnaps[snap_id][speed_id][1], S.OWAPT[speed_id][2] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][3] + S.DisplacementSnaps[snap_id][speed_id][1]]
+        try:
+            Box = [S.OWAPT[speed_id][0] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][1] + S.DisplacementSnaps[snap_id][speed_id][1], S.OWAPT[speed_id][2] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][3] + S.DisplacementSnaps[snap_id][speed_id][1]]
+        except:
+            continue
         if (np.array(Box) < BorderMargin).any() or Box[2] >= F.Mem.Snapshots[snap_id][1].shape[0] - BorderMargin or Box[3] >= F.Mem.Snapshots[snap_id][1].shape[1] - BorderMargin:
             continue
         color = BoxColors[zone_id]

@@ -134,7 +134,7 @@ class Clicker(Module):
                 self.Recording = False
             elif event.key == 'escape':
                 self.Recording = False
-                self.__Framework__.Running = False
+                self.__Framework__.Paused = self.__Name__
                 for Point in self.NewPoints:
                     if not Point[0] is None:
                         self.RecordedPoints += [Point]

@@ -23,6 +23,11 @@ class LocalProjector(Module):
         self._R_Projection = 0.5
         self._ExpansionFactor = 1.
 
+        self._SelectionMode = 'grid'
+        self._DetectorPointsGrid = (5, 4)
+        self._DetectorDefaultWindowsLength = 30
+        self._DetectorMinActivityForStart = 50
+
         self._HalfNumberOfSpeeds = 3
         self._Initial_dv_MAX = 800
         self._Relative_precision_aimed = 0.01
@@ -48,11 +53,16 @@ class LocalProjector(Module):
     def _Initialize(self, **kwargs):
         Module._Initialize(self, **kwargs)
 
+        self.MapSize = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.shape[:2]
+
         self.__Started__ = False
         self._Precision_aimed = self._Relative_precision_aimed*self._Initial_dv_MAX
         self.ActiveSpeeds = []
         self.Speeds = []
+        self.IsActive = []
         self.DefaultObservationWindows = []
+
+        self.DetectorNumberOfPoints = self._DetectorPointsGrid[0] * self._DetectorPointsGrid[1]
 
         self.ToInitializeSpeed = []
         self.SpeedStartTime = []
@@ -62,6 +72,8 @@ class LocalProjector(Module):
         self.AimedSpeeds = []
         self.SpeedTimeConstants = []
         self.Displacements = []
+        self.ActiveSpeedsInZone = {}
+        self.AssociatedZone = []
 
         self.OWAPT = [] # Stands for "Observation Window at Projection Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
         self.ObservationRadiuses = []
@@ -95,6 +107,7 @@ class LocalProjector(Module):
         self.DisplacementSnaps = []
         self.SpeedErrorSnaps = []
         self.AimedSpeedSnaps = []
+        self.ProjectedEvents = []
 
         self.SpeedsChangesHistory = []
         self.ProjectionTimesHistory = []
@@ -105,7 +118,14 @@ class LocalProjector(Module):
     def _OnEvent(self, event):
         if not self.__Started__:
             if event >= self._AskLocationAtTS:
-                if self.AskLocationAndStart():
+                if self._SelectionMode == 'ask':
+                    if self.AskLocationAndStart():
+                        self.LastSnapshotT = event.timestamp
+                elif self._SelectionMode == 'grid':
+                    self._GridSelectCorners()
+                    self.LastSnapshotT = event.timestamp
+                elif self._SelectionMode == 'auto':
+                    self._AutoSelectCorners()
                     self.LastSnapshotT = event.timestamp
             return event
 
@@ -129,7 +149,7 @@ class LocalProjector(Module):
             self.AimedSpeedSnaps += [[]]
 
             for speed_id in range(len(self.Speeds)):
-                if speed_id in self.ActiveSpeeds:
+                if self.IsActive[speed_id]:
                     DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
                     if DeltaT:
                         self.LastConsideredEventsTs[speed_id] = event.timestamp
@@ -160,16 +180,30 @@ class LocalProjector(Module):
                     CanBeCleansed = False
                     break
             if CanBeCleansed:
-                MeanValues = [float((self.StreaksMaps[speed_id]).sum())/(self.StreaksMaps[speed_id] > 0).sum() for speed_id in self.Zones[Zone]]
+                SMSum = (self.StreaksMaps[speed_id] > 0).sum()
+                if SMSum == 0:
+                    continue
+                MeanValues = [float((self.StreaksMaps[speed_id]).sum())/SMSum for speed_id in self.Zones[Zone] if self.IsActive[speed_id]]
+                IDs = [speed_id for speed_id in self.Zones[Zone] if self.IsActive[speed_id]]
                 SortedIDs = np.argsort(MeanValues)
                 for local_speed_id in SortedIDs[:-self._KeepBestSpeeds]:
-                    self.ActiveSpeeds.remove(self.Zones[Zone][local_speed_id])
+                    speed_id = IDs[local_speed_id]
+                    self.ActiveSpeeds.remove(speed_id)
+                    self.IsActive[speed_id] = False
+                    self.ActiveSpeedsInZone[Zone] -= 1
                 print "Cleansed {0} speed considered wrong for zone {1} at t = {2}".format(len(SortedIDs[:-self._KeepBestSpeeds].tolist()), Zone, event.timestamp)
                 self.ToCleanZones.remove(Zone)
         return event
 
     def _ProjectEventWithSpeed(self, event, speed_id):
         self._UpdateDisplacement(event.timestamp, speed_id)
+
+        if self.Displacements[speed_id][0] + self.OWAPT[speed_id][0] < 0 or self.Displacements[speed_id][1] + self.OWAPT[speed_id][1] < 0 or self.Displacements[speed_id][0] + self.OWAPT[speed_id][2] >= self.MapSize[0] or self.Displacements[speed_id][1] + self.OWAPT[speed_id][3] >= self.MapSize[1]:
+            self.ActiveSpeeds.remove(speed_id)
+            self.ActiveSpeedsInZone[self.AssociatedZone[speed_id]] -= 1
+            self.IsActive[speed_id] = False
+            return None
+
         x0 = event.location[0] - self.Displacements[speed_id][0]
         y0 = event.location[1] - self.Displacements[speed_id][1]
         
@@ -177,6 +211,7 @@ class LocalProjector(Module):
         if not (OW[0] <= x0 <= OW[2] and OW[1] <= y0 <= OW[3]):
             return None
 
+        self.ProjectedEvents[speed_id] += 1
         DeltaT = event.timestamp - self.LastConsideredEventsTs[speed_id]
         EvolutionFactor = np.e**(-(DeltaT/self.SpeedTimeConstants[speed_id]))
 
@@ -195,7 +230,7 @@ class LocalProjector(Module):
             self.CurrentMeanPositions[speed_id] = self.GetMeanPosition(speed_id)
 
             if self.MeanPositionsReferences[speed_id] is None:
-                if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id]: # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
+                if event.timestamp - self.SpeedStartTime[speed_id] > self.SpeedTimeConstants[speed_id] and (self._SelectionMode != 'grid' or self.DecayingMaps[speed_id].sum() > self._DetectorMinActivityForStart) : # Hopefully we can do better. Still, the feature should construct itself over self.SpeedTimeConstants[speed_id] for each speed
                     self.DMReferences[speed_id] = np.array(self.DecayingMaps[speed_id])
 
                     self._GetModSpeedValuesFor(speed_id)
@@ -237,7 +272,7 @@ class LocalProjector(Module):
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 
     def RecoverCurrentBestSpeeds(self):
-        MeanValues = [[(speed_id in self.ActiveSpeeds) * float((self.StreaksMaps[speed_id]).sum())/(self.StreaksMaps[speed_id] > 0).sum() for speed_id in self.Zones[Zone]] for Zone in self.Zones.keys()]
+        MeanValues = [[self.IsActive[speed_id] * float((self.StreaksMaps[speed_id]).sum())/max(1, (self.StreaksMaps[speed_id] > 0).sum()) for speed_id in self.Zones[Zone]] for Zone in self.Zones.keys()]
         SortedIDs = [np.array(IDs)[np.argsort(MV)] for MV, IDs in zip(MeanValues, self.Zones.values())]
         FinalIDs = [V[-1] for V in SortedIDs]
 
@@ -311,37 +346,73 @@ class LocalProjector(Module):
         
         cid = self.SelectionFigure.canvas.mpl_connect('button_press_event', self._LocationSelection)
 
-        ans = raw_input("Pressed 'Enter' to resume, once the windows are confirmed, or enter a new timestamp at which restart SP : ")
+        print ""
+        print "Pressed 'Enter' to resume once the windows are confirmed, or enter one of the following options: "
+        print "'grid' -> Switch to grid mode"
+        print "'auto' -> Detects corners with Hough detector"
+        print "'quit' -> Stops framework in current state"
+        print "'t=VALUE' -> Asks windows location at t"
+        print "'delta=VALUE' -> Asks windows location after delta"
+        ans = raw_input(" -> ")
+        plt.pause(0.1)
+        plt.close(self.SelectionFigure.number)
+        del self.SelectionFigure
+        del self.SelectionAx
+        del self.CenterLocationPoint
+        del self.WindowLines
+        del self.SelectionLocation
+        del self.SelectionCorner
         if not len(ans):
             if not self.__Started__:
-                print "Autoselecting corners."
-                self._AutoSelectCorners()
-                plt.pause(0.1)
-                del self.CenterLocationPoint
-                del self.WindowLines
-                del self.SelectionLocation
-                del self.SelectionCorner
-                return True
+                print "No window selected. Restarting ASAP."
+                return False
             else:
-                self.SelectionFigure.canvas.mpl_disconnect(cid)
-                plt.close(self.SelectionFigure.number)
-                del self.SelectionFigure
-                del self.SelectionAx
-                del self.CenterLocationPoint
-                del self.WindowLines
-                del self.SelectionLocation
-                del self.SelectionCorner
                 return True
         else:
-            self._AskLocationAtTS = float(ans)
-            plt.close(self.SelectionFigure.number)
-            del self.SelectionFigure
-            del self.SelectionAx
-            del self.CenterLocationPoint
-            del self.WindowLines
-            del self.SelectionLocation
-            del self.SelectionCorner
-            return False
+            if ans == 'grid':
+                print "Switching to grid mode"
+                self._SelectionMode = 'grid'
+                self._GridSelectCorners()
+                return True
+            elif ans == 'auto':
+                print "Switching to auto mode"
+                self._SelectionMode = 'auto'
+                self._AutoSelectCorners()
+                return True
+            elif ans == 'quit':
+                self.__Framework__.Paused = self.__Name__
+                return False
+            elif '=' in ans:
+                if ans.split('=')[0] == 't':
+                    Value = float(ans.split('=')[1])
+                    self._AskLocationAtTS = Value
+                    print "Set new asking time to {0:.3f}".format(self._AskLocationAtTS)
+                    return False
+                elif ans.split('=')[0] == 'delta':
+                    Value = float(ans.split('=')[1])
+                    self._AskLocationAtTS += Value
+                    print "Set new asking time to {0:.3f}".format(self._AskLocationAtTS)
+                    return False
+                else:
+                    print "Unrecognized answer. Restarting ASAP."
+                    return False
+            else:
+                print "Unrecognized answer. Restarting ASAP."
+                return False
+
+    def _GridSelectCorners(self):
+        Padding = np.array(self.MapSize) / np.array(self._DetectorPointsGrid)
+        FirstCorner = Padding / 2
+        NewPoints = []
+        for x in range(self._DetectorPointsGrid[0]):
+            for y in range(self._DetectorPointsGrid[1]):
+                NewPoints += [FirstCorner + np.array([x, y]) * Padding]
+        for P in NewPoints:
+            OW = [P[0] - self._DetectorDefaultWindowsLength / 2, P[1] - self._DetectorDefaultWindowsLength / 2, P[0] + self._DetectorDefaultWindowsLength / 2, P[1] + self._DetectorDefaultWindowsLength / 2]
+            self.DefaultObservationWindows += [list(OW)]
+            self._AddExponentialSeeds(vx_center = 0., vy_center = 0., add_center = True)
+
+            self.__Started__ = True
 
     def _AutoSelectCorners(self):
         STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.max(axis = 2)
@@ -364,13 +435,11 @@ class LocalProjector(Module):
 
         for P in NewPoints:
             self.SelectionLocation = np.array(P)
-            self.CenterLocationPoint = self.SelectionAx.plot(P[0], P[1], 'rv')[0]
 
             Ranges = np.array([15,15])
             self.SelectionCorner = self.SelectionLocation + Ranges
 
             OW = [self.SelectionLocation[0] - Ranges[0], self.SelectionLocation[1] - Ranges[1], self.SelectionLocation[0] + Ranges[0], self.SelectionLocation[1] + Ranges[1]]
-            self._UpdateOWDrawing(OW)
 
             print "Confirmed Window : "
             print "x : {0} -> {1}".format(OW[0], OW[2])
@@ -384,8 +453,6 @@ class LocalProjector(Module):
             self.SelectionCorner = None
             
             self.CenterLocationPoint = None
-            self.WindowLines = []
-
 
     def _LocationSelection(self, ev):
         if ev.button == 1:
@@ -451,6 +518,7 @@ class LocalProjector(Module):
 
         speed_id = len(self.Speeds)
         self.ActiveSpeeds += [speed_id]
+        self.IsActive += [True]
         self.ToInitializeSpeed += [speed_id]
         self.Speeds += [speed]
         self.InitialSpeeds += [np.array(speed)]
@@ -485,12 +553,14 @@ class LocalProjector(Module):
         self.ModSpeedPixels += [None]
         self.LowerPartModSpeed += [None]
         self.MeanPositionTimeReferences += [None]
+        self.ProjectedEvents += [0]
 
         self.CurrentBaseDisplacement += [np.array([0.,0.])]
 
         self.SpeedsChangesHistory += [[]]
 
         self.Zones[tuple(OW)] += [speed_id]
+        self.AssociatedZone += [tuple(OW)]
 
         return True
 
@@ -506,12 +576,13 @@ class LocalProjector(Module):
 
         center_speed = np.array([vx_center, vy_center])
 
+        NSpeedsBefore = len(self.Speeds)
+
         seeds = [0.]
         for i in range(self._HalfNumberOfSpeeds):
             seeds += [float(self._Initial_dv_MAX)/(2**i)]
         self.V_seed = abs(seeds[-1])
         
-        print "Seeds : ", seeds
         if add_center:
             self._AddSeed(center_speed, (-self.V_seed, -self.V_seed, self.V_seed, self.V_seed), OW = Zone)
         
@@ -526,6 +597,7 @@ class LocalProjector(Module):
                         if dvx != 0:
                             self._AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+        self.ActiveSpeedsInZone[tuple(Zone)] = len(self.Speeds) - NSpeedsBefore
 
 def GetSpeedAngle(Speed):
     if Speed[0] == 0:

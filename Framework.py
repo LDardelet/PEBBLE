@@ -91,20 +91,20 @@ class Framework:
                 return None
 
         self.Running = True
-        self.Paused = False
+        self.Paused = ''
         while self.Running and not self.Paused:
             t = self.NextEvent()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
-                    self.Paused = True
+                    self.Paused = 'user'
             if t > stop_at:
-                self.Paused = True
+                self.Paused = 'Framework'
         if not self.Running:
             print "Main loop finished without error."
         if self.Paused:
-            print "Paused at t = {0:.3f}.".format(t)
+            print "Paused at t = {0:.3f} by {1}.".format(t, self.Paused)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)

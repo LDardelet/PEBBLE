@@ -293,6 +293,8 @@ class Reader(Module):
     def _NextEventDat(self):
         if not len(self.CurrentByteBatch):
             self._LoadNewBatch()
+            if not self.__Framework__.Running:
+                return None
 
         event = unpack('Q', self.CurrentByteBatch[:self.Event_Size])
         self.CurrentByteBatch = self.CurrentByteBatch[self.Event_Size:]

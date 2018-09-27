@@ -287,6 +287,9 @@ class Reader(Module):
         if self.Header:
             self.Event_Type = unpack('B',self.CurrentFile.read(1))[0]
             self.Event_Size = unpack('B',self.CurrentFile.read(1))[0]
+        else:
+            self.Event_Type = 0
+            self.Event_Size = 8
         self.BatchSize = self._BatchEventSize * self.Event_Size
         return self.Header
 

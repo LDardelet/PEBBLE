@@ -66,6 +66,7 @@ class LocalProjector(Module):
 
         self.ToInitializeSpeed = []
         self.SpeedStartTime = []
+        self.SpeedStopTime = []
         self.SpeedProjectionTime = []
         self.SpeedNorms = []
         self.SpeedErrors = []
@@ -92,6 +93,7 @@ class LocalProjector(Module):
         self.CurrentMeanPositions = []
 
         self.NZones = 0
+        self.NActiveZones = 0
         self.Zones = {}
         self.ToCleanZones = []
 
@@ -191,6 +193,9 @@ class LocalProjector(Module):
                     self.ActiveSpeeds.remove(speed_id)
                     self.IsActive[speed_id] = False
                     self.ActiveSpeedsInZone[Zone] -= 1
+                    self.SpeedStopTime[speed_id] = event.timestamp
+                    if not self.ActiveSpeedsInZone[Zone]:
+                        self.NActiveZones -= 1
                 print "Cleansed {0} speed considered wrong for zone {1} at t = {2}".format(len(SortedIDs[:-self._KeepBestSpeeds].tolist()), Zone, event.timestamp)
                 self.ToCleanZones.remove(Zone)
         return event
@@ -201,6 +206,9 @@ class LocalProjector(Module):
         if self.Displacements[speed_id][0] + self.OWAPT[speed_id][0] < 0 or self.Displacements[speed_id][1] + self.OWAPT[speed_id][1] < 0 or self.Displacements[speed_id][0] + self.OWAPT[speed_id][2] >= self.MapSize[0] or self.Displacements[speed_id][1] + self.OWAPT[speed_id][3] >= self.MapSize[1]:
             self.ActiveSpeeds.remove(speed_id)
             self.ActiveSpeedsInZone[self.AssociatedZone[speed_id]] -= 1
+            self.SpeedStopTime[speed_id] = event.timestamp
+            if not self.ActiveSpeedsInZone[self.AssociatedZone[speed_id]]:
+                self.NActiveZones -= 1
             self.IsActive[speed_id] = False
             return None
 
@@ -525,6 +533,7 @@ class LocalProjector(Module):
         self.LocalPaddings += [localpadding]
 
         self.SpeedStartTime += [0]
+        self.SpeedStopTime += [None]
         self.SpeedProjectionTime += [0]
         self.ProjectionTimesHistory += [[0]]
 
@@ -598,6 +607,7 @@ class LocalProjector(Module):
                             self._AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
         print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
         self.ActiveSpeedsInZone[tuple(Zone)] = len(self.Speeds) - NSpeedsBefore
+        self.NActiveZones += 1
 
 def GetSpeedAngle(Speed):
     if Speed[0] == 0:

@@ -49,6 +49,7 @@ class LocalProjector(Module):
         self._UpdatePT = True
 
         self._DynamicPositionReference = False
+        self._AutoSpeedRestart = True
     
     def _Initialize(self, **kwargs):
         Module._Initialize(self, **kwargs)
@@ -74,7 +75,6 @@ class LocalProjector(Module):
         self.SpeedTimeConstants = []
         self.Displacements = []
         self.ActiveSpeedsInZone = {}
-        self.AssociatedZone = []
 
         self.OWAPT = [] # Stands for "Observation Window at Projection Time". Means to stabilize any object present at start time, without adding new ones yet to appear. It is given at start time as it moves as time goes on.
         self.ObservationRadiuses = []
@@ -96,6 +96,7 @@ class LocalProjector(Module):
         self.NActiveZones = 0
         self.Zones = {}
         self.ToCleanZones = []
+        self.RegenNeeded = False
 
         self.LastConsideredEventsTs = []
         self.LocalPaddings = []
@@ -196,8 +197,11 @@ class LocalProjector(Module):
                     self.SpeedStopTime[speed_id] = event.timestamp
                     if not self.ActiveSpeedsInZone[Zone]:
                         self.NActiveZones -= 1
+                        self.RegenNeeded = True
                 print "Cleansed {0} speed considered wrong for zone {1} at t = {2}".format(len(SortedIDs[:-self._KeepBestSpeeds].tolist()), Zone, event.timestamp)
                 self.ToCleanZones.remove(Zone)
+        if self.RegenNeeded and self._AutoSpeedRestart:
+            self._RegenSpeeds()
         return event
 
     def _ProjectEventWithSpeed(self, event, speed_id):
@@ -205,10 +209,11 @@ class LocalProjector(Module):
 
         if self.Displacements[speed_id][0] + self.OWAPT[speed_id][0] < 0 or self.Displacements[speed_id][1] + self.OWAPT[speed_id][1] < 0 or self.Displacements[speed_id][0] + self.OWAPT[speed_id][2] >= self.MapSize[0] or self.Displacements[speed_id][1] + self.OWAPT[speed_id][3] >= self.MapSize[1]:
             self.ActiveSpeeds.remove(speed_id)
-            self.ActiveSpeedsInZone[self.AssociatedZone[speed_id]] -= 1
+            self.ActiveSpeedsInZone[self.OWAPT[speed_id]] -= 1
             self.SpeedStopTime[speed_id] = event.timestamp
-            if not self.ActiveSpeedsInZone[self.AssociatedZone[speed_id]]:
+            if not self.ActiveSpeedsInZone[self.OWAPT[speed_id]]:
                 self.NActiveZones -= 1
+                self.RegenNeeded = True
             self.IsActive[speed_id] = False
             return None
 
@@ -279,8 +284,8 @@ class LocalProjector(Module):
             self.SpeedProjectionTime[speed_id] = event.timestamp
             self.ProjectionTimesHistory[speed_id] += [event.timestamp]
 
-    def RecoverCurrentBestSpeeds(self):
-        MeanValues = [[self.IsActive[speed_id] * float((self.StreaksMaps[speed_id]).sum())/max(1, (self.StreaksMaps[speed_id] > 0).sum()) for speed_id in self.Zones[Zone]] for Zone in self.Zones.keys()]
+    def RecoverCurrentBestSpeeds(self, OnlyAlive = False):
+        MeanValues = [[self.IsActive[speed_id] * float((self.StreaksMaps[speed_id]).sum())/max(1, (self.StreaksMaps[speed_id] > 0).sum()) for speed_id in self.Zones[Zone]] for Zone in self.Zones.keys() if (not OnlyAlive or self.ActiveSpeedsInZone[Zone])]
         SortedIDs = [np.array(IDs)[np.argsort(MV)] for MV, IDs in zip(MeanValues, self.Zones.values())]
         FinalIDs = [V[-1] for V in SortedIDs]
 
@@ -335,6 +340,35 @@ class LocalProjector(Module):
 
     def _UpdateDisplacement(self, t, speed_id):
         self.Displacements[speed_id] = self.CurrentBaseDisplacement[speed_id] + (t - self.SpeedProjectionTime[speed_id])*self.Speeds[speed_id]
+
+    def _RegenSpeeds(self):
+        ConsideredSpeeds = self.RecoverCurrentBestSpeeds(OnlyAlive = True)
+        Positions = []
+
+        for speed_id, zone_id in ConsideredSpeeds:
+            OW = self.OWAPT[speed_id]
+            CenterPos = np.array([OW[2] + OW[0], OW[3] + OW[1]], dtype = float) / 2
+            Positions += [CenterPos + self.Displacements[speed_id]]
+
+        Positions = np.array(Positions)
+
+        Padding = np.array(self.MapSize) / np.array(self._DetectorPointsGrid)
+        FirstCorner = Padding / 2
+        NewPoints = []
+        MinDistances = []
+        for x in range(self._DetectorPointsGrid[0]):
+            for y in range(self._DetectorPointsGrid[1]):
+                NewPoints += [FirstCorner + np.array([x, y]) * Padding]
+                MinDistances += [np.linalg.norm((NewPoints[-1] - Positions), axis = 1).min()]
+
+        for LocalIndex in np.argsort(MinDistances)[-(self.DetectorNumberOfPoints - self.NActiveZones):]:
+            P = NewPoints[LocalIndex]
+            OW = [P[0] - self._DetectorDefaultWindowsLength / 2, P[1] - self._DetectorDefaultWindowsLength / 2, P[0] + self._DetectorDefaultWindowsLength / 2, P[1] + self._DetectorDefaultWindowsLength / 2]
+            self.DefaultObservationWindows += [list(OW)]
+            self._AddExponentialSeeds(vx_center = 0., vy_center = 0., add_center = True)
+
+        self.RegenNeeded = False
+
 
     def AskLocationAndStart(self, TW = None):
         if TW is None:
@@ -545,7 +579,7 @@ class LocalProjector(Module):
             self.SpeedTimeConstants += [self._DecayRatio/self.SpeedNorms[-1]]
         else:
             self.SpeedTimeConstants += [self._DecayRatio/abs(np.array(self.LocalPaddings[-1])).min()]
-        self.OWAPT += [OW]
+        self.OWAPT += [tuple(OW)]
         self.ObservationRadiuses += [np.array([OW[2] - OW[0], OW[3] - OW[1]], dtype = float)/2]
 
         self.Displacements += [None]
@@ -569,7 +603,6 @@ class LocalProjector(Module):
         self.SpeedsChangesHistory += [[]]
 
         self.Zones[tuple(OW)] += [speed_id]
-        self.AssociatedZone += [tuple(OW)]
 
         return True
 
@@ -605,7 +638,7 @@ class LocalProjector(Module):
                         self._AddSeed(center_speed + np.array([dvx, -dvy]), (-max(dvx/2, self.V_seed), -max(dvy, self.V_seed), max(dvx, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
                         if dvx != 0:
                             self._AddSeed(center_speed + np.array([-dvx, -dvy]), (-max(dvx, self.V_seed), -max(dvy, self.V_seed), max(dvx/2, self.V_seed), max(dvy/2, self.V_seed)), OW = Zone)
-        print "Initialized {0} speed seeds, going from vx = {1} and vy = {2} to vx = {3} and vy = {4}.".format(len(self.Speeds), np.array(self.Speeds)[:,0].min(), np.array(self.Speeds)[:,1].min(), np.array(self.Speeds)[:,0].max(), np.array(self.Speeds)[:,1].max())
+        print "Initialized {0} new speed seeds.".format(len(self.Speeds) - NSpeedsBefore)
         self.ActiveSpeedsInZone[tuple(Zone)] = len(self.Speeds) - NSpeedsBefore
         self.NActiveZones += 1
 

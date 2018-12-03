@@ -183,7 +183,7 @@ def PlotDecayingMaps(SpeedProjector, ZoneNumber = 0):
             ax.tick_params('both', left = 'off', bottom = 'off', labelleft = 'off', labelbottom = 'off')
     return f, axs
 
-def PlotTracking(S, SpeedDuos = None, SnapsIDs = None, orientation = 'horizontal', cmap = None, markercolors = ['green', 'grey'], markersize = 15, markertypes = ['v', 'v'], AddIDs = True):
+def PlotTracking(S, SpeedDuos = None, SnapsIDs = None, orientation = 'horizontal', cmap = None, markercolors = ['green', 'grey'], markersize = 15, markertypes = ['v', 'v'], AddIDs = True, AddTitle = True, RemoveTicks = False):
     if SnapsIDs is None:
         SnapsIDs = range(len(S.TsSnaps))
     if SpeedDuos is None:
@@ -195,6 +195,9 @@ def PlotTracking(S, SpeedDuos = None, SnapsIDs = None, orientation = 'horizontal
         f, axs = plt.subplots(nSnaps, nSpeeds)
     else:
         f, axs = plt.subplots(nSpeeds, nSnaps)
+    if RemoveTicks:
+        for ax in axs:
+            ax.tick_params('both', bottom = 'off', left = 'off', labelbottom = 'off', labelleft = 'off')
     if nSpeeds == 1 and nSnaps == 1:
         axs = np.array(axs)
     else:
@@ -212,21 +215,26 @@ def PlotTracking(S, SpeedDuos = None, SnapsIDs = None, orientation = 'horizontal
         n_x_legend, n_y_legend = n_y_legend, n_x_legend
     for n_y_ini, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
-        Ref = S.MeanPositionsReferences[speed_id]*S._DensityDefinition
+        try:
+            Ref = S.MeanPositionsReferences[speed_id]*S._DensityDefinition
+        except:
+            continue
         if orientation == 'horizontal' and AddIDs:
             axs[n_y_ini,0].set_ylabel("ID = {0}".format(speed_id))
         for n_x_ini, snap_id in enumerate(SnapsIDs):
+            Snap = S.DMSnaps[snap_id][speed_id]
+            if Snap is None:
+                continue
             if orientation == 'vertical':
                 n_x, n_y = n_x_ini, n_y_ini
             else:
                 n_y, n_x = n_x_ini, n_y_ini
-            if n_x == n_x_legend and n_y == n_y_legend:
+            if markersize and n_x == n_x_legend and n_y == n_y_legend:
                 label = 'Reference position'
             else:
                 label = None
             axs[n_x, n_y].plot(Ref[0], Ref[1], markertypes[0], color = markercolors[0], markersize = markersize, label = label)
 
-            Snap = S.DMSnaps[snap_id][speed_id]
             if cmap is None:
                 axs[n_x, n_y].imshow(np.transpose(Snap), origin = 'lower')
             else:
@@ -235,20 +243,23 @@ def PlotTracking(S, SpeedDuos = None, SnapsIDs = None, orientation = 'horizontal
             Xs, Ys = np.where(Snap > 0)
             Weights = Snap[Xs, Ys]
             Xm, Ym = (Weights*Xs).sum() / Weights.sum(), (Weights*Ys).sum() / Weights.sum()
-            if n_x == n_x_legend and n_y == n_y_legend:
+            if markersize and n_x == n_x_legend and n_y == n_y_legend:
                 label = 'Instant mean position'
             else:
                 label = None
             axs[n_x, n_y].plot(Xm, Ym, markertypes[1], color = markercolors[1], markersize = markersize, label = label)
 
             tSnap = S.TsSnaps[snap_id]
-            Title = "t = {0:.2}s\nA = {1:.1f}".format(tSnap, Weights.sum())
+            Title = "t = {0:.3}s\nA = {1:.1f}".format(tSnap, Weights.sum())
             if AddIDs and orientation == 'vertical' and n_x_ini == 0:
                 Title = "ID = {0}\n".format(speed_id) + Title
-            axs[n_x, n_y].set_title(Title)
+            if AddTitle:
+                axs[n_x, n_y].set_title(Title)
     axs[n_x_legend,n_y_legend].legend(loc=9, bbox_to_anchor=(0.5, -0.3), ncol=2)
 
-def CreateTrackingShot(F, S, SpeedDuos = None, SnapshotNumber = 0, BinDt = 0.005, fontsize = 15, ax_given = None, cmap = None, addSpeedIDs = False, removeTicks = True, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True):
+    return f, axs
+
+def CreateTrackingShot(F, S, SpeedDuos = None, SnapshotNumber = 0, BinDt = 0.005, fontsize = 15, ax_given = None, cmap = None, addSpeedIDs = False, removeTicks = True, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, add_ts = False):
     if SpeedDuos is None:
         SpeedDuos = S.RecoverCurrentBestSpeeds()
 
@@ -256,10 +267,16 @@ def CreateTrackingShot(F, S, SpeedDuos = None, SnapshotNumber = 0, BinDt = 0.005
         f, ax = plt.subplots(1,1)
     else:
         ax = ax_given
+    Map = F.Mem.Snapshots[SnapshotNumber][1]
+    Mask = (Map.max(axis = 2) > Map.max()-BinDt) * Map.max(axis = 2)
+    FinalMap = (Map[:,:,0] == Mask) - 1 * (Map[:,:,1] == Mask)
     if cmap is None:
-        ax.imshow(np.transpose(F.Mem.Snapshots[SnapshotNumber][1].max(axis = 2) > F.Mem.Snapshots[SnapshotNumber][1].max()-BinDt), origin = 'lower') 
+        ax.imshow(np.transpose(FinalMap), origin = 'lower') 
     else:
-        ax.imshow(np.transpose(F.Mem.Snapshots[SnapshotNumber][1].max(axis = 2) > F.Mem.Snapshots[SnapshotNumber][1].max()-BinDt), origin = 'lower', cmap = plt.get_cmap(cmap))
+        ax.imshow(np.transpose(FinalMap), origin = 'lower', cmap = plt.get_cmap(cmap))
+
+    if add_ts:
+        ax.set_title("t = {0:.3f}".format(S.TsSnaps[SnapshotNumber]))
     for n_speed, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
         try:
@@ -278,13 +295,15 @@ def CreateTrackingShot(F, S, SpeedDuos = None, SnapshotNumber = 0, BinDt = 0.005
     if ax_given is None:
         return f, ax
 
-def GenerateTrackingGif(F, S, SpeedDuos = None, SnapRatio = 1, tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = None, add_timestamp_title = True, cmap = None, GivenColors = None, add_Feature_label_Fontsize = 0, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, IncludeSpeedError = False, DoGif = True):
+def GenerateTrackingGif(F, S, SpeedDuos = None, SnapRatio = 1, tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = None, add_timestamp_title = True, cmap = None, GivenColors = None, add_Feature_label_Fontsize = 0, AddedInfos = ['speed_id', 'zone_id'], FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, IncludeSpeedError = False, DoGif = True, PolaritySeparation = True, Trail = 0, TrailWidth = 2, DrawBox = True, CurrentPositionMarker = None):
     if BinDt is None:
         BinDt = S._SnapshotDt
     if SpeedDuos is None:
         SpeedDuos = S.RecoverCurrentBestSpeeds()
     elif SpeedDuos == 'all':
-        SpeedDuos = [(speed_id, S.AssociatedZone[speed_id][4]) for speed_id in range(len(S.Speeds))]
+        SpeedDuos = [(speed_id, S.OWAPT[speed_id][4]) for speed_id in range(len(S.Speeds))]
+
+    TrailPointList = [[] for duo in SpeedDuos]
 
     if GivenColors is None:
         GivenColors = {zone_id: 'r' for speed_id, zone_id in SpeedDuos}
@@ -292,18 +311,20 @@ def GenerateTrackingGif(F, S, SpeedDuos = None, SnapRatio = 1, tMax = np.inf, Fo
     Snaps_IDs = [snap_id for snap_id in range(len(S.TsSnaps)) if snap_id % SnapRatio == 0]
     os.system('rm '+ Folder + '*.png')
     print "Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(S.TsSnaps))
+    f = figure(figsize = (16,9), dpi = 100)
+    ax = f.add_subplot(1,1,1)
     for snap_id in Snaps_IDs:
         stdout.write("\r > {0}/{1}".format(snap_id/SnapRatio + 1, len(Snaps_IDs)))
         stdout.flush()
         if S.TsSnaps[snap_id] > tMax:
             break
-        f, ax = plt.subplots(1,1)
 
-        _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, GivenColors, BinDt, cmap, add_timestamp_title, add_Feature_label_Fontsize, FeatureNumerotation = FeatureNumerotation, FeatureInitialOriginKept = FeatureInitialOriginKept, IncludeSpeedError = IncludeSpeedError)
+        _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, GivenColors, BinDt, cmap, add_timestamp_title, add_Feature_label_Fontsize, FeatureNumerotation = FeatureNumerotation, FeatureInitialOriginKept = FeatureInitialOriginKept, IncludeSpeedError = IncludeSpeedError, PolaritySeparation = PolaritySeparation, Trail = Trail, TrailWidth = TrailWidth, TrailPointList = TrailPointList, DrawBox = DrawBox, AddedInfos = AddedInfos, CurrentPositionMarker = CurrentPositionMarker)
 
-        f.savefig(Folder + 't_{0:03d}.png'.format(snap_id))
-        plt.close(f.number)
+        f.savefig(Folder + 't_{0:05d}.png'.format(snap_id))
+        ax.cla()
     print "\r > Done.          "
+    plt.close(f.number)
 
     if DoGif:
         GifFile = 'tracking_'+datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')+'.gif'
@@ -335,11 +356,14 @@ def GenerateTrackingGif(F, S, SpeedDuos = None, SnapRatio = 1, tMax = np.inf, Fo
             os.system('mv ' + Folder + GifFile + ' ' + Folder + 'Meh/' + NewGifFile)
             print "Moving gif file to Meh folder."
 
-def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap, add_timestamp_title, add_Feature_label_Fontsize = 0, titleSize = 15, lw = 1, BorderMargin = 5, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, IncludeSpeedError = 0):
+def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap, add_timestamp_title, add_Feature_label_Fontsize = 0, titleSize = 15, lw = 1, BorderMargin = 5, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, IncludeSpeedError = 0, PolaritySeparation = True, Trail = 0, TrailWidth = 2, TrailPointList = [], DrawBox = True, AddedInfos = [], CurrentPositionMarker = None):
+    Map = np.array(F.Mem.Snapshots[snap_id][1])
+    Mask = (Map.max(axis = 2) > Map.max()-BinDt) * Map.max(axis = 2)
+    FinalMap = (Map[:,:,0] == Mask) + (1 - 2*int(PolaritySeparation)) * (Map[:,:,1] == Mask)
     if cmap is None:
-        ax.imshow(np.transpose(F.Mem.Snapshots[snap_id][1].max(axis = 2) > F.Mem.Snapshots[snap_id][1].max()-BinDt), origin = 'lower') 
+        ax.imshow(np.transpose(FinalMap), origin = 'lower') 
     else:
-        ax.imshow(np.transpose(F.Mem.Snapshots[snap_id][1].max(axis = 2) > F.Mem.Snapshots[snap_id][1].max()-BinDt), origin = 'lower', cmap = plt.get_cmap(cmap))
+        ax.imshow(np.transpose(FinalMap), origin = 'lower', cmap = plt.get_cmap(cmap))
 
     for n_speed, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
@@ -350,6 +374,10 @@ def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap,
         if (np.array(Box) < BorderMargin).any() or Box[2] >= F.Mem.Snapshots[snap_id][1].shape[0] - BorderMargin or Box[3] >= F.Mem.Snapshots[snap_id][1].shape[1] - BorderMargin:
             continue
         color = BoxColors[zone_id]
+        if Trail > 0:
+            while len(TrailPointList[n_speed]) and S.TsSnaps[snap_id] - TrailPointList[n_speed][0][0] > Trail:
+                TrailPointList[n_speed].pop(0)
+            TrailPointList[n_speed] += [[S.TsSnaps[snap_id], (Box[0] + Box[2])/2, (Box[1] + Box[3])/2]]
         if IncludeSpeedError:
             Error = S.SpeedErrorSnaps[snap_id][speed_id]
             t = S.TsSnaps[snap_id]
@@ -359,15 +387,137 @@ def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap,
                     break
                 Speed = SpeedChange[1]
             AlphaValue = max(0., 1. - IncludeSpeedError * np.linalg.norm(Error)/np.linalg.norm(Speed))
-        ax.plot([Box[0], Box[0]], [Box[1], Box[3]], c = color, lw = lw, alpha = AlphaValue)
-        ax.plot([Box[0], Box[2]], [Box[3], Box[3]], c = color, lw = lw, alpha = AlphaValue)
-        ax.plot([Box[2], Box[2]], [Box[3], Box[1]], c = color, lw = lw, alpha = AlphaValue)
-        ax.plot([Box[2], Box[0]], [Box[1], Box[1]], c = color, lw = lw, alpha = AlphaValue)
-
+            if False and not S.DMReferences[speed_id] is None:
+                AlphaValue = min(AlphaValue,  max(0., S.DMSnaps[snap_id][speed_id].sum()/S.DMReferences[speed_id].sum()))
+        else:
+            AlphaValue = 1
+        if DrawBox:
+            ax.plot([Box[0], Box[0]], [Box[1], Box[3]], c = color, lw = lw, alpha = AlphaValue)
+            ax.plot([Box[0], Box[2]], [Box[3], Box[3]], c = color, lw = lw, alpha = AlphaValue)
+            ax.plot([Box[2], Box[2]], [Box[3], Box[1]], c = color, lw = lw, alpha = AlphaValue)
+            ax.plot([Box[2], Box[0]], [Box[1], Box[1]], c = color, lw = lw, alpha = AlphaValue)
+        if not CurrentPositionMarker is None:
+            ax.plot((Box[0] + Box[2])/2, (Box[1] + Box[3])/2, c = color, alpha = AlphaValue, marker = CurrentPositionMarker[0], markersize = CurrentPositionMarker[1])
+        if Trail > 0:
+            TrailPointList[n_speed][-1] += [AlphaValue]
+            for nSegment in range(len(TrailPointList[n_speed])-1):
+                ax.plot([TrailPointList[n_speed][nSegment][1], TrailPointList[n_speed][nSegment+1][1]], [TrailPointList[n_speed][nSegment][2], TrailPointList[n_speed][nSegment+1][2]], c = color, alpha = TrailPointList[n_speed][nSegment][3], lw = TrailWidth)
         if add_Feature_label_Fontsize:
-            ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.4, 'Feature {0}'.format((FeatureInitialOriginKept * zone_id + (not FeatureInitialOriginKept) * n_speed) + (FeatureNumerotation == 'human')) + ', ID = {0}'.format(speed_id), color = np.array(BoxColors[zone_id]).reshape(3), fontsize = add_Feature_label_Fontsize)
+            ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.4, ('zone_id' in AddedInfos)*'Feature {0}'.format((FeatureInitialOriginKept * zone_id + (not FeatureInitialOriginKept) * n_speed) + (FeatureNumerotation == 'human')) + ', '*('zone_id' in AddedInfos and 'speed_id' in AddedInfos) + ('speed_id' in AddedInfos)*'ID = {0}'.format(speed_id), color = BoxColors[zone_id], fontsize = add_Feature_label_Fontsize)
     if add_timestamp_title:
         ax.set_title("t = {0:.2f}s".format(S.TsSnaps[snap_id]), fontsize = titleSize)
+
+def DecayingMapsGif(F, S, SpeedDuos, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', GivenColors = None, BinDt = None, add_timestamp_title = True, cmap = None, lw = 1, IncludeSpeedErrorGraph = False, IncludeScene = True, AlphaSpeedError = 0, Trail = 0, DoGif = False, PolaritySeparation = True, StartSpeedIDAt = {}, CreateFalseAxes = False, Dummy = False):
+    if BinDt is None:
+        BinDt = S._SnapshotDt
+
+    Snaps_IDs = [snap_id for snap_id, snap_ts in enumerate(S.TsSnaps) if (snap_id % SnapRatio == 0 and tMin <= snap_ts <= tMax)]
+    os.system('rm '+ Folder + '*.png')
+    print "Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(S.TsSnaps))
+
+    FeatureFullTiling = (3,3)
+    FigSize = 10
+    hundredth = FeatureFullTiling[1] + IncludeSpeedErrorGraph # Height
+    tenth = int(np.ceil(FeatureFullTiling[0] + hundredth * IncludeScene * 640./480)) # Width
+    if IncludeScene:
+        SceneWidth = tenth - FeatureFullTiling[0]
+    else:
+        SceneWidth = 0
+    axs = []
+    falseAxes = []
+    TrailPointList = [[] for nSpeed in SpeedDuos]
+    print "Height (hundredth):", hundredth, ", width (tenth):", tenth
+    f = plt.figure(figsize = (16,9), dpi = 100)
+    if IncludeSpeedErrorGraph:
+        ErrorAx = plt.subplot2grid((hundredth, tenth), (0, SceneWidth), colspan=FeatureFullTiling[0])
+        ErrorAx.set_xlim(S.TsSnaps[Snaps_IDs[0]], S.TsSnaps[Snaps_IDs[-1]])
+#    if IncludeSpeedErrorGraph:
+#        ErrorAx = f.add_subplot(hundredth, 1+IncludeScene, 1 + IncludeScene)
+#        ErrorAx.set_xlim(S.TsSnaps[Snaps_IDs[0]], S.TsSnaps[Snaps_IDs[-1]])
+    if IncludeScene:
+        SceneAx = plt.subplot2grid((hundredth, tenth), (0, 0), rowspan = hundredth, colspan= SceneWidth)
+        SceneAx.set_aspect('equal')
+        SceneAx.tick_params('both', bottom = 'off', left = 'off', labelbottom = 'off', labelleft = 'off')
+ #   if IncludeScene:
+ #       SceneAx = f.add_subplot(1, 2, 1)
+ #       SceneAx.set_aspect('equal')
+ #       SceneAx.tick_params('both', bottom = 'off', left = 'off', labelbottom = 'off', labelleft = 'off')
+    for nDM in range(max(FeatureFullTiling[0]*FeatureFullTiling[1]*CreateFalseAxes, len(SpeedDuos))):
+        N = (IncludeSpeedErrorGraph * tenth) + (nDM + 1) + IncludeScene*((nDM)/FeatureFullTiling[1] + 1) * SceneWidth
+        print N
+        if nDM < len(SpeedDuos):
+            axs += [f.add_subplot(hundredth, tenth, N)]
+            axs[-1].tick_params('both', bottom = 'off', left = 'off', labelbottom = 'off', labelleft = 'off')
+            axs[-1].set_aspect('equal')
+        else:
+            falseAxes += [f.add_subplot(hundredth, tenth, N)]
+            falseAxes[-1].tick_params('both', bottom = 'off', left = 'off', labelbottom = 'off', labelleft = 'off')
+            falseAxes[-1].set_aspect('equal')
+    f.tight_layout()
+
+    TmpSpeedDuos = []
+    for snap_id in Snaps_IDs:
+        stdout.write("\r > {0}/{1}".format(snap_id/SnapRatio + 1, len(Snaps_IDs)))
+        stdout.flush()
+
+        for nDM in range(len(SpeedDuos)):
+            if not SpeedDuos[nDM][0] in StartSpeedIDAt.keys() or S.TsSnaps[snap_id] >= StartSpeedIDAt[SpeedDuos[nDM][0]]:
+                if SpeedDuos[nDM] not in TmpSpeedDuos:
+                    TmpSpeedDuos += [SpeedDuos[nDM]]
+            else:
+                continue
+            if not S.DMSnaps[snap_id][SpeedDuos[nDM][0]] is None:
+                axs[nDM].cla()
+                axs[nDM].imshow(np.transpose(S.DMSnaps[snap_id][SpeedDuos[nDM][0]]), origin = 'lower', cmap = cmap)
+                l = axs[nDM].plot([0],[0], c = GivenColors[SpeedDuos[nDM][1]], marker = 'x')
+                axs[nDM].legend(l, [''])
+        if IncludeSpeedErrorGraph:
+            ErrorAx.plot(S.TsSnaps[snap_id], np.linalg.norm(S.SpeedErrorSnaps[snap_id][SpeedDuos[nDM][0]]), 'x', c = GivenColors[SpeedDuos[nDM][1]])
+        if IncludeScene:
+            _CreateTrackingPicture(SceneAx, snap_id, F, S, TmpSpeedDuos, GivenColors, BinDt, cmap, add_timestamp_title, lw = lw, IncludeSpeedError = AlphaSpeedError, Trail = Trail, TrailPointList = TrailPointList)
+
+        if Dummy:
+            return None
+        f.savefig(Folder + 't_{0:05d}.png'.format(snap_id))
+        for ax in axs:
+            ax.cla()
+        if IncludeScene:
+            SceneAx.cla()
+        if IncludeSpeedErrorGraph:
+            ErrorAx.cla()
+    print "\r > Done.          "
+    plt.close(f.number)
+
+    if DoGif:
+        GifFile = 'DM_evolution_'+datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')+'.gif'
+        print "Generating gif."
+        os.system('convert -delay {0} -loop 0 '.format(int(1000*S._SnapshotDt))+Folder+'*.png ' + Folder + GifFile)
+        print "GIF generated : {0}".format(GifFile)
+        os.system('kde-open ' + Folder + GifFile)
+
+        ans = raw_input('Rate this result (1-nice/0-bad/(d)elete) : ')
+        if '->' in ans:
+            ans, name = ans.split('->')
+            ans = ans.strip()
+            name = name.strip()
+            if '.gif' in name:
+                name = name.split('.gif')[0]
+            NewGifFile = name + '_' + GifFile
+        else:
+            NewGifFile = GifFile
+        if '1' in ans.lower() or 'nice' in ans.lower():
+            os.system('mv ' + Folder + GifFile + ' ' + Folder + 'Nice/' + NewGifFile)
+            print "Moving gif file to Nice folder."
+        elif '0' in ans.lower() or 'bad' in ans.lower():
+            os.system('mv ' + Folder + GifFile + ' ' + Folder + 'Bad/' + NewGifFile)
+            print "Moving gif file to Bad folder."
+        elif len(ans) > 0 and ans.lower()[0] == 'd' or 'delete' in ans.lower():
+            os.system('rm ' + Folder + GifFile)
+            print "Deleted Gif file. RIP."
+        else:
+            os.system('mv ' + Folder + GifFile + ' ' + Folder + 'Meh/' + NewGifFile)
+            print "Moving gif file to Meh folder."
+
 
 def GenerateTrackingPanel(F, S, SnapsIDs, SpeedDuos, GivenColors = None, BinDt = 0.005, add_timestamp_title = True, cmap = None, RemoveTicksAndTicksLabels = True, titleSize = 15, lw = 1):
     if SpeedDuos is None:
@@ -398,7 +548,6 @@ def CreatePositionsHistory(S, speed_id, Tmax = np.inf):
     for n in range(len(S.SpeedsChangesHistory[speed_id]) - 1):
         t_start = S.SpeedsChangesHistory[speed_id][n][0]
         t_stop = S.SpeedsChangesHistory[speed_id][n+1][0]
-
         v_line = S.SpeedsChangesHistory[speed_id][n][1]
 
         if len(PTList) > 0 and t_start >= PTList[0]:
@@ -410,7 +559,9 @@ def CreatePositionsHistory(S, speed_id, Tmax = np.inf):
             break
     return PositionsHistoryx, PositionsHistoryy
 
-def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', SnapshotsTss = [], AddSpeedIdLabel = True, AddFeatureIdLabel = True, Tmax = np.inf, legendsize = 20, axissize = 20, titlesize = 20, orientation = 'horizontal', legend = True, legendloc = None, boxToAnchor = None, legendNcols = 1, GivenColors = None, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True):
+
+
+def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', SnapshotsTss = [], AddSpeedIdLabel = True, AddFeatureIdLabel = True, Tmax = np.inf, legendsize = 20, axissize = 20, titlesize = 20, orientation = 'horizontal', legend = True, legendloc = None, boxToAnchor = None, legendNcols = 1, GivenColors = None, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, GndFeatureRemap = None, GndFeatureOffsets = {}):
     if SpeedDuos is None:
         SpeedDuos = S.RecoverCurrentBestSpeeds()
 
@@ -440,21 +591,41 @@ def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', Snaps
             except IOError:
                 print "Unable to find default .gnd file"
     AddToLegend = []
+    Data = {}
     if not D is None:
         
         PointsList = D['RecordedPoints']
         for n_speed, duo in enumerate(SpeedDuos):
+            if duo not in Data.keys():
+                Data[duo] = {}
             speed_id, zone_id = duo
+            if not GndFeatureRemap is None:
+                try:
+                    zone_id_in_GndFile = GndFeatureRemap[zone_id]
+                except:
+                    print "Key not remapped"
+                    continue
+                if zone_id_in_GndFile is None:
+                    print "Key remapped to None, ignoring this Gnd line"
+                    continue
+            else:
+                zone_id_in_GndFile = zone_id
 
+            if zone_id_in_GndFile in GndFeatureOffsets.keys():
+                print "Setting offset for zone_id_in_GndFile = {0}".format(zone_id_in_GndFile)
+                Offset = GndFeatureOffsets[zone_id_in_GndFile]
+            else:
+                Offset = np.array([0., 0.])
             PointList = []
             for Point in PointsList:
-                if Point[0] == zone_id:
+                if Point[0] == zone_id_in_GndFile:
                     PointList += [Point[1:]]
             if not PointList:
+                print "No point found here"
                 continue
             TsTh = np.array(PointList)[:,0]
-            Xs = np.array(PointList)[:,1]
-            Ys = np.array(PointList)[:,2]
+            Xs = np.array(PointList)[:,1] + Offset[0]
+            Ys = np.array(PointList)[:,2] + Offset[1]
 
             if Tmax == 'gnd':
                 Tmax = TsTh.max()
@@ -471,15 +642,20 @@ def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', Snaps
             AddToLegend += ['Ground truth, Feature {0}'.format((FeatureInitialOriginKept * zone_id + (not FeatureInitialOriginKept) * n_speed) + (FeatureNumerotation == 'human'))]
             if legend and not AddSpeedIdLabel and not AddFeatureIdLabel:
                 axs[0].legend(AddToLegend)
+            Data[duo]['gnd'] = {'Xs':Xs, 'Ys':Ys, 'Ts':TsTh}
 
     Labels = []
     for n_speed, duo in enumerate(SpeedDuos):
         speed_id, zone_id = duo
+        if duo not in Data.keys():
+            Data[duo] = {}
+
 
         stdout.write("\r > {0}/{1}".format(n_speed + 1, len(SpeedDuos)))
         stdout.flush()
 
         PHx, PHy = CreatePositionsHistory(S, speed_id, Tmax)
+        Data[duo]['exp'] = {'PHx':PHx, 'PHy':PHy}
         
         Labels += ['']
         if AddFeatureIdLabel:
@@ -524,7 +700,7 @@ def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', Snaps
     axs[1].autoscale()
     axs[1].margins(0.1)
 
-    return f, axs, GivenColors
+    return f, axs, GivenColors, Data
 
 from mpl_toolkits.mplot3d import Axes3D
 import mpl_toolkits.mplot3d.art3d as art3d
@@ -534,7 +710,7 @@ from matplotlib.transforms import Affine2D
 from colour import Color
 
 def Plot3DTrackingView(S, SpeedDuos, SnapRatio, tMax = np.inf, WMinRatio = 0.2, MarkersSize = 5, ImshowSnaps = [], ImshowCmap = 'binary', ImshowTW = 0.02, ImshowMarkersSize = 40, ImshowMinAlpha = 0.4, t_scale = 3, azim = -43.5, elev = 34.2):
-    fig = plt.figure()
+    fig = plt.figure(dpi = 100)
     ax = fig.add_subplot(111, projection='3d')
     MeanPosX = []
     MeanPosY = []
@@ -576,6 +752,8 @@ def Plot3DTrackingView(S, SpeedDuos, SnapRatio, tMax = np.inf, WMinRatio = 0.2, 
             stdout.write("\r > speed_id : {2}/{3} -> {0}/{1}".format(n_snap + 1, nShots, n_speed + 1, len(SpeedDuos)))
             stdout.flush()
 
+            if S.DisplacementSnaps[snap_id][speed_id] is None:
+                continue
             Map = S.DMSnaps[snap_id][speed_id]
             Displacement = S.DisplacementSnaps[snap_id][speed_id] + OWCenter - np.array(Map.shape, dtype = float)/(2*S._DensityDefinition)
             Xs, Ys = np.where(Map > 0)

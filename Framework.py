@@ -399,7 +399,8 @@ class Module:
             if key[0] != '_':
                 key = '_' + key
             if key not in self.__dict__:
-                print "Specified value {0} not previously defined in {1} of module {2}".format(key, self.__Name__, self.__class__.__name__)
+                pass
+                #print "Specified value {0} not previously defined in {1} of module {2}".format(key, self.__Name__, self.__class__.__name__)
             else:
                 print "Changed specific value {0} from {1} to {2} for {3}".format(key, self.__dict__[key], value, self.__Name__)
                 self.__SavedValues__[key] = copy.copy(self.__dict__[key])

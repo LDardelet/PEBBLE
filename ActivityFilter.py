@@ -27,14 +27,20 @@ class ActivityFilter(Module):
         return True
 
     def _OnEvent(self, event):
-        if (event.location[0] > self._Radius) and (event.location[0] < (640 - self._Radius)) and (event.location[1] > self._Radius) and (event.location[1] < (480 - self._Radius)):
+        # print("stream is {0}".format(self.__Framework__.StreamHistory[-1]))
+        # StreamKey = self.__Framework__.StreamHistory[-1]
+        # self._Xmax = self.__Framework__.StreamsGeometries[StreamKey][0]
+        # self._Ymax = self.__Framework__.StreamsGeometries[StreamKey][1]
+        # print("stream geometries: {0}, {1}".format(self._Xmax, self._Ymax))
+
+        if (event.location[0] > self._Radius) and (event.location[0] < (self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]][0] - self._Radius)) and (event.location[1] > self._Radius) and (event.location[1] < (self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]][1] - self._Radius)):
             # extract neigborhood
             patch = np.copy(self._Memory.STContext[event.location[0] - self._Radius:event.location[0] + self._Radius + 1, event.location[1] - self._Radius:event.location[1] + self._Radius + 1, event.polarity])
             patch -= event.timestamp
             count = np.sum(np.abs(patch) < self._Tau)
         else:
             count = 0
-            
+
         if count > self._MinNeighbors:
             self.AllowedEvents += 1
             return event

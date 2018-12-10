@@ -31,9 +31,13 @@ class ActivityFilter(Module):
 
         return True
 
+    def _UpdateParameters(self, MinNeigh, Tau, Radius):
+        self._MinNeighbors = MinNeigh
+        self._Tau = Tau # in seconds
+        self._Radius = Radius
+        print("ActivityFilter: parameters updated.")
+
     def _OnEvent(self, event):
-
-
         if (event.location[0] > self._Radius) and (event.location[0] < (self._Xmax - self._Radius)) and (event.location[1] > self._Radius) and (event.location[1] < (self._Ymax - self._Radius)):
             # extract neigborhood
             patch = np.copy(self._Memory.STContext[event.location[0] - self._Radius:event.location[0] + self._Radius + 1, event.location[1] - self._Radius:event.location[1] + self._Radius + 1, event.polarity])
@@ -42,7 +46,7 @@ class ActivityFilter(Module):
         else:
             count = 0
 
-        if count > self._MinNeighbors:
+        if count > self._MinNeighbors: # allow event if enough neighboors.
             self.AllowedEvents += 1
             return event
         else:

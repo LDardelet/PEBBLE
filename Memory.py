@@ -1,7 +1,6 @@
 import numpy as np
-from event import Event
 
-from Framework import Module
+from Framework import Module, Event
 
 class Memory(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -11,8 +10,7 @@ class Memory(Module):
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Memory'
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         self.STContext = -np.inf*np.ones(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.LastEvent = Event(-np.inf, [0,0], 0)
@@ -21,7 +19,7 @@ class Memory(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         self.LastEvent = Event(original = event)
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
 
@@ -34,3 +32,11 @@ class Memory(Module):
 
     def CreateSnapshot(self):
         return np.array(self.STContext)
+
+    def _Rewind(self, tNew):
+        self.STContext[self.STContext >= tNew] = -np.inf
+        while self.Snapshots and self.Snapshots[-1][0] >= tNew:
+            self.Snapshots.pop(-1)
+
+    def GetPatch(self, x, y, Rx, Ry):
+        return self.STContext[x-Rx:x+Rx,y-Ry:y+Ry,:]

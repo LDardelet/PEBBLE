@@ -1,7 +1,6 @@
 import numpy as np
-from event import Event
 
-from Framework import Module
+from Framework import Module, Event
 
 class Stretcher(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -18,8 +17,7 @@ class Stretcher(Module):
                                 'sinus': {'Amplitude':0.8, 'Period':0.05}
                                 }
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
         self.ModFunctions = {'linear': self.LinearStretch, 'sinus':self.SinusStretch}
         
         self.SelectedFunction = self.ModFunctions[self._FuncType]
@@ -27,7 +25,7 @@ class Stretcher(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if self.TimeStart is None:
             self.__Started = True
             self.TimeStart = event.timestamp

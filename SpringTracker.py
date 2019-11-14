@@ -1,11 +1,10 @@
 import numpy as np
-from event import Event
 
 from BaseObjects import TypedList
 
 import matplotlib.pyplot as plt
 
-from Framework import Module
+from Framework import Module, Event
 
 class Tracker(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -36,9 +35,7 @@ class Tracker(Module):
         #self.Centers = np.array([[353, 138], [255, 246], [371, 344], [463, 227]])
         self.Centers = np.array([[241, 163]])
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
-
+    def _InitializeModule(self, **kwargs):
         self.DefaultRadius = int(self._StringDefaultNPoints/2 * (self._MaxDistanceHandled + self._MinDistancePerPoint)/2)
         self.BuiltCenters = [False for nCenter in range(self.Centers.shape[0])]
         self.BuildingStrings = TypedList(_String)
@@ -47,7 +44,7 @@ class Tracker(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         # First if no string is initialized and the event is not located in one of the predefined centers, we leave the module
         if not self.InitializedStrings and (abs(event.location - self.Centers).max(axis = 1) > self.DefaultRadius).all():
             return event

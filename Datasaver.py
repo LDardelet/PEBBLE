@@ -39,9 +39,7 @@ class Saver(Module):
         self.__MonitorableTypes__ = ['Computation', 'Filter']
 
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
-
+    def _InitializeModule(self, **kwargs):
         self._UnsavedParameters = False
         atexit.register(self._OnClosing)
 
@@ -69,7 +67,7 @@ class Saver(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         for ToolName in self._DataDict.keys():
             if not self._DataDict[ToolName][_RUNNING_STARTED_STR]:
                 if self._DataDict[ToolName][_TOOLREF_STR].__dict__[_STARTED_VARIABLE]:

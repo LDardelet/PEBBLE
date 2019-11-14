@@ -13,10 +13,9 @@ class PolarityKiller(Module):
         self.__ReferencesAsked__ = []
         self.__Type__ = 'Filter'
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         event.polarity = 0
         return event

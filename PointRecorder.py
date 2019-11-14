@@ -20,8 +20,7 @@ class Clicker(Module):
         self._BinDt = 0.05
         self._FirstPictureAt = 0.01
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         self._Mem = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
 
@@ -35,13 +34,16 @@ class Clicker(Module):
         
         self.UnsavedData = False
         self.WasActive = []
+        self._RewindLimit = None
 
         atexit.register(self._OnClosing)
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if event.timestamp > self.CurrentT + self._BinDt:
+            if self.RecordedPoints:
+                self._RewindLimit = self.RecordedPoints[-1][1]
             self.CurrentT = event.timestamp
             if self.Image is None:
                 self.Image = self.Ax.imshow(np.transpose(self._Mem.STContext.max(axis = 2) > event.timestamp - self._TW), origin = 'lower')
@@ -146,6 +148,19 @@ class Clicker(Module):
                 self.NewPoints[self.NewID][3] = 0
                 self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
                 self.Ps[self.NewID].set_data(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3])
+            elif event.key == 'backspace':
+                tAimed = self._Mem.LastEvent.timestamp - self._BinDt/10
+                if (not self._RewindLimit is None and tAimed < self._RewindLimit):
+                    print "Unable to rewind more"
+                    return None
+                self.Ax.set_title("Rewinding")
+                ForbiddingModules = self.__Framework__.Rewind(tAimed)
+                if ForbiddingModules:
+                    self.Ax.set_title("Rewind failed")
+                    print "Unable to rewind due to module " + " ,".join(ForbiddingModules)
+                else:
+                    self.WasActive = []
+                    self.Recording = False
 
     def SaveRecordedData(self):
         DataDict = {}
@@ -174,6 +189,9 @@ class Clicker(Module):
         else:
             print "No valid answer. Stop typing random stuff please."
             self.SaveRecordedData()
+
+    def _Rewind(self, tNew):
+        self.CurrentT = tNew - self._BinDt
 
     def _OnClosing(self):
         if self.UnsavedData and self.RecordedPoints:

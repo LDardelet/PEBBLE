@@ -1,4 +1,4 @@
-from event import Event
+from Framework import Event
 
 import numpy as np
 import random
@@ -28,7 +28,7 @@ def IsDisplayUp(questionPort = 54243, responsePort = 54244, address = "localhost
         else:
             return False
     except:
-        print "No answer, display is down"
+        print("No answer, display is down")
         return False
 
 def KillDisplay(mainPort = 54242, questionPort = 54243, address = "localhost"):
@@ -63,12 +63,12 @@ def DestroySocket(Socket, questionPort = 54243, responsePort = 54244, address = 
         data_raw, addr = ResponseUDP.recvfrom(1064)
         data = cPickle.loads(data_raw)
         if data['id'] == id_random and data['answer'] == 'socketdestroyed':
-            print "Destroyed socket {0}".format(Socket)
+            print("Destroyed socket {0}".format(Socket))
         else:
-            print "Could not destroy socket {0}".format(Socket)
+            print("Could not destroy socket {0}".format(Socket))
             return None
     except:
-        print "Display seems down (DestroySocket)"
+        print("Display seems down (DestroySocket)")
     ResponseUDP.close()
 
 def GetDisplaySocket(Shape, Socket = None, questionPort = 54243, responsePort = 54244, address = "localhost"):
@@ -94,17 +94,17 @@ def GetDisplaySocket(Shape, Socket = None, questionPort = 54243, responsePort = 
         data = cPickle.loads(data_raw)
         if data['id'] == id_random:
             if data['answer'] == 'socketexists':
-                print "Socket refused"
+                print("Socket refused")
                 return None
             else: 
                 Socket = data['answer']
-                print "Got socket {0}".format(Socket)
+                print("Got socket {0}".format(Socket))
                 return Socket
         else:
-            print "Socket refused"
+            print("Socket refused")
             return None
     except:
-        print "Display seems down (GetDisplaySocket)"
+        print("Display seems down (GetDisplaySocket)")
     ResponseUDP.close()
 
 def CleanMapForStream(Socket, questionPort = 54243, responsePort = 54244, address = "localhost"):
@@ -124,11 +124,11 @@ def CleanMapForStream(Socket, questionPort = 54243, responsePort = 54244, addres
         data_raw, addr = ResponseUDP.recvfrom(1064)
         data = cPickle.loads(data_raw)
         if data['id'] == id_random and data['answer'] == 'socketcleansed':
-            print "Cleansed"
+            print("Cleansed")
         else:
-            print "Could not clean map"
+            print("Could not clean map")
     except:
-        print "Display seems down (CleanMapForStream)"
+        print("Display seems down (CleanMapForStream)")
     ResponseUDP.close()
 
 def SendStreamData(Infos1, Infos2, Socket, questionPort = 54243, responsePort = 54244, address = "localhost"):
@@ -148,11 +148,11 @@ def SendStreamData(Infos1, Infos2, Socket, questionPort = 54243, responsePort = 
         data_raw, addr = ResponseUDP.recvfrom(1064)
         data = cPickle.loads(data_raw)
         if data['id'] == id_random and data['answer'] == 'datareceived':
-            print "Data transmitted"
+            print("Data transmitted")
         else:
-            print "Could not transmit data"
+            print("Could not transmit data")
     except:
-        print "Display seems down (SendStreamData)"
+        print("Display seems down (SendStreamData)")
     ResponseUDP.close()
 
 
@@ -177,7 +177,7 @@ def CreateMovingCircleStream(Speed, angle, gitter = 0., screen_size = [200, 200]
 
     u = np.array([-np.sin(angle), np.cos(angle)])
     v = np.array([np.cos(angle), np.sin(angle)])
-    print "Creating moving circle with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle))
+    print("Creating moving circle with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle)))
     P = center_position - v*(center_position.min() - circle_radius - 5)
 
     for x in range(screen_size[0]):
@@ -218,7 +218,7 @@ def CreateDuoCirclesStream(Speed1, angle1, Speed2, angle2, gitter = 0., screen_s
     u2 = np.array([-np.sin(angle2), np.cos(angle2)])
     v2 = np.array([np.cos(angle2), np.sin(angle2)])
     P2 = center_position - v2*(center_position.min() - circle_radius[1] - 5)
-    print "Creating circles duo, moving at vx_1 = {0} and vy_1 = {1}, and vx_2 = {2} and vy_2 = {3}.".format(Speed1*np.cos(angle1), Speed1*np.sin(angle1), Speed2*np.cos(angle2), Speed2*np.sin(angle2))
+    print("Creating circles duo, moving at vx_1 = {0} and vy_1 = {1}, and vx_2 = {2} and vy_2 = {3}.".format(Speed1*np.cos(angle1), Speed1*np.sin(angle1), Speed2*np.cos(angle2), Speed2*np.sin(angle2)))
 
     for x in range(screen_size[0]):
         for y in range(screen_size[1]):
@@ -281,7 +281,7 @@ def CreateMovingBarStream(Speed, angle, gitter = 0., screen_size = [200, 200], b
 
     u = np.array([-np.sin(angle), np.cos(angle)])
     v = np.array([np.cos(angle), np.sin(angle)])
-    print "Creating moving bar with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle))
+    print("Creating moving bar with speed vx = {0} and vy = {1}".format(Speed*np.cos(angle), Speed*np.sin(angle)))
     
     P = center_position - v*(center_position.min() - bar_size[0] - 5)
     P = center_position - v*np.linalg.norm(center_position)/1.5
@@ -329,17 +329,17 @@ def load_data_dat(filename, y_invert = True, header_size = 42):
         all_p = (raw_data[2::5] & 128) >> 7
         all_ts = ((raw_data[2::5] & 127) << 16) | (raw_data[3::5] << 8) | (raw_data[4::5])
 
-    print "Read file. Seems to contain {0} events until ts = {1}s".format(all_x.shape[0], all_ts[-2]*10**-6)
-    print ""
-    print "Geometry :"
+    print("Read file. Seems to contain {0} events until ts = {1}s".format(all_x.shape[0], all_ts[-2]*10**-6))
+    print("")
+    print("Geometry :")
     xMin = all_x.min()
     xMax = all_x.max()
     yMin = all_y.min()
     yMax = all_y.max()
     pMin = all_p.min()
     pMax = all_p.max()
-    print "x goes from {0} to {1}".format(xMin, xMax)
-    print "y goes from {0} to {1}".format(yMin, yMax)
+    print("x goes from {0} to {1}".format(xMin, xMax))
+    print("y goes from {0} to {1}".format(yMin, yMax))
     Events = []
     for nEvent in range(all_x.shape[0]):
     #for x,y,p,ts in zip(all_x, all_y, all_p, all_ts):
@@ -359,12 +359,12 @@ def load_data_dat(filename, y_invert = True, header_size = 42):
         if nEvent%100000 == 0:
             sys.stdout.write("> "+'t = '+str(Events[-1].timestamp)+", n = "+str(nEvent)+"\r")
             sys.stdout.flush()
-    print ""
+    print("")
     return Events, (xMax - xMin + 1, yMax - yMin + 1, pMax - pMin + 1)
 
 def readATIS_td(file_name, orig_at_zero = True, drop_negative_dt = True, verbose = True, events_restriction = [0, np.inf]):
     if '.v2' in file_name:
-        print "V2 detected"
+        print("V2 detected")
         polmask = 0x1000000000000000
         xmask = 0x00003FFF00000000
         ymask = 0x0FFFC00000000000
@@ -440,7 +440,7 @@ def readATIS_td(file_name, orig_at_zero = True, drop_negative_dt = True, verbose
         if i > events_restriction[1]:
             break
     file.close()
-    print "> After loading events, actually found {0} events.".format(ActualEvents)
+    print("> After loading events, actually found {0} events.".format(ActualEvents))
 
     timestamps = timestamps[:ActualEvents]
     coords = coords[:ActualEvents, :]
@@ -514,7 +514,7 @@ def load_data_csv(filename, geometry_restriction, listeningPolas = [0,1], eventT
                                 if random.random() < 0.001:
                                     sys.stdout.write(str(Events[-1].timestamp) + " \r")
                                     sys.stdout.flush()
-    print ""
+    print("")
     return Events
     
 # END OF LOADING TOOLS #####################################################################
@@ -526,7 +526,7 @@ def StatFunction(function, *args):
         try:
             function(*args)
         except KeyboardInterrupt:
-            print "Function ended, writing stats in file"
+            print("Function ended, writing stats in file")
     
     orig_stdout = sys.stdout
     f = file('stats.txt', 'w')
@@ -612,16 +612,16 @@ def CompareStreamsOld(S1, S2, geometry, deltaTMax):
 				else:
 					Sum1 += L1*deltaTMax
 					Sum2 += L2*deltaTMax
-	print ""
-	print "Sum1 : {0}".format(Sum1)
-	print "Sum2 : {0}".format(Sum2)
+	print("")
+	print("Sum1 : {0}".format(Sum1))
+	print("Sum2 : {0}".format(Sum2))
 	return (Sum1+Sum2)/2
 
 def CompareStreams(S1, S2, geometry, DeltaPixel, DeltaT):
     Map1 = [[[[] for p in range(geometry[2])] for y in range(geometry[1] + 2*DeltaPixel)] for x in range(geometry[0] + 2*DeltaPixel)]
     Map2 = [[[[] for p in range(geometry[2])] for y in range(geometry[1] + 2*DeltaPixel)] for x in range(geometry[0] + 2*DeltaPixel)]
     # Generate all the volumes for each pixels by merging close events, for each stream.
-    print "Empty maps generated"
+    print("Empty maps generated")
     I1 = 0
     I2 = 0
     n = 0
@@ -642,7 +642,7 @@ def CompareStreams(S1, S2, geometry, DeltaPixel, DeltaT):
                     else:
                         I1 += e1.timestamp + DeltaT - PixelStream[-1][1]
                         PixelStream[-1][1] = e1.timestamp + DeltaT
-    print "Volumes generated for Stream 1"
+    print("Volumes generated for Stream 1")
     n = 0
     l = len(S2)
     for e2 in S2:
@@ -661,7 +661,7 @@ def CompareStreams(S1, S2, geometry, DeltaPixel, DeltaT):
                     else:
                         I2 += e2.timestamp + DeltaT - PixelStream[-1][1]
                         PixelStream[-1][1] = e2.timestamp + DeltaT
-    print "Volumes generated for Stream 2"
+    print("Volumes generated for Stream 2")
     
     # Now we actually compare the streams through the previously define volumes per pixel
     IInter = 0
@@ -682,7 +682,7 @@ def CompareStreams(S1, S2, geometry, DeltaPixel, DeltaT):
                         latest = earray[:,1].argmin()
                         if e[1-latest][0] < e[latest][1]:
                             IInter += max(0, earray[:,1].min() - earray[:,0].max())
-    print "Volumes intersected"
+    print("Volumes intersected")
     return I1, I2, IInter
 
 def ComputeSegmentsDistances(P1, P2):
@@ -775,7 +775,7 @@ def RecoverCenters(RotatedVectors):
 
 def RotateTS(OversizedTS, aimedRadius, angle):
     if OversizedTS.shape[0] < int((2*aimedRadius+1)*1.414):
-        print "Insufficient Oversized TS. Initial Radius is {0}, asked radius is {1}".format(OversizedTS.shape[0], aimedRadius)
+        print("Insufficient Oversized TS. Initial Radius is {0}, asked radius is {1}".format(OversizedTS.shape[0], aimedRadius))
     NewMatrix = np.zeros((2*aimedRadius+1, 2*aimedRadius+1, OversizedTS.shape[2]))
     R = RotationMatrix(-angle) # -angle since we wonder what is the origin of the new matrix pixels, rather than asking where are the old pixels in the new matrix
     OldCenter = np.array([[(OversizedTS.shape[0]-1)/2, (OversizedTS.shape[0]-1)/2]])

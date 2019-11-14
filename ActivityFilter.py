@@ -17,8 +17,7 @@ class ActivityFilter(Module):
         self._Tau = 0.01 # in seconds
         self._Radius = 2
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
@@ -37,7 +36,7 @@ class ActivityFilter(Module):
         self._Radius = Radius
         print("ActivityFilter: parameters updated.")
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if (event.location[0] > self._Radius) and (event.location[0] < (self._Xmax - self._Radius)) and (event.location[1] > self._Radius) and (event.location[1] < (self._Ymax - self._Radius)):
             # extract neigborhood
             patch = np.copy(self._Memory.STContext[event.location[0] - self._Radius:event.location[0] + self._Radius + 1, event.location[1] - self._Radius:event.location[1] + self._Radius + 1, event.polarity])

@@ -1,10 +1,9 @@
 import numpy as np
 import tools
 import random
-from event import Event
 import matplotlib.pyplot as plt
 
-from Framework import Module
+from Framework import Module, Event
 
 class FlowComputer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -19,10 +18,7 @@ class FlowComputer(Module):
         self._EventsAgeLimit = 0.3
         self._PolaritySeparation = True
 
-
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
-
+    def _InitializeModule(self, **kwargs):
         self.CurrentShape = list(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
         self.NEventsMap = np.zeros(self.CurrentShape)
         self.DetMap = np.zeros(self.CurrentShape)
@@ -33,11 +29,10 @@ class FlowComputer(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         self.ComputeFullFlow(event)
 
         return event
-
 
     def ComputeFullFlow(self, event):
         if self._PolaritySeparation:

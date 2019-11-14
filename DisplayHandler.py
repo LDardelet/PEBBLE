@@ -1,8 +1,8 @@
-import tools
+#import tools
 import atexit
 import socket
 import random
-import cPickle
+import _pickle as cPickle
 
 from Framework import Module
 
@@ -22,12 +22,13 @@ class DisplayHandler(Module):
         self.__Started__ = False
         self._CompulsoryModule = False
 
+        self._PostBoxLimit = 10
+        self._CameraIndexHandled = 0
+
         self.__PostTransporters__ = {'Event':self._SendEvent, 'Segment':self._SendSegment}
         self.Socket = None
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
-
+    def _InitializeModule(self, **kwargs):
         if not self.Socket is None:
             self.EndTransmission()
         self.Socket = None
@@ -36,11 +37,11 @@ class DisplayHandler(Module):
         DisplayUp = self._IsDisplayUp()
 
         if not DisplayUp:
-            print "Aborting initialization process"
+            print("Aborting initialization process")
             self.__Started__ = False
             return not self._CompulsoryModule
 
-        print "Initializing DisplayHandler sockets."
+        print("Initializing DisplayHandler sockets.")
         self._DestroySocket()
         self._GetDisplaySocket()
 
@@ -58,21 +59,30 @@ class DisplayHandler(Module):
         self.EndTransmission()
         self._Initialize()
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if self.__Started__:
-            self.PostBox += [event]
-            self.Post()
+            if event.cameraIndex == self._CameraIndexHandled:
+                self.PostBox += [event.location.tolist() + [event.timestamp, event.polarity]]
+
+            if len(self.PostBox) > self._PostBoxLimit:
+                self.Post()
 
         return event
 
     def Post(self):
-        for item in self.PostBox:
-            self.__PostTransporters__[item.__class__.__name__](item)
+        #for item in self.PostBox:
+        #    self.__PostTransporters__[item.__class__.__name__](item)
+        self._SendPackage()
         self.PostBox = []
 
     def EndTransmission(self):
         if not self.Socket is None:
             self._DestroySocket()
+
+    def _SendPackage(self):
+        Package = [self.Socket] + self.PostBox
+        data = cPickle.dumps(Package)
+        self.MainUDP.sendto(data, (self.Address, self.EventPort))
 
     def _SendEvent(self, ev):
         ev.socket = self.Socket
@@ -93,7 +103,7 @@ class DisplayHandler(Module):
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
-        QuestionDict = {'id': id_random, 'socket': self.Socket, 'infosline1': ProjectFile, 'infosline2': StreamName, 'command':'socketdata'}
+        QuestionDict = {'id': id_random, 'socket': self.Socket, 'infosline1': ProjectFile+' -> ' + self.__Name__, 'infosline2': StreamName, 'command':'socketdata'}
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
@@ -104,11 +114,35 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'datareceived':
-                print "Data transmitted"
+                print("Data transmitted")
             else:
-                print "Could not transmit data"
+                print("Could not transmit data")
         except:
-            print "Display seems down (SendStreamData)"
+            print("Display seems down (SendStreamData)")
+        ResponseUDP.close()
+
+    def _Rewind(self, tNew):
+        ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listen_addr = ("",self.ResponsePort)
+        ResponseUDP.bind(listen_addr)
+
+        id_random = random.randint(100000,200000)
+        QuestionDict = {'id': id_random, 'socket': self.Socket, 'command':'rewind', 'tNew': tNew}
+
+        QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.close()
+        ResponseUDP.settimeout(1.)
+
+        try:
+            data_raw, addr = ResponseUDP.recvfrom(1064)
+            data = cPickle.loads(data_raw)
+            if data['id'] == id_random and data['answer'] == 'rewinded':
+                print("Rewinded")
+            else:
+                print("Could not clean map")
+        except:
+            print("Display seems down (Rewind)")
         ResponseUDP.close()
 
     def _CleanMapForStream(self):
@@ -128,11 +162,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'socketcleansed':
-                print "Cleansed"
+                print("Cleansed")
             else:
-                print "Could not clean map"
+                print("Could not clean map")
         except:
-            print "Display seems down (CleanMapForStream)"
+            print("Display seems down (CleanMapForStream)")
         ResponseUDP.close()
 
     def _IsDisplayUp(self):
@@ -158,7 +192,7 @@ class DisplayHandler(Module):
                 ResponseUDP.close()
                 return False
         except:
-            print "No answer, display is down"
+            print("No answer, display is down")
             ResponseUDP.close()
             return False
 
@@ -181,11 +215,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'socketdestroyed':
-                print "Destroyed socket {0}".format(self.Socket)
+                print("Destroyed socket {0}".format(self.Socket))
             else:
-                print "Could not destroy socket {0}".format(self.Socket)
+                print("Could not destroy socket {0}".format(self.Socket))
         except:
-            print "Display seems down (DestroySocket)"
+            print("Display seems down (DestroySocket)")
         ResponseUDP.close()
 
     def _GetDisplaySocket(self):
@@ -213,12 +247,12 @@ class DisplayHandler(Module):
             data = cPickle.loads(data_raw)
             if data['id'] == id_random:
                 if data['answer'] == 'socketexists':
-                    print "Socket refused"
+                    print("Socket refused")
                 else:
                     self.Socket = data['answer']
-                    print "Got socket {0}".format(self.Socket)
+                    print("Got socket {0}".format(self.Socket))
             else:
-                print "Socket refused"
+                print("Socket refused")
         except:
-            print "Display seems down (GetDisplaySocket)"
+            print("Display seems down (GetDisplaySocket)")
         ResponseUDP.close()

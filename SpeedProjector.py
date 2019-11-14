@@ -7,7 +7,7 @@ from HoughCornerDetector import GetCorners
 from scipy import ndimage
 import Plotting_methods
 
-from Framework import Module
+from Framework import Module, Event
 
 class LocalProjector(Module):
 
@@ -33,7 +33,7 @@ class LocalProjector(Module):
         self._Relative_precision_aimed = 0.01
 
         self._DensityDefinition = 3 # In dpp
-        self._MaskDensityRatio = 0.3
+        #self._MaskDensityRatio = 0.3
 
         self._AskLocationAtTS = 0.020
         self._TW = 0.02
@@ -41,18 +41,21 @@ class LocalProjector(Module):
 
         self._DecayRatio = 5.
 
+        self._SpeedModAccelerator = 5 # 0 means insane inertia. 1 means 0 inertia.
+        self._DMSumPower = 0.8
+
         self._KeepBestSpeeds = 3
 
         self._ModSpeeds = True
-        self._SpeedModRatio = 0.02
         self._RelativeCorrectionThreshold = 0.0 # Relative distance (to ObservationRadius) over which correction speed is made. 0 implies that mod speed is applied in any situation
         self._UpdatePT = True
+
+        self._BlindMonitoring = [] # Careful with this monitoring. Must put in advance the speed_id, don't put too much ids considering amount of data saved.
 
         self._DynamicPositionReference = False
         self._AutoSpeedRestart = True
     
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         self.MapSize = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext.shape[:2]
 
@@ -116,9 +119,11 @@ class LocalProjector(Module):
         self.ProjectionTimesHistory = []
         self.CurrentBaseDisplacement = []
 
+        self.BlindMonitoringData = {ID: {"events":[], "locs":[], "speeds":[], "dm_sums":[], "cmps":[]} for ID in self._BlindMonitoring}
+
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if not self.__Started__:
             if event >= self._AskLocationAtTS:
                 if self._SelectionMode == 'ask':
@@ -276,6 +281,13 @@ class LocalProjector(Module):
     
             self._ModifySpeed(speed_id, event.timestamp)
         
+        if speed_id in self._BlindMonitoring:
+            self.BlindMonitoringData[speed_id]["events"] += [Event(original = event)]
+            self.BlindMonitoringData[speed_id]["locs"] += [(self.Displacements[speed_id][0] + self.OWAPT[speed_id][0] + self._DetectorDefaultWindowsLength/2, self.Displacements[speed_id][1] + self.OWAPT[speed_id][1] + self._DetectorDefaultWindowsLength/2)]
+            self.BlindMonitoringData[speed_id]["speeds"] += [np.array(self.Speeds[speed_id])]
+            self.BlindMonitoringData[speed_id]["cmps"] += [np.array(self.CurrentMeanPositions[speed_id])]
+            self.BlindMonitoringData[speed_id]["dm_sums"] += [self.DecayingMaps[speed_id].sum()]
+
         if self._UpdatePT and CanUpdatePT and event.timestamp - self.SpeedProjectionTime[speed_id] > 6*self.SpeedTimeConstants[speed_id]: #TODO This 6 should be changed to something ... meaningful
             self.CurrentBaseDisplacement[speed_id] = np.array(self.Displacements[speed_id])
             #self.MeanPositionTimeReferences[speed_id] = event.timestamp - self.SpeedTimeConstants[speed_id]
@@ -297,7 +309,7 @@ class LocalProjector(Module):
 
     def _ModifySpeed(self, speed_id, t):
         #NewSpeed = self.Speeds[speed_id] + SpeedError * self.SpeedModRatio
-        NewSpeed = self.Speeds[speed_id] + self.SpeedErrors[speed_id] / (0.3 * (self.DecayingMaps[speed_id].sum() / self._DensityDefinition ** 2))
+        NewSpeed = self.Speeds[speed_id] + self.SpeedErrors[speed_id] * self._SpeedModAccelerator / ((self.DecayingMaps[speed_id].sum()**self._DMSumPower / self._DensityDefinition ** 2))
         self.Speeds[speed_id] = NewSpeed
         self.SpeedNorms[speed_id] = np.linalg.norm(NewSpeed)
         self.SpeedTimeConstants[speed_id] = min(1./self._Precision_aimed, self._DecayRatio/self.SpeedNorms[speed_id])

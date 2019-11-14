@@ -23,8 +23,7 @@ class HoughCD(Module):
         self._ExpositionDt = 0.004
         self._FirstPictureAt = 0.01
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         self.RecordedPoints = []
         self.CurrentT = self._FirstPictureAt - self._BinDt
@@ -40,7 +39,7 @@ class HoughCD(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if event.timestamp > self.CurrentT + self._BinDt:
             self.CurrentT = event.timestamp
 

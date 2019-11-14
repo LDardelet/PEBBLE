@@ -16,8 +16,7 @@ class ROI(Module):
         self._Xlim = [200,400]
         self._Ylim = [150,250]
 
-    def _Initialize(self, **kwargs):
-        Module._Initialize(self, **kwargs)
+    def _InitializeModule(self, **kwargs):
 
         # self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
@@ -25,7 +24,7 @@ class ROI(Module):
 
         return True
 
-    def _OnEvent(self, event):
+    def _OnEventModule(self, event):
         if (event.location[0] > self._Xlim[0]) and (event.location[0] < self._Xlim[1]) and (event.location[1] > self._Ylim[0]) and (event.location[1] < self._Ylim[1]):
             #print(event.location)
             self.AllowedEvents += 1

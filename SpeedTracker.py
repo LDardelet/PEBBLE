@@ -147,6 +147,7 @@ class SpeedTracker(Module):
         self._DetectorMinActivityForStart = self._DetectorDefaultWindowsLength * self._DetectorMinRelativeStartActivity
 
         self.Plotter = Plotter(self)
+        self.LocksSubscribers = [self.FeatureManager.AddLock]
 
         return True
 
@@ -256,6 +257,13 @@ class SpeedTracker(Module):
             
         return event
 
+    def OnTrackerLock(self, Tracker):
+        for SubscriberMethod in self.LocksSubscribers:
+            SubscriberMethod(Tracker)
+
+    def AddLocksSubscriber(self, ListenerMethod):
+        self.LocksSubscribers += [ListenerMethod]
+
     def _RunEventManager(self, event, TrackerID):
         self.Trackers[TrackerID].RunEvent(event)
 
@@ -311,33 +319,122 @@ class TrackerMatcher(Module):
         self.__ReferencesAsked__ = ['CameraTracker', 'OppositeMemory']
         self.__Type__ = 'Computation'
 
-        self._MaxEpipolarPixelsDistance = 3.
-        self._CameraIndexHandled = 0
+        self._MaxEpipolarPixelsBonusDistance = 0.
+        self._MaxTravelDistanceComparison = 2.
+        self._MaxTrackerEventsToRadiusRatio = 2.
 
     def _InitializeModule(self, **kwargs):
         self._CameraTracker = self.__Framework__.Tools[self.__CreationReferences__['CameraTracker']]
+        self._CameraTracker.AddLocksSubscriber(self.OnLockListener)
         self._OppositeMemory = self.__Framework__.Tools[self.__CreationReferences__['OppositeMemory']]
-        self._CameraIndexHandled = self._OppositeMemory._CameraIndexHandled
+        self.__CameraIndexRestriction__ = self._OppositeMemory.__CameraIndexRestriction__
 
         self.TrackersBeingSearched = []
+        self.TrackersEventsIndexes = {}
+        self.TrackersMatchMaps = {}
+        self.TrackersStartPositions = {}
+        self.TrackersEventsArray = {}
         
+        self.MatchedTrackers = {}
+        self.MissedTrackers = []
+
+        self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self._MaxEpipolarPixelsBonusDistance # Sqrt for diagonal of the square patch
         return True
 
     def _OnEventModule(self, event):
-        if (event.location[0] > self._Radius) and (event.location[0] < (self._Xmax - self._Radius)) and (event.location[1] > self._Radius) and (event.location[1] < (self._Ymax - self._Radius)):
-            # extract neigborhood
-            patch = np.copy(self._Memory.STContext[event.location[0] - self._Radius:event.location[0] + self._Radius + 1, event.location[1] - self._Radius:event.location[1] + self._Radius + 1, event.polarity])
-            patch -= event.timestamp
-            count = np.sum(np.abs(patch) < self._Tau)
-        else:
-            count = 0
+        self.RunComparison(event)
 
-        if count > self._MinNeighbors: # allow event if enough neighboors.
-            self.AllowedEvents += 1
-            return event
+        return event
+
+    def RunComparison(self, event):
+        if 2 * min(event.location.min(), (self._OppositeMemory.STContext.shape[:2] - event.location).min()) < self._CameraTracker._DetectorDefaultWindowsLength: # We avoid sides or it will get messy
+            return
+        Point = np.array([event.location[0], event.location[1], 1.])
+
+        for Tracker in list(self.TrackersBeingSearched):
+            if np.linalg.norm(Tracker.Position - self.TrackersStartPositions[Tracker.ID]) > self._MaxTravelDistanceComparison:
+                self.UnsubscribeTracker(Tracker)
+                continue
+
+            EpiLine = self.ComputeEpipolarLine(Tracker.Position)
+            Distance = abs((Point * EpiLine).sum())
+            if Distance > self.MaxEpipolarPixelsDistance:
+                continue
+
+            Offsets = (event.location - self.TrackersEventsArray[Tracker.ID]).astype(int) # Potentially need offset of 0.5
+            xs = Offsets[:,0]
+            ys = Offsets[:,1]
+            self.TrackersMatchMaps[Tracker.ID][xs, ys, self.TrackersEventsIndexes[Tracker.ID]] = True
+            
+    def UnsubscribeTracker(self, Tracker):
+        self.MatchedTrackers[Tracker.ID] = {'map': self.TrackersMatchMaps[Tracker.ID].sum(axis = 2), 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate}
+        print("Matched tracker {0} up to {1:.1f}%".format(Tracker.ID, 100 * self.MatchedTrackers[Tracker.ID]['map'].max() / self.TrackersEventsIndexes[Tracker.ID][-1]))
+        del self.TrackersEventsIndexes[Tracker.ID]
+        del self.TrackersMatchMaps[Tracker.ID]
+        del self.TrackersStartPositions[Tracker.ID]
+        del self.TrackersEventsArray[Tracker.ID]
+        self.TrackersBeingSearched.remove(Tracker)
+
+    def OnLockListener(self, Tracker):
+        if not Tracker.ID in self.TrackersBeingSearched: # In case a release and re-lock happend before any match
+            self.TrackersBeingSearched += [Tracker]
+        NEventsCompared = min(len(Tracker.Lock.Events), int(Tracker.HalfSize * self._MaxTrackerEventsToRadiusRatio))
+        self.TrackersEventsIndexes[Tracker.ID] = np.arange(0, NEventsCompared, 1)
+        self.TrackersMatchMaps[Tracker.ID] = np.zeros(self._OppositeMemory.STContext.shape[:2] + (NEventsCompared, ), dtype = bool)
+        self.TrackersStartPositions[Tracker.ID] = np.array(Tracker.Position)
+        self.TrackersEventsArray[Tracker.ID] = np.array(Tracker.Lock.Events[:NEventsCompared])[:,1:]
+
+    def RunComparisonTS(self, event):
+        UsableRadius = int(min(self._CameraTracker._DetectorDefaultWindowsLength / 2, min(event.location.min(), (np.array(self._OppositeMemory.STContext.shape[:2]) - event.location).min() - 1)))
+        if UsableRadius < self._MinimumComparisonRadius:
+            return
+        Point = np.array([event.location[0], event.location[1], 1.])
+
+        EventPatch = None
+        for Tracker in list(self.TrackersBeingSearched):
+            if np.linalg.norm(Tracker.Position - self.TrackersStartPositions[Tracker.ID]) > self._MaxTravelDistanceComparison:
+                self.UnsubscribeTracker(Tracker)
+                continue
+
+            EpiLine = self.ComputeEpipolarLine(Tracker.Position)
+            Distance = abs((Point * EpiLine).sum())
+            if Distance > self._MaxEpipolarPixelsDistance:
+                continue
+
+            if EventPatch is None:
+                EventPatch = self._OppositeMemory.GetPatch(event.location[0], event.location[1], UsableRadius, UsableRadius).max(axis = 2) - event.timestamp
+            Tau = Tracker.TimeConstant
+            TrackerPatch = self._CameraTracker._LinkedMemory.GetPatch(int(Tracker.Position[0]), int(Tracker.Position[1]), UsableRadius, UsableRadius).max(axis = 2) - Tracker.LastUpdate
+            TrackerST = np.e**(TrackerPatch / Tau)
+            EventST = np.e**(EventPatch / Tau)
+
+            MinorEpipolarAxis = (abs(EpiLine[:-1])).argmax()
+            TrackerActivity = TrackerST.sum(axis = MinorEpipolarAxis)
+            EventActivity = EventST.sum(axis = MinorEpipolarAxis)
+
+            CosineSimilarity = (EventActivity * TrackerActivity).sum() / (np.linalg.norm(TrackerActivity) * np.linalg.norm(EventActivity))
+
+            if CosineSimilarity > self.TrackersBestMatches[Tracker.ID][0]:
+                self.TrackersBestMatches[Tracker.ID] = (CosineSimilarity, event.location, event.timestamp)
+                if CosineSimilarity >= self._AutoMatchValue:
+                    self.UnsubscribeTracker(Tracker)
+
+        return 
+
+    def UnsubscribeTrackerTS(self, Tracker): #TODO
+        if self.TrackersBestMatches[Tracker.ID][0] >= self._MinimalMatchValue:
+            self.MatchedTrackers[Tracker.ID] = self.TrackersBestMatches[Tracker.ID]
+            print("Found match for tracker {0}, currently at {1} with event at {2} with {3:.1f} match".format(Tracker.ID, Tracker.Position, self.MatchedTrackers[Tracker.ID][1], self.TrackersBestMatches[Tracker.ID][0]*100))
         else:
-            self.FilteredEvents += 1
-            return None
+            self.MissedTrackers += [Tracker.ID]
+            print("Canceling matching for tracker {0}, best match was {1}".format(Tracker.ID, self.TrackersBestMatches[Tracker.ID][0]))
+        del self.TrackersBestMatches[Tracker.ID]
+        del self.TrackersStartPositions[Tracker.ID]
+        self.TrackersBeingSearched.remove(Tracker)
+
+    def ComputeEpipolarLine(self, Location):
+        # Normalize two first digits
+        return np.array([0., 1., - Location[1]]) # Default parallel calibrated cameras
 
 class TrackerClass:
     def __init__(self, TrackerManager, ID, InitialPosition):
@@ -614,8 +711,8 @@ class TrackerClass:
             if not self.Lock and CanBeLocked and self.TM._TrackerAllowShapeLock:
                 self.Lock = LockClass(t, self.Activity, list(self.ProjectedEvents))
                 self.LocksSaves += [LockClass(t, self.Activity, list(self.ProjectedEvents))]
-
-                self.TM.FeatureManager.AddLock(self)
+                
+                self.TM.OnTrackerLock(self)
 
                 print("Tracker {0} has locked (Delta = {1:.3f}, Speed = {2:.3f})".format(self.ID, self.ApertureScalarEstimationByDelta/self.ScalarCorrectionActivity, np.linalg.norm(self.ApertureVectorEstimationBySpeed)/self.ScalarCorrectionActivity))
                 return None # We assume we have checked everything here
@@ -626,6 +723,7 @@ class TrackerClass:
                     return None
 
     def Unlock(self, Reason):
+        self.LocksSaves[-1].ReleaseTime = self.TM._LinkedMemory.LastEvent.timestamp
         self.Lock = None
         self.TM.FeatureManager.RemoveLock(self)
         print("Tracker {0} was released due to {1} at t = {2:.3f} (snap {3})".format(self.ID, Reason, self.TM._LinkedMemory.LastEvent.timestamp, len(self.TM.TrackersPositionsHistory)-1))
@@ -786,6 +884,7 @@ class LockClass:
         self.Time = Time
         self.Activity = Activity
         self.Events = Events
+        self.ReleaseTime = None
 
 from scipy import misc 
 
@@ -1019,10 +1118,18 @@ class Plotter:
         self.StatusesColors = {'Dead' : 'k', 'Converged': 'g', 'Idle': 'r', 'Stabilizing': 'b'}
         self.PropertiesLineStyles = {'None': '-.', 'Aperture issue': '--', 'Locked' : '-'}
 
-    def CreateTrackingShot(self, TrackerIDs = None, SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None):
+    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2, ForcedColors = {}):
+        if type(ForcedColors) == str and ForcedColors == 'cycle':
+            Colors = ['#14607A', '#1D81A2', '#04BB9F', '#09A785', '#17A1CD', '#38F3BC', '#FFB560', '#FF4839', '#C71D1D', '#9E1F63', '#FFD603', '#F05929']
+            ForcedColors = {ID : Colors[ID%len(Colors)] for ID in range(len(self.TM.Trackers))}
+
         S = self.TM
         if TrackerIDs is None:
-            TrackerIDs = list(range(len(S.Trackers)))
+            TrackerIDs = [ID for ID in range(len(S.Trackers)) if ID not in IgnoreTrackerIDs]
+        else:
+            for ID in IgnoreTrackerIDs:
+                if ID in TrackerIDs:
+                    raise Exception("Asking to ignore tracker {0} while also asking for it. Aborting".format(ID))
     
         if ax_given is None:
             f, ax = plt.subplots(1,1)
@@ -1037,20 +1144,19 @@ class Plotter:
         else:
             ax.imshow(np.transpose(FinalMap), origin = 'lower', cmap = plt.get_cmap(cmap))
     
-        if add_ts:
-            ax.set_title("t = {0:.3f}".format(t))
-        for n_tracker, TrackerID in enumerate(TrackerIDs):
+        def TrackerValidityCheck(TrackerID, SnapshotNumber):
+            NullAnswer = (None, None, None)
             try:
                 StatusValue = S.TrackersStatuses[SnapshotNumber][TrackerID][0]
             except:
-                continue
+                return NullAnswer
             PropertyValue = S.TrackersStatuses[SnapshotNumber][TrackerID][1]
             if S._StatusesNames[StatusValue] not in DisplayedStatuses:
-                continue
+                return NullAnswer
             else:
                 TrackerColor = self.StatusesColors[S._StatusesNames[StatusValue]]
             if S._PropertiesNames[PropertyValue] not in DisplayedProperties:
-                continue
+                return NullAnswer
             else:
                 TrackerLineStyle = self.PropertiesLineStyles[S._PropertiesNames[PropertyValue]]
             try:
@@ -1058,25 +1164,64 @@ class Plotter:
                 Location = np.array(self.TM.TrackersPositionsHistory[SnapshotNumber][TrackerID])
                 Box = [Location[0] - HalfSize, Location[1] - HalfSize, Location[0] + HalfSize, Location[1] + HalfSize]
             except:
-                continue
+                return NullAnswer
             
             if RemoveNullSpeedTrackers:
                 if np.linalg.norm(S.TrackersSpeedsHistory[SnapshotNumber][TrackerID]) < RemoveNullSpeedTrackers:
-                    continue
-            ax.plot([Box[0], Box[0]], [Box[1], Box[3]], TrackerColor, ls = TrackerLineStyle)
-            ax.plot([Box[0], Box[2]], [Box[3], Box[3]], TrackerColor, ls = TrackerLineStyle)
-            ax.plot([Box[2], Box[2]], [Box[3], Box[1]], TrackerColor, ls = TrackerLineStyle)
-            ax.plot([Box[2], Box[0]], [Box[1], Box[1]], TrackerColor, ls = TrackerLineStyle)
+                    return NullAnswer
+            return (TrackerColor, TrackerLineStyle, Box)
 
-            if not GT is None:
-                GTPos = GT.GetTrackerPositionAt(t, TrackerID)
-                if not GTPos is None:
-                    ax.plot(GTPos[0], GTPos[1], color = TrackerColor, marker = 'v')
-                    ax.plot([GTPos[0], Box[0]], [GTPos[1], Box[1]], color = TrackerColor, lw = 0.3)
-                    ax.plot([GTPos[0], Box[2]], [GTPos[1], Box[3]], color = TrackerColor, lw = 0.3)
+        if add_ts:
+            ax.set_title("t = {0:.3f}".format(t))
+        for n_tracker, TrackerID in enumerate(TrackerIDs):
+            TrackerColor, TrackerLineStyle, Box = TrackerValidityCheck(TrackerID, SnapshotNumber)
+            if not TrackerColor is None:
+                if TrackerID in ForcedColors.keys():
+                    TrackerColor = ForcedColors[TrackerID]
+                ax.plot([Box[0], Box[0]], [Box[1], Box[3]], TrackerColor, ls = TrackerLineStyle)
+                ax.plot([Box[0], Box[2]], [Box[3], Box[3]], TrackerColor, ls = TrackerLineStyle)
+                ax.plot([Box[2], Box[2]], [Box[3], Box[1]], TrackerColor, ls = TrackerLineStyle)
+                ax.plot([Box[2], Box[0]], [Box[1], Box[1]], TrackerColor, ls = TrackerLineStyle)
 
-            if addTrackersIDsFontSize:
-                ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.4, 'Tracker {0}'.format(TrackerID), color = TrackerColor, fontsize = addTrackersIDsFontSize)
+                if not GT is None:
+                    GTPos = GT.GetTrackerPositionAt(t, TrackerID)
+                    if not GTPos is None:
+                        ax.plot(GTPos[0], GTPos[1], color = TrackerColor, marker = 'v')
+                        ax.plot([GTPos[0], Box[0]], [GTPos[1], Box[1]], color = TrackerColor, lw = 0.3)
+                        ax.plot([GTPos[0], Box[2]], [GTPos[1], Box[3]], color = TrackerColor, lw = 0.3)
+
+                if addTrackersIDsFontSize:
+                    ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.8, '{0}'.format(TrackerID), color = TrackerColor, fontsize = addTrackersIDsFontSize)
+
+            if TrailDt > 0:
+                nSnap = SnapshotNumber 
+                CurrentTrackerLineProps = (None, None)
+                TrackerLocationsPerStyle = {CurrentTrackerLineProps: [[]]}
+                for nSnap in range(0, SnapshotNumber + 1):
+                    if S.TrackersPositionsHistoryTs[SnapshotNumber] - S.TrackersPositionsHistoryTs[nSnap] > TrailDt:
+                        continue
+                    TrackerColor, TrackerLineStyle, Box = TrackerValidityCheck(TrackerID, nSnap)
+                    TrackerLineProps = TrackerColor, TrackerLineStyle
+                    if TrackerLineProps != CurrentTrackerLineProps:
+                        if TrackerLineProps not in TrackerLocationsPerStyle.keys():
+                            TrackerLocationsPerStyle[TrackerLineProps] = []
+                        TrackerLocationsPerStyle[TrackerLineProps] += [[]]
+                        if TrackerLocationsPerStyle[CurrentTrackerLineProps][-1]:
+                            TrackerLocationsPerStyle[TrackerLineProps][-1] += [TrackerLocationsPerStyle[CurrentTrackerLineProps][-1][-1]]
+                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
+                        CurrentTrackerLineProps = TrackerLineProps
+                    elif not TrackerColor is None:
+                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
+                for LineProps, Data in TrackerLocationsPerStyle.items():
+                    TrackerColor, TrackerLineStyle = LineProps
+                    if TrackerColor is None:
+                        continue
+                    if TrackerID in ForcedColors.keys():
+                        TrackerColor = ForcedColors[TrackerID]
+                    for DataSerie in Data:
+                        ax.plot(np.array(DataSerie)[:,0], np.array(DataSerie)[:,1], TrackerColor, ls = TrackerLineStyle, lw = TrailWidth)
+
+
         if not VirtualPoint is None:
             
             Center = np.array(S._LinkedMemory.STContext.shape[:2], dtype = float) / 2
@@ -1093,8 +1238,7 @@ class Plotter:
         if ax_given is None:
             return f, ax
     
-    def GenerateTrackingGif(self, TrackerIDs = None, AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None):
-
+    def GenerateTrackingGif(self, TrackerIDs = None, IgnoreTrackerIDs = [], AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None, TrailDt = 0, TrailWidth = 2, ForcedColors = {}):
         if BinDt is None:
             BinDt = self.TM._SnapDt
 
@@ -1133,7 +1277,7 @@ class Plotter:
             if self.TM.TrackersPositionsHistoryTs[snap_id] > tMax:
                 break
     
-            self.CreateTrackingShot(TrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT)
+            self.CreateTrackingShot(TrackerIDs, IgnoreTrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT, TrailDt = TrailDt, TrailWidth = TrailWidth, ForcedColors = ForcedColors)
     
             f.savefig(Folder + 't_{0:05d}.png'.format(snap_id))
             ax.cla()

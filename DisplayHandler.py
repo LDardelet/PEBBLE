@@ -23,7 +23,6 @@ class DisplayHandler(Module):
         self._CompulsoryModule = False
 
         self._PostBoxLimit = 10
-        self._CameraIndexHandled = 0
 
         self.__PostTransporters__ = {'Event':self._SendEvent, 'Segment':self._SendSegment}
         self.Socket = None
@@ -57,12 +56,11 @@ class DisplayHandler(Module):
 
     def Restart(self):
         self.EndTransmission()
-        self._Initialize()
+        self._InitializeModule()
 
     def _OnEventModule(self, event):
         if self.__Started__:
-            if event.cameraIndex == self._CameraIndexHandled:
-                self.PostBox += [event.location.tolist() + [event.timestamp, event.polarity]]
+            self.PostBox += [event.location.tolist() + [event.timestamp, event.polarity]]
 
             if len(self.PostBox) > self._PostBoxLimit:
                 self.Post()

@@ -25,6 +25,7 @@ class Reader(Module):
         '''
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Input'
+        self.__CameraIndexRestriction__ = [0]
 
         self._RemoveNegativeTimeDifferences = True
         self._SaveStream = False
@@ -44,6 +45,11 @@ class Reader(Module):
     def _InitializeModule(self, **kwargs):
         self._CloseFile()
         self.StreamName = self.__Framework__.StreamHistory[-1]
+
+        if self.__CameraIndexRestriction__:
+            self._CameraIndex = self.__CameraIndexRestriction__[0]
+        else:
+            self._CameraIndex = 0
 
         if self._SaveStream:
             self.CurrentStream = []
@@ -78,6 +84,7 @@ class Reader(Module):
                 NextEvent = self._NextEvent()
         
         if self.__Framework__.Running:
+            NextEvent.cameraIndex = self._CameraIndex
             # Possibly save the event
             if not self._Rewinded:
                 self._StorageFunction(NextEvent)
@@ -169,6 +176,8 @@ class Reader(Module):
                 else:
                     CreatedEvent.timestamp -= self.TsOffset
 
+                if self._yInvert:
+                    CreatedEvent.location[1] = self.yMax - CreatedEvent.location[1]
                 return CreatedEvent
 
     def _DVS_BYTES_ANALYSIS(self, Bytes):

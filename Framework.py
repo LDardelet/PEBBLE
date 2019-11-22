@@ -108,12 +108,13 @@ class Framework:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
                     self.Paused = 'user'
-            if t > stop_at:
+            if t is None or t > stop_at:
                 self.Paused = 'Framework'
         if not self.Running:
             print("Main loop finished without error.")
-        if self.Paused:
-            print("Paused at t = {0:.3f} by {1}.".format(t, self.Paused))
+        else:
+            if self.Paused:
+                print("Paused at t = {0:.3f} by {1}.".format(t, self.Paused))
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
@@ -150,6 +151,7 @@ class Framework:
         self.Types = {}
         self._ToolsCreationReferences = {}
         self._ToolsExternalParameters = {}
+        self._ToolsCamerasRestrictions = {}
         self._ToolsClasses = {}
 
         self.ToolsOrder = {}
@@ -173,6 +175,10 @@ class Framework:
 
             self._ToolsCreationReferences[tool_name] = data[tool_name]['CreationReferences']
             self._ToolsExternalParameters[tool_name] = data[tool_name]['ExternalParameters']
+            if 'CamerasHandled' in data[tool_name].keys(): # For previous version support
+                self._ToolsCamerasRestrictions[tool_name] = data[tool_name]['CamerasHandled']
+            else:
+                self._ToolsCamerasRestrictions[tool_name] = []
 
             self.ToolsOrder[tool_name] = data[tool_name]['Order']
             print("Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class']))
@@ -223,6 +229,7 @@ class Framework:
             #    print("Trying to modify protected variable {0} for tool {1}, ignoring.".format(key, tool_name))
             else:
                 print("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name))
+        self.Tools[tool_name].__CameraIndexRestriction__ = self._ToolsCamerasRestrictions[tool_name]
 
     def SaveProject(self, ProjectFile):
         pickle.dump(self._ProjectRawData, open(ProjectFile, 'wb'))
@@ -251,14 +258,18 @@ class Framework:
             fileLoaded = __import__(entry)
             classFound = False
             PossibleClasses = []
+            if not 'Module' in fileLoaded.__dict__.keys():
+                print("File does not contain any class derived from 'Module'. Aborting entry")
+                del self._ProjectRawData[Name]
+                return None
             for key in fileLoaded.__dict__.keys():
-                if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_':
+                if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_' and fileLoaded.__dict__['Module'] in fileLoaded.__dict__[key].__bases__:
                     PossibleClasses += [key]
-                    if key == entry:
-                        classFound = True
-                        self._ProjectRawData[Name]['Class'] = entry
-                        print("Found the corresponding class in the file.")
-                        break
+#                    if key == entry:
+#                        classFound = True
+#                        self._ProjectRawData[Name]['Class'] = entry
+#                        print("Found the corresponding class in the file.")
+#                        break
             if not classFound:
                 if len(PossibleClasses) == 0:
                     print("No possible Class is available in this file. Aborting.")
@@ -315,9 +326,11 @@ class Framework:
             if ReferencesAsked:
                 print("Fill tool name for the needed references. Currently available tool names:")
                 for key in self._ProjectRawData.keys():
+                    if key == Name:
+                        continue
                     print(" * {0}".format(key))
                 for Reference in ReferencesAsked:
-                    print(Reference)
+                    print("Reference for '" + Reference + "'")
                     entry = ''
                     while entry == '':
                         entry = input('-> ')
@@ -325,6 +338,16 @@ class Framework:
             else:
                 print("No particular reference needed for this tool.")
             print("")
+            if TmpClass.__Type__ == 'Input':
+                print("Enter camera index for this input module, if necessary.")
+            else:
+                print("Enter camera index(es) handled by this module, coma separated. Void will not create any restriction.")
+            entry = input(" -> ")
+            self._ProjectRawData[Name]['CamerasHandled'] = []
+            if entry:
+                for index in entry.split(','):
+                    self._ProjectRawData[Name]['CamerasHandled'] += [int(index.strip())]
+
             self._ProjectRawData[Name]['ExternalParameters'] = {}
             if PossibleVariables:
                 print("Current tool parameters :")
@@ -378,6 +401,10 @@ class Framework:
             filename = inspect.getfile(self.Tools[tool_name].__class__)
             print("# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename))
             print("     Type : {0}".format(self.Tools[tool_name].__Type__))
+            if self.Tools[tool_name].__CameraIndexRestriction__:
+                print("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraIndexRestriction__]))
+            else:
+                print("     Uses all cameras inputs.")
             if self._ToolsCreationReferences[tool_name]:
                 print("     Creation References:")
                 for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
@@ -436,7 +463,7 @@ class Module:
             return False
 
         # Finalize Module initialization
-        if self.__CameraIndexRestriction__:
+        if self.__CameraIndexRestriction__ and self.__Type__ != 'Input':
             self.__OnEvent__ = self.__OnEventRestricted__
         else:
             self.__OnEvent__ = self._OnEventModule

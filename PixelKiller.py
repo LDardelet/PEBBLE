@@ -18,7 +18,8 @@ class PixelKiller(Module):
 
     def _InitializeModule(self, **kwargs):
 
-        self.PixelsLifeMap = -self._DeathRate * np.log(np.random.rand(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]][0], self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]][1]))
+        Geometry = self.__Framework__._GetStreamGeometry(self)
+        self.PixelsLifeMap = -self._DeathRate * np.log(np.random.rand(Geometry[0], Geometry[1]))
         return True
 
     def _OnEventModule(self, event):

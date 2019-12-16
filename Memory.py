@@ -12,7 +12,7 @@ class Memory(Module):
 
     def _InitializeModule(self, **kwargs):
 
-        self.STContext = -np.inf*np.ones(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
+        self.STContext = -np.inf*np.ones(self.__Framework__._GetStreamGeometry(self))
         self.LastEvent = Event(-np.inf, [0,0], 0)
 
         self.Snapshots = []

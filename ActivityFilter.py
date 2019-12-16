@@ -23,9 +23,8 @@ class ActivityFilter(Module):
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 
-        StreamKey = self.__Framework__.StreamHistory[-1]
-        self._Xmax = self.__Framework__.StreamsGeometries[StreamKey][0]
-        self._Ymax = self.__Framework__.StreamsGeometries[StreamKey][1]
+        self._Xmax = self._Memory.STContext.shape[0]
+        self._Ymax = self._Memory.STContext.shape[1]
         print("ActivityFilter: stream geometries are {0}, {1}".format(self._Xmax, self._Ymax))
 
         return True

@@ -44,7 +44,7 @@ class Reader(Module):
 
     def _InitializeModule(self, **kwargs):
         self._CloseFile()
-        self.StreamName = self.__Framework__.StreamHistory[-1]
+        self.StreamName = self.__Framework__._GetStreamFormattedName(self)
 
         if self.__CameraIndexRestriction__:
             self._CameraIndex = self.__CameraIndexRestriction__[0]
@@ -59,6 +59,9 @@ class Reader(Module):
             self.__RewindForbidden__ = True
         self.TsOffset = None
 
+        self.NextOwnEvent = None
+        self.PreviousCamsEventsBuffer = []
+
         if '.dat' in self.StreamName:
             self._NextEvent = self._NextEventDat
             return self._InitializeDat()
@@ -68,32 +71,49 @@ class Reader(Module):
         elif '.txt' in self.StreamName:
             self._NextEvent = self._NextEventTxt
             return self._InitializeTxt()
+        elif '.aedat' in self.StreamName:
+            self._NextEvent = self._NextEventAedat
+            return self._InitializeAedat()
         else:
             print("Invalid filename.")
             return False
 
     def _OnEventModule(self, event):
         self.nEvent += 1
-        if not self._Rewinded:
-            NextEvent = self._NextEvent()
-        else:
-            if self.nEvent < len(self.CurrentStream):
-                NextEvent = self.CurrentStream[self.nEvent]
+
+        if self.NextOwnEvent is None:
+            if not self._Rewinded:
+                self.NextOwnEvent = self._NextEvent()
             else:
-                self._Rewinded = False
-                NextEvent = self._NextEvent()
+                if self.nEvent < len(self.CurrentStream):
+                    self.NextOwnEvent = self.CurrentStream[self.nEvent]
+                else:
+                    self._Rewinded = False
+                    self.NextOwnEvent = self._NextEvent()
+            if not self.NextOwnEvent is None:
+                self.NextOwnEvent.cameraIndex = self._CameraIndex
+            if not self._Rewinded:
+                # Possibly save the event
+                self._StorageFunction(self.NextOwnEvent)
         
         if self.__Framework__.Running:
-            NextEvent.cameraIndex = self._CameraIndex
-            # Possibly save the event
-            if not self._Rewinded:
-                self._StorageFunction(NextEvent)
             
-            # Send event in Framework
-            return NextEvent
-
+            # Incase several cameras input are set, one previous reader may have sent an event.
+            if event is None:
+                SentEvent = self.NextOwnEvent
+                self.NextOwnEvent = None
+            elif self.NextOwnEvent is None:
+                SentEvent = event
+            else:
+                self.PreviousCamsEventsBuffer += [event]
+                if self.NextOwnEvent.timestamp > self.PreviousCamsEventsBuffer[0].timestamp:
+                    SentEvent = self.PreviousCamsEventsBuffer.pop(0)
+                else:
+                    SentEvent = self.NextOwnEvent
+                    self.NextOwnEvent = None
         else:
-            return None
+            SentEvent = None
+        return SentEvent
 
     def FastForward(self, t):
         try:
@@ -123,15 +143,58 @@ class Reader(Module):
             if Event.timestamp < tNew:
                 break
 
+    def _InitializeAedat(self):
+        self.CurrentFile = open(self.StreamName,'rb')
+        atexit.register(self._CloseFile)
+        self.nEvent = 0
+        self.CurrentByteBatch = b''
+
+        self.PreviousEventTs = 0
+        self.Geometry = np.array([346, 260, 2])
+        self._Version = self.CurrentFile.readline().split(b'AER-DAT')[1].split(b'\r')
+
+        self.Event_Size = 8
+        self.BatchSize = self._BatchEventSize * self.Event_Size
+        self.nByte = -self.Event_Size
+
+        self.CurrentByteBatch = self.CurrentFile.readline()
+        while self.CurrentByteBatch[0] == 35:
+            self.CurrentByteBatch = self.CurrentFile.readline()
+
+        return True
+
+    def _NextEventAedat(self):
+        while True:
+            self.nByte += self.Event_Size
+            if len(self.CurrentByteBatch) - self.nByte < self.Event_Size:
+                self.CurrentByteBatch = self.CurrentByteBatch[self.nByte:]
+                self.nByte = 0
+                self._LoadNewBatch()
+
+                if not self.__Framework__.Running:
+                    return None
+
+            Bytes = self.CurrentByteBatch[self.nByte:self.nByte+self.Event_Size]
+
+            if Bytes[0] >> 7: # Not DVS event
+                continue
+            if (Bytes[2] >> 2) & 0B1: # External trigger, we leave it for now
+                continue
+
+            x = (Bytes[1] & 0B111111) << 4 | Bytes[2] >> 4
+            y = (Bytes[0] & 0B1111111) << 2 | Bytes[1] >> 6
+            p = (Bytes[2] >> 3) & 0B1
+            t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
+
+            return Event(t / 1e6, np.array([x, y]), p)
+
     def _InitializeEs(self):
         self.CurrentFile = open(self.StreamName,'rb')
 
         if not self._DealWithHeaderEs():
             return False
         
-        self.__Framework__.StreamsGeometries[self.StreamName] = self.CurrentGeometry
-
-        self.yMax = self.CurrentGeometry[1] - 1
+        self.yMax = self.Geometry[1] - 1
 
         atexit.register(self._CloseFile)
 
@@ -176,8 +239,8 @@ class Reader(Module):
                 else:
                     CreatedEvent.timestamp -= self.TsOffset
 
-                if self._yInvert:
-                    CreatedEvent.location[1] = self.yMax - CreatedEvent.location[1]
+                #if self._yInvert: Written in ANALYSIS_FUNCTIONS
+                #    CreatedEvent.location[1] = self.yMax - CreatedEvent.location[1]
                 return CreatedEvent
 
     def _DVS_BYTES_ANALYSIS(self, Bytes):
@@ -221,7 +284,7 @@ class Reader(Module):
         return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
 
     def _DealWithHeaderEs(self):
-        self.CurrentGeometry = list(self.DefaultGeometry)
+        self.Geometry = list(self.DefaultGeometry)
 
         Header = self.CurrentFile.read(_ES_HEADER_SIZE)
         Version = Header[12]
@@ -250,12 +313,12 @@ class Reader(Module):
         Width = (Events_Header[1] << 8) | Events_Header[0]
         Height = (Events_Header[3] << 8) | Events_Header[2]
 
-        self.CurrentGeometry[0] = Width
-        self.CurrentGeometry[1] = Height
+        self.Geometry[0] = Width
+        self.Geometry[1] = Height
 
         self.BatchSize = self._BatchEventSize * self.Event_Size
 
-        print("> Found stream geometry of {0}".format(self.CurrentGeometry))
+        print("> Found stream geometry of {0}".format(self.Geometry))
         return True
 
     # .DAT FILES METHODS
@@ -264,15 +327,14 @@ class Reader(Module):
         self.CurrentFile = open(self.StreamName,'rb')
 
         HeaderHandled = self._DealWithHeaderDat()
-        if self.CurrentGeometry == self.DefaultGeometry:
+        if self.Geometry == self.DefaultGeometry:
             print("No geometry found.")
             if self._TryUseDefaultGeometry:
-                print("Using default geometry : {0}".format(self.CurrentGeometry))
+                print("Using default geometry : {0}".format(self.Geometry))
             else:
                 self._CloseFile()
                 return False
-        self.__Framework__.StreamsGeometries[self.StreamName] = self.CurrentGeometry
-        self.yMax = self.CurrentGeometry[1] - 1
+        self.yMax = self.Geometry[1] - 1
 
         atexit.register(self._CloseFile)
 
@@ -310,20 +372,20 @@ class Reader(Module):
 
     def _DealWithHeaderDat(self):
         self.Header = False
-        self.CurrentGeometry = list(self.DefaultGeometry)
+        self.Geometry = list(self.DefaultGeometry)
         FoundHeightOrWidth = False
         while peek(self.CurrentFile) == b'%':
             HeaderNextLine = self.CurrentFile.readline()
             self.Header = True
             if b'height' in HeaderNextLine.lower():
                 FoundHeightOrWidth = True
-                self.CurrentGeometry[1] = int(HeaderNextLine.lower().split(b'height')[1].strip())
+                self.Geometry[1] = int(HeaderNextLine.lower().split(b'height')[1].strip())
             if b'width' in HeaderNextLine.lower():
                 FoundHeightOrWidth = True
-                self.CurrentGeometry[0] = int(HeaderNextLine.lower().split(b'width')[1].strip())
+                self.Geometry[0] = int(HeaderNextLine.lower().split(b'width')[1].strip())
 
         if FoundHeightOrWidth:
-            print("> Found stream geometry of {0}".format(self.CurrentGeometry))
+            print("> Found stream geometry of {0}".format(self.Geometry))
         if self.Header:
             self.Event_Type = unpack('B',self.CurrentFile.read(1))[0]
             self.Event_Size = unpack('B',self.CurrentFile.read(1))[0]
@@ -365,7 +427,7 @@ class Reader(Module):
     # .TXT METHODS
 
     def _InitializeTxt(self):
-        self.__Framework__.StreamsGeometries[self.StreamName] = self._TxtDefaultGeometry # Hardcoded default geometry, because this format is not great.
+        self.Geometry = self._TxtDefaultGeometry
         self.CurrentFile = open(self.StreamName,'r')
         atexit.register(self._CloseFile)
 
@@ -397,7 +459,7 @@ class Reader(Module):
         x = int(float(Data[self._TxtFileStructure.index('x')]))
         y = int(float(Data[self._TxtFileStructure.index('y')]))
         if self._yInvert:
-            y = (self.__Framework__.StreamsGeometries[self.StreamName][1]-1) - y
+            y = (self.Geometry[1]-1) - y
         p = (self._TxtPosNegPolarities + int(float(Data[self._TxtFileStructure.index('p')]))) / (1 + self._TxtPosNegPolarities)
 
         if self.TsOffset is None and self._AutoZeroOffset:

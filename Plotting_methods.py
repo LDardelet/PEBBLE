@@ -80,7 +80,7 @@ def PlotConvergence(S, SpeedDuos = None, GroundTruthFile = None, AddSpeedIdLabel
         with open(GroundTruthFile, 'rb') as openfile:
             D = json.load(openfile)
     else:
-        StreamName = S.__Framework__.StreamHistory[-1]
+        StreamName = S.__Framework__._GetStreamFormattedName(S)
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '_hough.gnd'
         LoadName = '/'.join(NameParts[:-1]) + '/' + NewName
@@ -581,7 +581,7 @@ def PlotPositionTracking(S, SpeedDuos = None, GroundTruthFile = 'default', Snaps
             with open(GroundTruthFile, 'rb') as openfile:
                 D = json.load(openfile)
         else:
-            StreamName = S.__Framework__.StreamHistory[-1]
+            StreamName = S.__Framework__._GetStreamFormattedName(S)
             NameParts = StreamName.split('/')
             NewName = NameParts[-1].replace('.', '_') + '.gnd'
             LoadName = '/'.join(NameParts[:-1]) + '/' + NewName

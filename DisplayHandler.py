@@ -2,6 +2,7 @@
 import atexit
 import socket
 import random
+import time
 import _pickle as cPickle
 
 from Framework import Module
@@ -52,6 +53,8 @@ class DisplayHandler(Module):
         self.__Started__ = True
         atexit.register(self.EndTransmission)
 
+        time.sleep(0.1)
+
         return True
 
     def Restart(self):
@@ -94,7 +97,7 @@ class DisplayHandler(Module):
 
     def _SendStreamData(self):
         ProjectFile = self.__Framework__.ProjectFile
-        StreamName = self.__Framework__.StreamHistory[-1]
+        StreamName = self.__Framework__._GetStreamFormattedName(self)
 
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_addr = ("", self.ResponsePort)
@@ -221,7 +224,7 @@ class DisplayHandler(Module):
         ResponseUDP.close()
 
     def _GetDisplaySocket(self):
-        Geometry = self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]]
+        Geometry = self.__Framework__._GetStreamGeometry(self)
 
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_addr = ("",self.ResponsePort)

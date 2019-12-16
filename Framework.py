@@ -9,8 +9,7 @@ import copy
 
 from Plotting_methods import *
 
-TypesLimits = {'Input':1}
-NonRunningTools = ['Input']
+TypesLimits = {}
 
 class Framework:
     '''
@@ -50,7 +49,6 @@ class Framework:
 
         self.__Type__ = 'Framework'
 
-        self.StreamsGeometries = {}
         self.StreamHistory = []
 
         self.VerboseRatio = verboseRatio
@@ -83,6 +81,42 @@ class Framework:
             if ans != '':
                 self.SaveProject(ans)
 
+    def _GetStreamGeometry(self, Tool):
+        '''
+        Method to retreive the geometry of the events handled by a tool
+        '''
+        ToolEventsRestriction = Tool.__CameraIndexRestriction__
+        Geometry = np.array([0, 0, 0])
+        for InputToolName in self.ToolsList:
+            InputTool = self.Tools[InputToolName]
+            if InputTool.__Type__ == 'Input':
+                if InputTool.__Initialized__:
+                    if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
+                        Geometry = np.maximum(Geometry, InputTool.Geometry)
+                else:
+                    print("Unable to retreive geometry from input tool {0}, probably due to wrong tool order.".format(InputToolName))
+        return Geometry
+
+    def _GetStreamFormattedName(self, Tool):
+        '''
+        Method to retreive a formatted name depending on the files providing events to this tool.
+        Specifically useful for an Input type tool to get the file it has to process.
+        '''
+        if Tool.__Type__ == 'Input':
+            return self.CurrentInputStreams[Tool.__Name__]
+
+        ToolEventsRestriction = Tool.__CameraIndexRestriction__
+        StreamsNames = []
+        for InputToolName in self.ToolsList:
+            InputTool = self.Tools[InputToolName]
+            if InputTool.__Type__ == 'Input':
+                if InputTool.__Initialized__:
+                    if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
+                        StreamsNames += [InputTool.StreamName]
+                else:
+                    print("Unable to retreive geometry from input tool {0}, probably due to wrong tool order.".format(InputToolName))
+        return '\n'.join(StreamsNames)
+
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
@@ -94,7 +128,28 @@ class Framework:
                 N += 1
                 StreamName = "DefaultStream_{0}".format(N)
         if not resume:
-            self.StreamHistory += [StreamName]
+            self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
+            if type(StreamName) == str:
+                for ToolName in self.CurrentInputStreams.keys():
+                    self.CurrentInputStreams[ToolName] = StreamName
+            elif type(StreamName) == dict:
+                if len(StreamName) != len(self.CurrentInputStreams):
+                    print("Wrong number of stream names specified :")
+                    print("Framework contains {0} input tools, while {1} tool(s) has been given a file".format(len(self.CurrentInputStreams), len(StreamName)))
+                    return None
+                for key in StreamName.keys():
+                    if key not in self.CurrentInputStreams.keys():
+                        print("Wrong input tool key specified in stream names : {0}".format(key))
+                        return None
+                    self.CurrentInputStreams[key] = StreamName[key]
+            else:
+                print("Wrong StreamName type. It can be :")
+                print(" - None : Default name is then placed, for None file specific input tools.")
+                print(" - str : The same file is then used for all input tools.")
+                print(" - dict : Dictionnary with input tools names as keys and specified filenames as values")
+                return None
+            
+            self.StreamHistory += [self.CurrentInputStreams]
             InitializationAnswer = self.Initialize(**kwargs)
             if not InitializationAnswer:
                 return None
@@ -295,6 +350,7 @@ class Framework:
 
             TmpClass = fileLoaded.__dict__[self._ProjectRawData[Name]['Class']](Name, self, {})
             ReferencesAsked = TmpClass.__ReferencesAsked__
+            self._ProjectRawData[Name]['IsInput'] = (TmpClass.__Type__ == 'Input')
 
             PossibleVariables = []
             for var in TmpClass.__dict__.keys():
@@ -307,8 +363,11 @@ class Framework:
                     entry = input('')
                 self._ProjectRawData[Name]['Order'] = int(entry)
             else:
-                print("Input Type detected. Setting default order to 0.")
+                print("Input Type detected. Setting to next default index.")
                 self._ProjectRawData[Name]['Order'] = 0
+                for tool_name in self._ProjectRawData.keys():
+                    if tool_name != Name and self._ProjectRawData[tool_name]['IsInput']:
+                        self._ProjectRawData[Name]['Order'] = max(self._ProjectRawData[Name]['Order'], self._ProjectRawData[tool_name]['Order'] + 1)
             NumberTaken = False
             for tool_name in self._ProjectRawData.keys():
                 if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name]['Order']:
@@ -438,6 +497,10 @@ class Module:
         self.__RewindForbidden__ = False
         self.__SavedValues__ = {}
         self.__CameraIndexRestriction__ = []
+        try:
+            self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
+        except:
+            None
 
     def __Initialize__(self, **kwargs):
         # First restore all prevous values

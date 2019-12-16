@@ -152,7 +152,7 @@ class SpeedTracker(Module):
         return True
 
     def SaveData(self, ResultsFolder = '/home/dardelet/Data/Results/'):
-        StreamName = os.path.abspath(self.__Framework__.StreamHistory[-1])
+        StreamName = os.path.abspath(self.__Framework__._GetStreamFormattedName(self))
         DataDict = {'streamfilename':StreamName}
         FileName = ResultsFolder + '_'.join(StreamName.split('.')[0].split('/')[-2:])+'.json'
         ans = input('Save data in {0} ? [Y/n]'.format(FileName))
@@ -323,21 +323,48 @@ class TrackerMatcher(Module):
         self._MaxTravelDistanceComparison = 2.
         self._MaxTrackerEventsToRadiusRatio = 2.
 
+        self._NAnglesSearched = 1
+        self._MaxAngleAmplitude = np.pi/4
+        self._NScalesSearched = 1
+        self._MaxScaling = 1.5
+
     def _InitializeModule(self, **kwargs):
         self._CameraTracker = self.__Framework__.Tools[self.__CreationReferences__['CameraTracker']]
         self._CameraTracker.AddLocksSubscriber(self.OnLockListener)
         self._OppositeMemory = self.__Framework__.Tools[self.__CreationReferences__['OppositeMemory']]
         self.__CameraIndexRestriction__ = self._OppositeMemory.__CameraIndexRestriction__
 
+        self.EpipolarEstimator = EpipolarEstimatorClass(self._OppositeMemory.STContext.shape[:2])
+
         self.TrackersBeingSearched = []
         self.TrackersEventsIndexes = {}
         self.TrackersMatchMaps = {}
         self.TrackersStartPositions = {}
         self.TrackersEventsArray = {}
+
+        self.TrackersRSedEventsArray = {}
+        self.TrackersRSedEventsIndexes = {}
+        self.TrackersRSedEventsAnglesIndexes = {}
+        self.TrackersRSedEventsScalesIndexes = {}
         
         self.MatchedTrackers = {}
         self.MissedTrackers = []
 
+        self._NAnglesSearched = self._NAnglesSearched | 0B1
+        if self._NAnglesSearched > 1:
+            self.SearchedAngles = np.linspace(-self._MaxAngleAmplitude, self._MaxAngleAmplitude, self._NAnglesSearched)
+        else:
+            self.SearchedAngles = np.array([0.])
+        self.SearchedRotationMultipliers = [np.array([[np.cos(Angle), -np.sin(Angle)], [np.sin(Angle), np.cos(Angle)]]) for Angle in self.SearchedAngles]
+
+        # We force 1 scaling factor to appear
+        self._NScalesSearched = self._NScalesSearched | 0B1 
+        if self._NScalesSearched > 1:
+            self.SearchedScales = self._MaxScaling ** np.linspace(-1, 1, self._NScalesSearched)
+        else:
+            self.SearchedScales = np.array([1.])
+
+        #self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self.EpipolarEstimator.EpipolarDistance # Sqrt for diagonal of the square patch
         self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self._MaxEpipolarPixelsBonusDistance # Sqrt for diagonal of the square patch
         return True
 
@@ -355,34 +382,73 @@ class TrackerMatcher(Module):
             if np.linalg.norm(Tracker.Position - self.TrackersStartPositions[Tracker.ID]) > self._MaxTravelDistanceComparison:
                 self.UnsubscribeTracker(Tracker)
                 continue
+            if 2 * min(Tracker.Position.min(), (self._OppositeMemory.STContext.shape[:2] - Tracker.Position).min()) < self._CameraTracker._DetectorDefaultWindowsLength: # If the tracker itself is too close from edges
+                self.UnsubscribeTracker(Tracker)
+                continue
 
             EpiLine = self.ComputeEpipolarLine(Tracker.Position)
             Distance = abs((Point * EpiLine).sum())
             if Distance > self.MaxEpipolarPixelsDistance:
                 continue
 
-            Offsets = (event.location - self.TrackersEventsArray[Tracker.ID]).astype(int) # Potentially need offset of 0.5
+            Offsets = (event.location - self.TrackersRSedEventsArray[Tracker.ID])
             xs = Offsets[:,0]
+            xs[np.where(xs < 0)] = 0
+            xs[np.where(xs >= self._OppositeMemory.STContext.shape[0])] = 0
             ys = Offsets[:,1]
-            self.TrackersMatchMaps[Tracker.ID][xs, ys, self.TrackersEventsIndexes[Tracker.ID]] = True
+            ys[np.where(ys < 0)] = 0
+            ys[np.where(ys >= self._OppositeMemory.STContext.shape[1])] = 0 # Unsatisfying patch. Much change that
+            self.TrackersMatchMaps[Tracker.ID][xs, ys, self.TrackersRSedEventsIndexes[Tracker.ID], self.TrackersRSedEventsAnglesIndexes[Tracker.ID], self.TrackersRSedEventsScalesIndexes[Tracker.ID]] = True
             
     def UnsubscribeTracker(self, Tracker):
-        self.MatchedTrackers[Tracker.ID] = {'map': self.TrackersMatchMaps[Tracker.ID].sum(axis = 2), 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate}
-        print("Matched tracker {0} up to {1:.1f}%".format(Tracker.ID, 100 * self.MatchedTrackers[Tracker.ID]['map'].max() / self.TrackersEventsIndexes[Tracker.ID][-1]))
+        #self.MatchedTrackers[Tracker.ID] = {'map': self.TrackersMatchMaps[Tracker.ID].sum(axis = 2), 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate}
+        Map = self.TrackersMatchMaps[Tracker.ID]
+        Map[0,0,:,:,:] = 0 # Cf patch
+        SummedMap = Map.sum(axis = 2)
+        BestPositionsIn4DSpace = np.where(SummedMap == SummedMap.max())
+        xs, ys, thetas, scales = BestPositionsIn4DSpace
+        MaxConfidence = SummedMap.max() / (self.TrackersEventsIndexes[Tracker.ID][-1]+1)
+
+        self.EpipolarEstimator.AddMatch(X = np.array(Tracker.Position), Y = np.array([xs[0], ys[0]]), Confidence = MaxConfidence)
+        #self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self.EpipolarEstimator.EpipolarDistance
+
+        self.MatchedTrackers[Tracker.ID] = {'matches': BestPositionsIn4DSpace, 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate, 'map': Map}
+        print("Matched tracker {0} up to {1:.1f}%".format(Tracker.ID, 100 * MaxConfidence))
         del self.TrackersEventsIndexes[Tracker.ID]
         del self.TrackersMatchMaps[Tracker.ID]
         del self.TrackersStartPositions[Tracker.ID]
         del self.TrackersEventsArray[Tracker.ID]
+
+        del self.TrackersRSedEventsArray[Tracker.ID]
+        del self.TrackersRSedEventsIndexes[Tracker.ID]
+        del self.TrackersRSedEventsAnglesIndexes[Tracker.ID]
+        del self.TrackersRSedEventsScalesIndexes[Tracker.ID]
         self.TrackersBeingSearched.remove(Tracker)
 
     def OnLockListener(self, Tracker):
-        if not Tracker.ID in self.TrackersBeingSearched: # In case a release and re-lock happend before any match
+        if not Tracker in self.TrackersBeingSearched: # In case a release and re-lock happend before any match
             self.TrackersBeingSearched += [Tracker]
         NEventsCompared = min(len(Tracker.Lock.Events), int(Tracker.HalfSize * self._MaxTrackerEventsToRadiusRatio))
         self.TrackersEventsIndexes[Tracker.ID] = np.arange(0, NEventsCompared, 1)
-        self.TrackersMatchMaps[Tracker.ID] = np.zeros(self._OppositeMemory.STContext.shape[:2] + (NEventsCompared, ), dtype = bool)
+        self.TrackersMatchMaps[Tracker.ID] = np.zeros(self._OppositeMemory.STContext.shape[:2] + (NEventsCompared, self._NAnglesSearched, self._NScalesSearched), dtype = bool)
         self.TrackersStartPositions[Tracker.ID] = np.array(Tracker.Position)
-        self.TrackersEventsArray[Tracker.ID] = np.array(Tracker.Lock.Events[:NEventsCompared])[:,1:]
+        self.TrackersEventsArray[Tracker.ID] = np.array(Tracker.Lock.Events[-NEventsCompared:])[:,1:] # Potentially need offset of 0.5
+
+        self.TrackersRSedEventsArray[Tracker.ID] = np.zeros((NEventsCompared * self._NScalesSearched * self._NAnglesSearched, 2), dtype = np.int16)
+        self.TrackersRSedEventsIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int16)
+        self.TrackersRSedEventsAnglesIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int8)
+        self.TrackersRSedEventsScalesIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int8)
+        LocalIndexes = np.zeros((NEventsCompared, 3))
+
+        for nAngle, Multiplier in enumerate(self.SearchedRotationMultipliers):
+            TmpLocations = np.array([Multiplier.dot(Vector[1:]) for Vector in Tracker.Lock.Events[:NEventsCompared]])
+            for nScaling, Scaling in enumerate(self.SearchedScales):
+                StartIndex = (nAngle * self._NScalesSearched + nScaling) * NEventsCompared
+                self.TrackersRSedEventsArray[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = (TmpLocations * Scaling).astype(np.int16)
+
+                self.TrackersRSedEventsIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int16(self.TrackersEventsIndexes[Tracker.ID])
+                self.TrackersRSedEventsAnglesIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int8(nAngle)
+                self.TrackersRSedEventsScalesIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int8(nScaling)
 
     def RunComparisonTS(self, event):
         UsableRadius = int(min(self._CameraTracker._DetectorDefaultWindowsLength / 2, min(event.location.min(), (np.array(self._OppositeMemory.STContext.shape[:2]) - event.location).min() - 1)))
@@ -435,6 +501,121 @@ class TrackerMatcher(Module):
     def ComputeEpipolarLine(self, Location):
         # Normalize two first digits
         return np.array([0., 1., - Location[1]]) # Default parallel calibrated cameras
+        #return self.EpipolarEstimator.GetEpipolarLine(Location)
+
+class EpipolarEstimatorClass:
+    def __init__(self, ScreenGeometry):
+        self.ScreenGeometry = np.array(ScreenGeometry)
+
+        self.DefaultF = np.array([[0., 0., 0.], [0., 0., -2 / self.ScreenGeometry[1]], [0., 0., 1.]]) / np.linalg.norm(np.array([1., -2 / self.ScreenGeometry[1]]))
+        self._DefaultSecondLambdaTrigger = 0.9
+
+        self._MimimumSmashFactor = 0.1
+
+        self.C = np.identity(9)
+
+        self._OrthogonalizeVectors = True
+        self.SetNormalization('isotropic') # Can be 'isometric' for same scaling for each axis, 'anisometric' for specific scaling along each axis or 'none' for no scaling at all
+
+        self.EpipolarDistance = self.ScreenGeometry[1] / 2
+
+        self._MaxMatchesBuffered = 10 # should be about that, as its the order of degrees of freedom this problem has to solve
+        self.MatchesBuffer = []
+
+        self.ExtractF()
+
+    def SetNormalization(self, Type):
+        self._NormalizationType = Type
+
+        ScreenGeometry = self.ScreenGeometry
+        if self._NormalizationType == 'isotropic':
+            AvgScaling = np.sqrt(ScreenGeometry[0] * ScreenGeometry[1])
+            self.N = 1 / np.array([AvgScaling**2, AvgScaling**2, AvgScaling, AvgScaling**2, AvgScaling**2, AvgScaling, AvgScaling, AvgScaling, 1.])
+
+        elif self._NormalizationType == 'anisotropic':
+            self.N = 1 / np.array([ScreenGeometry[0]**2, ScreenGeometry[0]*ScreenGeometry[1], ScreenGeometry[0], ScreenGeometry[0]*ScreenGeometry[1], ScreenGeometry[1]*ScreenGeometry[1], ScreenGeometry[1], ScreenGeometry[0], ScreenGeometry[1], 1])
+
+        elif self._NormalizationType == 'none':
+            self.N = 1
+
+        else:
+            raise Exception("Wrong normalization type set")
+        self.InvN =  1 / self.N
+
+    def AddMatch(self, X, Y, Confidence):
+        self.MatchesBuffer = [(np.array(X), np.concatenate(( Y, np.array([1]) )) )] + self.MatchesBuffer[:self._MaxMatchesBuffered-1]
+        self.ComputeCurrentDistance() # Puttin g it here allow for a prediction check. If distance doesnt go down now, then the correction is actually necessary
+
+        self.V = np.array([X[0]*Y[0], X[1]*Y[0], Y[0], X[0]*Y[1], X[1]*Y[1], Y[1], X[0], X[1], 1])
+        self.V = self.V / np.linalg.norm(self.V)
+        self.U = self.N * self.V
+        self.U = self.U / np.linalg.norm(self.U)
+
+        if self._OrthogonalizeVectors:
+            self.U = self.C.dot(self.U)
+            Norm = np.linalg.norm(self.U)
+            if Norm == 0:
+                print("Fully smashed vector. Returning as current computation is void")
+                return
+            self.U = self.U / Norm
+
+        # Space stretching solution
+        self.T = np.zeros((9,9))
+        for i in range(9):
+            if i == 0:
+                u = np.array(self.U)
+            else:
+                v = np.zeros(9)
+                v[i] = 1
+                u = np.array(v)
+                for j in range(i):
+                    u = u - (v * self.T[:,j]).sum() * self.T[:,j]
+                u = u / np.linalg.norm(u)
+            self.T[:,i] = u
+        S = np.identity(9)
+        S[0,0] = max(self._MimimumSmashFactor, min(1, self.ConfidenceSmashingFunction(Confidence)))
+
+        #self.M = self.T.T.dot(S.dot(self.T))
+        self.M = self.T.dot(S.dot(self.T.T)) # Correct one considering eigenvectors scalar self.U
+
+        self.C = self.C.dot(self.M)
+
+        self.ExtractF()
+
+    def ConfidenceSmashingFunction(self, Confidence):
+        return 1 - Confidence
+
+    def ExtractF(self): # Also Normalizes C
+        lambdas, vecs = np.linalg.eig(self.C)
+        
+        EigenArgs = np.argsort(abs(lambdas))
+        l1, l2 = np.real(lambdas[EigenArgs[-1]]), np.real(lambdas[EigenArgs[-2]])
+        if l1 == 0:
+            print("Null first eigenvalue. Falling back to default epipolar geometry provided")
+            self.F = np.array(self.DefaultF)
+            return
+        self.C = self.C / l1
+        self.EigenValuesRatio = abs(l2/l1)
+        if self.EigenValuesRatio > self._DefaultSecondLambdaTrigger:
+            print("Excessive second eigenvalue. Falling back to default epipolar geometry provided")
+            self.F = np.array(self.DefaultF)
+            return
+        NewF = (np.real(vecs[:,EigenArgs[-1]]) * self.N).reshape((3,3))
+        NewF = NewF / max(NewF.min(), NewF.max(), key = abs)
+        #self.F = (self.F + NewF)/2 # No need to normalize as eigenvectors are unit long
+        self.F = NewF
+
+    def ComputeCurrentDistance(self):
+        DistanceSum = 0
+        for Xth, Yth in self.MatchesBuffer:
+            YEpiLine = self.GetEpipolarLine(Xth)
+            DistanceSum += abs((Yth * YEpiLine).sum())
+        #self.EpipolarDistance = (self.EpipolarDistance * (self._MaxMatchesBuffered - 1) + DistanceSum / len(self.MatchesBuffer)) / self._MaxMatchesBuffered # Smooth the correction
+        self.EpipolarDistance = (self.EpipolarDistance + DistanceSum / len(self.MatchesBuffer))/2 # Smooth the correction
+
+    def GetEpipolarLine(self, X):
+        Line = self.F.dot(np.concatenate(( X, np.array([1]) )) )
+        return Line / np.linalg.norm(Line[:2])
 
 class TrackerClass:
     def __init__(self, TrackerManager, ID, InitialPosition):

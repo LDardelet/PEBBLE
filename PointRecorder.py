@@ -164,11 +164,11 @@ class Clicker(Module):
 
     def SaveRecordedData(self):
         DataDict = {}
-        DataDict['StreamName'] = self.__Framework__.StreamHistory[-1]
+        DataDict['StreamName'] = self.__Framework__._GetStreamFormattedName(self)
         DataDict['RecordedPoints'] = list(self.RecordedPoints)
         DataDict['RecordingDate'] = datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')
 
-        StreamName = self.__Framework__.StreamHistory[-1]
+        StreamName = DataDict['StreamName']
         NameParts = StreamName.split('/')
         NewName = NameParts[-1].replace('.', '_') + '.gnd'
         SaveName = '/'.join(NameParts[:-1]) + '/' + NewName

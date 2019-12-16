@@ -75,7 +75,7 @@ class HoughCD(Module):
 
     def SaveRecordedData(self):
         DataDict = {}
-        StreamName = self.__Framework__.StreamHistory[-1]
+        StreamName = self.__Framework__._GetStreamFormattedName(self)
         DataDict['StreamName'] = StreamName
         DataDict['RecordedPoints'] = list(self.RecordedPoints)
         DataDict['RecordingDate'] = datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')

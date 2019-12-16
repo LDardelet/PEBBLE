@@ -19,7 +19,7 @@ class FlowComputer(Module):
         self._PolaritySeparation = True
 
     def _InitializeModule(self, **kwargs):
-        self.CurrentShape = list(self.__Framework__.StreamsGeometries[self.__Framework__.StreamHistory[-1]])
+        self.CurrentShape = list(self.__Framework__._GetStreamGeometry(self))
         self.NEventsMap = np.zeros(self.CurrentShape)
         self.DetMap = np.zeros(self.CurrentShape)
         self.FlowMap = np.zeros(self.CurrentShape + [2])

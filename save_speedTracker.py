@@ -59,7 +59,6 @@ class SpeedTracker(Module):
         self._MinRotCorrectionSizeRatio2 = 0.                                   # Float. Minimum squared ratio to window size for which we can decently compute the rotational error. Default : 0.25
         self._TrackerLockedRotModFactor = 1.                                        # Float. Displacement factor for rotation correction when locked. Default : 1.
         self._TrackerLockedRotModDisplacementActivityPower = 1.                    # Float. Exponent of the activity power of the activity used for the locked tracker rotation correction. Default : 0.2
-        self._TrackerLockedRotActivityPower = 1.                                      # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
 
         self._TrackerConvergenceThreshold = 0.2                                     # Float. Amount of correction relative to activity allowing for a converged feature. Default : 0.2
         self._TrackerConvergenceHysteresis = 0.1                                    # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.1
@@ -429,13 +428,12 @@ class TrackerClass:
         if not self.UpdateWithEvent(event): # We update the position and activity. They do not depend on the event location. False return means the tracker has died : out of screen or activity too low (we should potentially add 1 for current event but shoud be marginal)
             return False # We also consider that even if the event may have matched, the tracker still dies. The activity increase of 1 is not enough
 
-        RC, RS = np.cos(-self.Rotation), np.sin(-self.Rotation)
-        Dx, Dy = event.location - self.Position
-        Dx2, Dy2 = Dx**2, Dy**2
-        if Dx2 + Dy2 > self.HS2:
+        RC, RS = np.cos(self.Rotation), np.sin(self.Rotation)
+        CenteredLocation = event.location - self.Position
+        if np.linalg.norm(CenteredLocation) > self.HalfSize:
             return False
 
-        #RelativeLocation = CenteredLocation - self.MeanPosition()
+        RelativeLocation = CenteredLocation - self.MeanPosition()
 
         CurrentProjectedEvent = np.array([float(event.timestamp), Dx*RC + Dy*RS, Dy*RC - Dx*RS])
         SavedProjectedEvent = np.array(CurrentProjectedEvent) # Possibly error here, as reference to event.timestamp is lost
@@ -512,9 +510,8 @@ class TrackerClass:
         self.SpeedError += SpeedError
         self.Speed += SpeedMod * self.TM._TrackerAccelerationFactor
 
-        if self.TM._CorrectAxialRotation and Dx2 + Dy2 > self.HS2 * self.TM._MinRotCorrectionSizeRatio2 and SpeedErrorNorm > 0:
-            n = SpeedError / SpeedErrorNorm
-            EventLocalError = SpeedError - (n*(n*(self.SpeedError / self.ScalarCorrectionActivity)).sum())
+        if self.TM._CorrectAxialRotation and Dx2 + Dy2 > self.HS2 * self.TM._MinRotCorrectionSizeRatio2:
+            EventLocalError = SpeedError - (self.SpeedError / self.ScalarCorrectionActivity)
             #RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / (Dx2 + Dy2)
             RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / self.HalfSize
 
@@ -522,7 +519,7 @@ class TrackerClass:
             Weight = 1.
             self.WeightedRotationalActivity += Weight
             if self.Lock:
-                RotSpeedMod = RotSpeedError / self.Lock.Activity ** self.TM._TrackerLockedRotActivityPower
+                RotSpeedMod = RotSpeedError / self.Lock.Activity ** self.TM._TrackerLockedActivityPower
                 #InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / (Dx2 + Dy2)
                 InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / self.HalfSize
                 self.Rotation += Weight * self.TM._TrackerLockedRotModFactor * InducedRotation / (self.WeightedRotationalActivity ** self.TM._TrackerLockedRotModDisplacementActivityPower)
@@ -1555,7 +1552,7 @@ class Plotter:
                         ax.plot([GTPos[0], Box[2]], [GTPos[1], Box[3]], color = TrackerColor, lw = 0.3)
 
                 if addTrackersIDsFontSize:
-                    ax.text(Box[0][0] + 5, (Box[0][1] + Box[1][1])/2, '{0}'.format(TrackerID), color = TrackerColor, fontsize = addTrackersIDsFontSize)
+                    ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.8, '{0}'.format(TrackerID), color = TrackerColor, fontsize = addTrackersIDsFontSize)
 
             if TrailDt > 0:
                 nSnap = SnapshotNumber 
@@ -1815,7 +1812,7 @@ class Plotter:
         print("Finished initialization at nEvent = {0}, nSnap = {1}".format(nEvent, nSnap))
         SnapShown = max(0, nSnap-1)
         x, y = int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][0]), int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][1])
-        Map = S._LinkedMemory.Snapshots[SnapShown][1][int(x - Tracker.HalfSize):int(x + Tracker.HalfSize + 1), int(y - Tracker.HalfSize):int(y + Tracker.HalfSize + 1)]
+        Map = S._LinkedMemory.Snapshots[SnapShown][1][x - Tracker.HalfSize:x + Tracker.HalfSize + 1, y - Tracker.HalfSize:y + Tracker.HalfSize + 1]
         t = S._LinkedMemory.Snapshots[SnapShown][0]
         FinalMap = np.e**(-(t - Map.max(axis = 2))/(TC * S._TrackerTimeConstantRatioRemoval)) * (2*Map.argmax(axis = 2) - 1)
 

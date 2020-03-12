@@ -1,5 +1,4 @@
 import numpy as np
-import tools
 import random
 import matplotlib.pyplot as plt
 
@@ -10,7 +9,7 @@ class FlowComputer(Module):
         '''
         Tool to compute the optical flow.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences):
+        Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Computation'
 
@@ -25,6 +24,7 @@ class FlowComputer(Module):
         self.FlowMap = np.zeros(self.CurrentShape + [2])
         self.NormMap = np.zeros(self.CurrentShape)
         self.RegMap = np.zeros(self.CurrentShape)
+        self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext
 
         return True
@@ -35,10 +35,11 @@ class FlowComputer(Module):
         return event
 
     def ComputeFullFlow(self, event):
+        Patch = self._LinkedMemory.GetPatch(event.location[0], event.location[1], self._R, self._R)
         if self._PolaritySeparation:
-            Patch = (tools.PatchExtraction(self.STContext, event.location, self._R))[:,:,event.polarity] #for polarity separation
+            Patch = Patch[:,:,event.polarity] #for polarity separation
         else:
-            Patch = (tools.PatchExtraction(self.STContext, event.location, self._R)).max(axis = 2)
+            Patch = Patch.max(axis = 2)
         
         Positions = np.where(Patch > Patch.max() - self._EventsAgeLimit)
         self.NEventsMap[event.location[0], event.location[1], event.polarity] = Positions[0].shape[0]
@@ -63,15 +64,15 @@ class FlowComputer(Module):
             if self.DetMap[event.location[0], event.location[1], event.polarity] > 0:
                 F = np.array([(Sy2*Stx - Sxy*Sty)/self.DetMap[event.location[0], event.location[1], event.polarity], (Sx2*Sty - Sxy*Stx)/self.DetMap[event.location[0], event.location[1], event.polarity]])
 
-                N = np.linalg.norm(F)
-                if N > 0:
-                    self.NormMap[event.location[0], event.location[1], event.polarity] = 1./np.linalg.norm(F)
+                N2 = (F**2).sum()
+                if N2 > 0:
+                    self.NormMap[event.location[0], event.location[1], event.polarity] = 1./N2
                     St2 = (tDeltas ** 2).sum()
                     if St2 != 0:
                         self.RegMap[event.location[0], event.location[1], event.polarity] = 1 - ((tDeltas - F[0]*xDeltas - F[1]*yDeltas)**2).sum()/St2
                     else:
                         self.RegMap[event.location[0], event.location[1], event.polarity] = 1
-                    self.FlowMap[event.location[0], event.location[1], event.polarity, :] = F * self.NormMap[event.location[0], event.location[1], event.polarity]**2
+                    self.FlowMap[event.location[0], event.location[1], event.polarity, :] = F * self.NormMap[event.location[0], event.location[1], event.polarity]
                 else:                    
                     self.FlowMap[event.location[0], event.location[1], event.polarity, :] = 0.
                     self.RegMap[event.location[0], event.location[1], event.polarity] = 0.

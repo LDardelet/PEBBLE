@@ -29,7 +29,7 @@ class ActivityFilter(Module):
 
         return True
 
-    def _UpdateParameters(self, MinNeigh, Tau, Radius):
+    def UpdateParameters(self, MinNeigh, Tau, Radius):
         self._MinNeighbors = MinNeigh
         self._Tau = Tau # in seconds
         self._Radius = Radius

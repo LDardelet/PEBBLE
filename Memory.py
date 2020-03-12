@@ -39,4 +39,4 @@ class Memory(Module):
             self.Snapshots.pop(-1)
 
     def GetPatch(self, x, y, Rx, Ry):
-        return self.STContext[x-Rx:x+Rx,y-Ry:y+Ry,:]
+        return self.STContext[max(0,x-Rx):x+Rx,max(0,y-Ry):y+Ry,:]

@@ -234,7 +234,8 @@ class Reader(Module):
             if not CreatedEvent is None:
                 if self.TsOffset is None and self._AutoZeroOffset:
                     self.TsOffset = CreatedEvent.timestamp
-                    print("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
+                    if self.TsOffset:
+                        self.Log("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
                     CreatedEvent.timestamp = 0
                 else:
                     CreatedEvent.timestamp -= self.TsOffset
@@ -418,7 +419,8 @@ class Reader(Module):
 
         if self.TsOffset is None and self._AutoZeroOffset:
             self.TsOffset = ts
-            print("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
+            if self.TsOffset:
+                self.Log("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
             ts = 0
         else:
             ts -= self.TsOffset
@@ -427,7 +429,7 @@ class Reader(Module):
     # .TXT METHODS
 
     def _InitializeTxt(self):
-        self.Geometry = self._TxtDefaultGeometry
+        self.Geometry = list(self._TxtDefaultGeometry)
         self.CurrentFile = open(self.StreamName,'r')
         atexit.register(self._CloseFile)
 
@@ -464,7 +466,8 @@ class Reader(Module):
 
         if self.TsOffset is None and self._AutoZeroOffset:
             self.TsOffset = ts
-            print("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
+            if self.TsOffset:
+                self.Log("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
             ts = 0
         else:
             ts -= self.TsOffset

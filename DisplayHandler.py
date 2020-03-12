@@ -37,11 +37,11 @@ class DisplayHandler(Module):
         DisplayUp = self._IsDisplayUp()
 
         if not DisplayUp:
-            print("Aborting initialization process")
+            self.LogWarning("Aborting initialization process")
             self.__Started__ = False
             return not self._CompulsoryModule
 
-        print("Initializing DisplayHandler sockets.")
+        self.Log("Initializing DisplayHandler sockets.")
         self._DestroySocket()
         self._GetDisplaySocket()
 
@@ -63,7 +63,7 @@ class DisplayHandler(Module):
 
     def _OnEventModule(self, event):
         if self.__Started__:
-            self.PostBox += [event.location.tolist() + [event.timestamp, event.polarity]]
+            self.PostBox += [event._AsList()]
 
             if len(self.PostBox) > self._PostBoxLimit:
                 self.Post()
@@ -115,11 +115,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'datareceived':
-                print("Data transmitted")
+                pass
             else:
-                print("Could not transmit data")
+                self.LogWarning("Could not transmit data")
         except:
-            print("Display seems down (SendStreamData)")
+            self.LogWarning("Display seems down (SendStreamData)")
         ResponseUDP.close()
 
     def _Rewind(self, tNew):
@@ -139,11 +139,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'rewinded':
-                print("Rewinded")
+                self.Log("Rewinded")
             else:
-                print("Could not clean map")
+                self.LogWarning("Could not clean map")
         except:
-            print("Display seems down (Rewind)")
+            self.LogWarning("Display seems down (Rewind)")
         ResponseUDP.close()
 
     def _CleanMapForStream(self):
@@ -163,11 +163,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'socketcleansed':
-                print("Cleansed")
+                self.Log("Cleansed")
             else:
-                print("Could not clean map")
+                self.LogWarning("Could not clean map")
         except:
-            print("Display seems down (CleanMapForStream)")
+            self.LogWarning("Display seems down (CleanMapForStream)")
         ResponseUDP.close()
 
     def _IsDisplayUp(self):
@@ -193,7 +193,7 @@ class DisplayHandler(Module):
                 ResponseUDP.close()
                 return False
         except:
-            print("No answer, display is down")
+            self.LogWarning("No answer, display is down")
             ResponseUDP.close()
             return False
 
@@ -216,11 +216,11 @@ class DisplayHandler(Module):
             data_raw, addr = ResponseUDP.recvfrom(1064)
             data = cPickle.loads(data_raw)
             if data['id'] == id_random and data['answer'] == 'socketdestroyed':
-                print("Destroyed socket {0}".format(self.Socket))
+                self.Log("Destroyed socket {0}".format(self.Socket))
             else:
-                print("Could not destroy socket {0}".format(self.Socket))
+                self.LogWarning("Could not destroy socket {0}".format(self.Socket))
         except:
-            print("Display seems down (DestroySocket)")
+            self.LogWarning("Display seems down (DestroySocket)")
         ResponseUDP.close()
 
     def _GetDisplaySocket(self):
@@ -248,12 +248,12 @@ class DisplayHandler(Module):
             data = cPickle.loads(data_raw)
             if data['id'] == id_random:
                 if data['answer'] == 'socketexists':
-                    print("Socket refused")
+                    self.LogWarning("Socket refused")
                 else:
                     self.Socket = data['answer']
-                    print("Got socket {0}".format(self.Socket))
+                    self.Log("Got socket {0}".format(self.Socket))
             else:
-                print("Socket refused")
+                self.LogWarning("Socket refused")
         except:
-            print("Display seems down (GetDisplaySocket)")
+            self.LogWarning("Display seems down (GetDisplaySocket)")
         ResponseUDP.close()

@@ -11,7 +11,7 @@ from Framework import Module, TrackerEvent
 import pathos.multiprocessing as mp
 from functools import partial
 
-class SpeedTracker(Module):
+class TrackerTRS(Module):
     _STATUS_DEAD = 0
     _STATUS_IDLE = 1
     _STATUS_STABILIZING = 2
@@ -32,16 +32,16 @@ class SpeedTracker(Module):
 
         self._TrackerStopIfAllDead = True                                           # Bool. Stops stream if all trackers die. Overrided if _DetectorAutoRestart is TRUE. Default : True
 
-        self._DetectorPointsGridMax = (10, 8)                                       # (Int, Int). Reference grid to place trackers, capping the discrete grid made by dividing the screen with _DetectorDefaultWindowsLength. Default : (10,8), i.e 80 trackers
-        self._DetectorDefaultWindowsLength = 20                                     # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
-        self._DetectorMinRelativeStartActivity = 3.                                 # Float. Activity of a tracker needed to activate, divided by _DetectorDefaultWindowsLength. Low values are noise sensible, while high value leave tracker in IDLE state. Default : 3.
+        self._DetectorPointsGridMax = (10, 8)                                       # (Int, Int). Reference grid to place trackers, capping the discrete grid made by dividing the screen with _TrackerDiameter. Default : (10,8), i.e 80 trackers
+        self._DetectorMinRelativeStartActivity = 3.                                 # Float. Activity of a tracker needed to activate, divided by _TrackerDiameter. Low values are noise sensible, while high value leave tracker in IDLE state. Default : 3.
         self._DetectorAutoRestart = True                                            # Bool. Restarts or not a tracker when another dissapears. If True, overrides _TrackerStopIfAllDead to False. Default : True.
 
-        self._TrackerSingleTrackerPoint = False                                     # Bool. If TRUE, limits an event to be used only by one tracker. This may allow for tracker not to stack on the same spot. In practise, leaves trackers unstables. Default : False
+        self._TrackerSingleTrackerPoint = False                                     # Bool. If TRUE, limits an event to be used only by one tracker. This may allow for tracker not to stack on the same spot. In practise, makes trackers unstables. Default : False
 
+        self._TrackerDiameter = 20                                                  # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
         self._TrackerTimeConstantRatioRemoval = 4.                                  # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
         self._DetectorDefaultSpeedTrigger = 5.                                      # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
-        self._TrackerMinDeathActivity = 0.7                                         # Float. Low boundary for a tracker to survive divided by _DetectorDefaultWindowsLength. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
+        self._TrackerMinDeathActivity = 0.7                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
         self._TrackerAccelerationFactor = 1.2                                       # Float. Acceleration factor for speed correction. Default : 1.2
@@ -52,14 +52,12 @@ class SpeedTracker(Module):
         self._MinConsideredNeighbours = 4                                           # Int. Minimum number of considered events in the simple flow computation. Lower values allow for more events to be used in the correction, but lower the correction quality. Default : 4
 
         self._TrackerUsePositionMean = True                                         # Bool. Activate partial recentering of features in the center of the window. Can incrase stability. Default : True
-        self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _DetectorDefaultWindowsLength. Default : 0.3
+        self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
         self._TrackerMeanPositionAccelerationFactor = 1.2                           # Float. Amount of correction due to recentering process. Default : 1.2
 
-        self._CorrectAxialRotation = True                                           # Bool. Activates axial rotation correction algorithm. Experimental. Default : true
-        self._MinRotCorrectionSizeRatio2 = 0.                                   # Float. Minimum squared ratio to window size for which we can decently compute the rotational error. Default : 0.25
         self._TrackerLockedRotModFactor = 1.                                        # Float. Displacement factor for rotation correction when locked. Default : 1.
-        self._TrackerLockedRotModDisplacementActivityPower = 1.                    # Float. Exponent of the activity power of the activity used for the locked tracker rotation correction. Default : 0.2
-        self._TrackerLockedRotActivityPower = 1.                                      # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
+        self._TrackerLockedRotModDisplacementActivityPower = 1.                     # Float. Exponent of the activity power of the activity used for the locked tracker rotation correction. Default : 0.2
+        self._TrackerLockedRotActivityPower = 1.                                    # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
 
         self._TrackerConvergenceThreshold = 0.2                                     # Float. Amount of correction relative to activity allowing for a converged feature. Default : 0.2
         self._TrackerConvergenceHysteresis = 0.1                                    # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.1
@@ -72,7 +70,7 @@ class SpeedTracker(Module):
 
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
         self._TrackerLockingMaxRecoveryBuffer = 100                                 # Int. Size of the buffer storing events while locked, used in case of feature loss. Greater values increase computationnal cost. Default : 100
-        self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _DetectorDefaultWindowsLength. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
+        self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
         self._TrackerLockedPosModFactor = 1.                                        # Float. Displacement factor for position correction when locked. Default : 1.
         self._TrackerLockedRelativeCorrectionsFailures = 0.6                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
         self._TrackerLockedPosModDisplacementActivityPower = 0.2                    # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
@@ -103,8 +101,8 @@ class SpeedTracker(Module):
         self.StartTimes = []
         self.DeathTimes = []
 
-        d_x = self._DetectorDefaultWindowsLength
-        d_y = self._DetectorDefaultWindowsLength
+        d_x = self._TrackerDiameter
+        d_y = self._TrackerDiameter
         N_X = L_X / d_x
         N_Y = L_Y / d_y
 
@@ -134,70 +132,13 @@ class SpeedTracker(Module):
             self._AddTracker(InitialPosition)
 
         self.LastTsSnap = -np.inf
-        self.TrackersPositionsHistory = []
-        self.TrackersRotationsHistory = []
-        self.TrackersSpeedsHistory = []
-        self.TrackersRotSpeedsHistory = []
-        self.TrackersPositionsHistoryTs = []
-        self.TrackersAverageInternalPositions = []
-        self.TrackersActivitiesHistory = []
-        self.TrackersSpeedErrorsHistory = []
-        self.TrackersRotSpeedErrorsHistory = []
-        self.TrackersPositionErrorsHistory = []
-        self.TrackersScalarCorrectionValues = []
-        self.TrackersVectorialCorrectionValues = []
-        self.TrackersScalarCorrectionActivities = []
-        self.TrackersApertureScalarEstimationByDeltas = []
-        self.TrackersApertureScalarEstimationBySpeeds = []
-        self.TrackersApertureVectorEstimationBySpeeds = []
-        self.TrackersAverageOrientations = []
-        self.TrackersStatuses = []
 
-        self._DetectorMinActivityForStart = self._DetectorDefaultWindowsLength * self._DetectorMinRelativeStartActivity
+        self._DetectorMinActivityForStart = self._TrackerDiameter * self._DetectorMinRelativeStartActivity
 
         self.Plotter = Plotter(self)
         self.LocksSubscribers = [self.FeatureManager.AddLock]
 
         return True
-
-    def SaveData(self, ResultsFolder = '/home/dardelet/Data/Results/'):
-        StreamName = os.path.abspath(self.__Framework__._GetStreamFormattedName(self))
-        DataDict = {'streamfilename':StreamName}
-        FileName = ResultsFolder + '_'.join(StreamName.split('.')[0].split('/')[-2:])+'.json'
-        ans = input('Save data in {0} ? [Y/n]'.format(FileName))
-        if 'n' in ans.lower():
-            self.LogWarning("Aborted")
-            return None
-        DataDict['timestamps_doc'] = 'Timestamp of data saved, in seconds (float)'
-        DataDict['timestamps'] = list(self.TrackersPositionsHistoryTs)
-
-        DataDict['trackers_props_doc'] = 'Per tracker : First and Last items of available timestamps for this tracker, plus a list of data. Each element of the list contains a tuple of (px, py, vx, vy, status, prop)'
-        DataDict['trackers_props'] = []
-        for TrackerID in range(len(self.Trackers)):
-            DataDict['trackers_props'] += [[]]
-            for SnapID in range(len(self.TrackersPositionsHistoryTs)):
-                if TrackerID >= len(self.TrackersPositionsHistory[SnapID]):
-                    continue
-                else:
-                    if len(DataDict['trackers_props'][-1]) == 0:
-                        DataDict['trackers_props'][-1] += [SnapID, len(self.TrackersPositionsHistoryTs)-1, []]
-                    if self.TrackersStatuses[SnapID][TrackerID][0] != self._STATUS_DEAD:
-                        #print DataDict['trackers_props'][-1]
-                        #print SnapID, TrackerID
-                        #print len(self.TrackersPositionsHistory), len(self.TrackersPositionsHistory[SnapID]), len(self.TrackersSpeedsHistory), len(self.TrackersSpeedsHistory[SnapID]), len(self.TrackersStatuses), len(self.TrackersStatuses[SnapID])
-                        DataDict['trackers_props'][-1][2] += [self.TrackersPositionsHistory[SnapID][TrackerID].tolist() + self.TrackersSpeedsHistory[SnapID][TrackerID].tolist() + list(self.TrackersStatuses[SnapID][TrackerID])]
-                    else:
-                        DataDict['trackers_props'][-1][1] = SnapID - 1
-                        break
-
-        DataDict['center_point_props_doc'] = 'List of data for center point. Each element of the list contains a tuple of (px, py, rotation, sscaling)'
-        DataDict['center_point_props'] = []
-        for SnapID in range(len(self.TrackersPositionsHistoryTs)):
-            DataDict['center_point_props'] += [[self.FeatureManager.TranslationHistory[SnapID][0], self.FeatureManager.TranslationHistory[SnapID][1], self.FeatureManager.RotationHistory[SnapID], self.FeatureManager.ScalingHistory[SnapID]]]
-        json_file = open(FileName,"wb")
-        pickle.dump(DataDict, json_file)
-        json_file.close()
-        self.Log("Data saved", 3)
 
     def _OnEventModule(self, event):
         UpdateEvent = False
@@ -219,52 +160,6 @@ class SpeedTracker(Module):
 
         if UpdateEvent:
             self.LastTsSnap = event.timestamp
-            self.TrackersPositionsHistory += [[]]
-            self.TrackersRotationsHistory += [[]]
-            self.TrackersSpeedsHistory += [[]]
-            self.TrackersRotSpeedsHistory += [[]]
-            self.TrackersActivitiesHistory += [[]]
-            self.TrackersSpeedErrorsHistory += [[]]
-            self.TrackersRotSpeedErrorsHistory += [[]]
-            self.TrackersPositionErrorsHistory += [[]]
-            self.TrackersPositionsHistoryTs += [event.timestamp]
-            self.TrackersScalarCorrectionValues += [[]]
-            self.TrackersVectorialCorrectionValues += [[]]
-            self.TrackersScalarCorrectionActivities += [[]]
-            self.TrackersApertureScalarEstimationByDeltas += [[]]
-            self.TrackersApertureScalarEstimationBySpeeds += [[]]
-            self.TrackersApertureVectorEstimationBySpeeds += [[]]
-            self.TrackersAverageInternalPositions += [[]]
-            self.TrackersAverageOrientations += [[]]
-            self.TrackersStatuses += [[]]
-            for Tracker in self.Trackers:
-                self.TrackersPositionsHistory[-1] += [np.array(Tracker.Position)]
-                self.TrackersRotationsHistory[-1] += [np.array(Tracker.Rotation)]
-                self.TrackersSpeedsHistory[-1] += [np.array(Tracker.Speed)]
-                self.TrackersRotSpeedsHistory[-1] += [np.array(Tracker.RotSpeed)]
-                self.TrackersActivitiesHistory[-1] += [Tracker.Activity]
-                self.TrackersSpeedErrorsHistory[-1] += [Tracker.SpeedError]
-                self.TrackersRotSpeedErrorsHistory[-1] += [Tracker.RotSpeedError]
-                #self.TrackersPositionErrorsHistory[-1] += [Tracker.PositionError]
-                self.TrackersScalarCorrectionValues[-1] += [Tracker.ScalarCorrectionValue]
-                self.TrackersVectorialCorrectionValues[-1] += [Tracker.VectorialCorrectionValue]
-                self.TrackersScalarCorrectionActivities[-1] += [Tracker.ScalarCorrectionActivity]
-                self.TrackersApertureScalarEstimationByDeltas[-1] += [Tracker.ApertureScalarEstimationByDelta]
-                self.TrackersApertureScalarEstimationBySpeeds[-1] += [Tracker.ApertureScalarEstimationBySpeed]
-                self.TrackersApertureVectorEstimationBySpeeds[-1] += [np.array(Tracker.ApertureVectorEstimationBySpeed)]
-                if Tracker.Activity > 0:
-                    self.TrackersAverageInternalPositions[-1] += [np.array(Tracker.MeanPositionSummed / Tracker.Activity)]
-                    self.TrackersAverageOrientations[-1] += [np.array(Tracker.AverageOrientation / Tracker.Activity)]
-                else:
-                    self.TrackersAverageInternalPositions[-1] += [np.array([0., 0.])]
-                    self.TrackersAverageOrientations[-1] += [np.array([0., 0.])]
-                SavedStatus = [Tracker.Status, self._PROPERTY_NONE]
-                if Tracker.Lock:
-                    SavedStatus[1] = self._PROPERTY_LOCKED
-                elif Tracker.ApertureIssue:
-                    SavedStatus[1] = self._PROPERTY_APERTURE
-                self.TrackersStatuses[-1] += [tuple(SavedStatus)]
-            self.FeatureManager.GetSnapshot(event.timestamp)
             self._LinkedMemory.GetSnapshot()
 
         if self.NewTrackersAsked:
@@ -276,14 +171,14 @@ class SpeedTracker(Module):
             
         return event
 
-    def OnTrackerLock(self, Tracker):
+    def _OnTrackerLock(self, Tracker):
         for SubscriberMethod in self.LocksSubscribers:
             SubscriberMethod(Tracker)
 
     def AddLocksSubscriber(self, ListenerMethod):
         self.LocksSubscribers += [ListenerMethod]
 
-    def KillTracker(self, Tracker, event):
+    def _KillTracker(self, Tracker, event):
         Tracker.Status = self._STATUS_DEAD
         self.IsAlive[Tracker.ID] = False
         self.DeathTimes[Tracker.ID] = event.timestamp
@@ -332,10 +227,148 @@ class LockClass:
         self.Events = Events
         self.ReleaseTime = None
 
+class FlowEstimator:
+    def __init__(self):
+        # Hidden variables are the sums. Displayed variables are the weights sum, or the averaged variables
+
+        self.LastUpdate = -np.inf
+        self._UpToDateMatrix = False
+        self.W = 0.
+        self._M = np.zeros((4,4))
+        self._InvM = np.zeros((4,4))
+
+        self._Es = np.array([0., 0., 0., 0.]) # Estimator in speed
+        self._Ed = np.array([0., 0., 0., 0.]) # Estimator in displacement
+
+        self._x = self._y = 0.
+        self._r = 0 # This aditionnal variable is useful to recover the time constant. We put it here for simplicity
+
+        self._Sc  = 0. # use W for _Ss
+        self._Sxc = self._Sxs = 0.
+        self._Syc = self._Sys = 0.
+
+        self._Rcs = 0.
+        self._Rxcs = self._Rycs = 0.
+        self._Rxcc = 0. # use _x for _Rxss
+        self._Rycc = 0. # use _y for _Ryss
+
+        self._Rxxcs = self._Ryycs = 0.
+        self._Rxycs = self._Rxycc = self._Rxyss = 0.
+
+    def _RecoverGeneralData(self):
+        self.x = self._x / self.W
+        self.y = self._y / self.W
+        self.r = self._r / self.W
+
+    def AddData(self, Event, Flow, Displacement, Tau):
+        F2 = Flow**2
+        N2 = F2.sum()
+        if N2 == 0:
+            return
+
+        self._Decay(Event.timestamp, Tau)
+
+        x, y = Event.location
+        xx, yy = x**2, y**2
+        xy = x*y
+
+        N = np.sqrt(N2)
+        c , s  = Flow/N
+        cc, ss = F2/N2
+        cs = c*s
+
+        self.W += 1
+        self._Es += np.array([Flow[0], Flow[1], Flow[1]*x-Flow[0]*y, Flow[0]*x+Flow[1]*y])
+        self._Ed += np.array([Displacement[0], Displacement[1], Displacement[1]*x-Displacement[0]*y, Displacement[0]*x+Displacement[1]*y])
+
+        self._x += x
+        self._y += y
+        self._r += np.sqrt(xx+yy)
+
+        self._Sc += cc
+        self._Sxc += xx*cc
+        self._Sxs += xx*ss
+        self._Syc += yy*cc
+        self._Sys += yy*ss
+
+        self._Rcs  += cs
+        self._Rxcs += x*cs
+        self._Rycs += y*cs
+        self._Rxcc += x*cc
+        self._Rycc += y*cc
+
+        self._Rxxcs += xx*cs
+        self._Ryycs += yy*cs
+        self._Rxycs += xy*cs
+        self._Rxycc += xy*cc
+        self._Rxyss += xy*ss
+
+        self.UpToDateMatrix = False
+
+    def _Decay(self, newT, Tau):
+        DeltaUpdate = newT - self.LastUpdate
+        self.LastUpdate = newT
+        Decay = np.e**(-DeltaUpdate/Tau)
+
+        self.W *= Decay
+
+        self._Es *= Decay
+        self._Ed *= Decay
+
+        self._x *= Decay
+        self._y *= Decay
+        self._r *= Decay
+
+        self._Sc  *= Decay
+        self._Sxc *= Decay
+        self._Sxs *= Decay
+        self._Syc *= Decay
+        self._Sys *= Decay
+
+        self._Rcs  *= Decay
+        self._Rxcs *= Decay
+        self._Rycs *= Decay
+        self._Rxcc *= Decay
+        self._Rycc *= Decay
+
+        self._Rxxcs *= Decay
+        self._Ryycs *= Decay
+        self._Rxycs *= Decay
+        self._Rxycc *= Decay
+        self._Rxyss *= Decay
+
+    def _GetInverseMatrix(self):
+        if self._UpToDateMatrix:
+            return
+        self._M[0,0] = self._Sc
+        self._M[1,1] = self.W - self._Sc
+        self._M[2,2] = self._Sxs + self._Syc - 2*self._Rxycs
+        self._M[3,3] = self._Sxc + self._Sys + 2*self._Rxycs
+
+        self._M[1,0] = self._M[0,1] = self._Rcs
+        self._M[2,0] = self._M[0,2] = self._Rxcs - self._Rycc
+        self._M[3,0] = self._M[0,3] = self._Rxcc + self._Rycs
+
+        self._M[2,1] = self._M[1,2] = (self._x - self._Rxcc) - self._Rycs
+        self._M[3,1] = self._M[1,3] = self._Rxcs + (self._y - self._Rycc)
+        self._M[3,2] = self._M[2,3] = self._Rxxcs + self._Rxyss - self._Rxycc - self._Ryycs
+        
+        self._InvM = np.linalg.inv(self._M)
+        self._UpToDateMatrix = True
+
+    def GetSpeed(self):
+        self._GetInverseMatrix()
+        return self._InvM.dot(self._Es)
+    def GetDisplacement(self):
+        self._GetInverseMatrix()
+        return self._InvM.dot(self._Ed)
+
 class TrackerClass:
     def __init__(self, TrackerManager, ID, InitialPosition):
         self.TM = TrackerManager
         self.ID = ID
+
+        self.Estimator = FlowEstimator()
 
         self.Status = self.TM._STATUS_IDLE
         # Non status properties :
@@ -343,14 +376,11 @@ class TrackerClass:
         self.Lock = None
         self.LocksSaves = []
 
-        self.Position = np.array(InitialPosition, dtype = float)
-        self.Rotation = 0.
-        self.HalfSize = self.TM._DetectorDefaultWindowsLength / 2
-        self.HS2 = self.HalfSize**2
-
-        self.Speed = np.array([0., 0.])
-        self.RotSpeed = 0.
-        self.MeanPositionSummed = np.array([0., 0.])
+        self.Position = np.array(list(InitialPosition) + [0., 1.], dtype = float) # We now include all 4 parameters of the tracker in a single variable. Easier resolution and code compacity
+        self.Speed    = np.array([0., 0., 0., 0.], dtype = float)
+        # self.Position = [tx, ty, theta, s]
+        self.Radius = self.TM._TrackerDiameter / 2
+        self.SquaredRadius = self.HalfSize**2
 
         self.TimeConstant = self.TM._TrackerDefaultTimeConstant
         
@@ -409,12 +439,12 @@ class TrackerClass:
         if (self.Position < self.HalfSize).any() or (self.Position >= np.array(self.TM._LinkedMemory.STContext.shape[:2]) - self.HalfSize).any(): # out of bounds
             if self.Lock:
                 self.Unlock('out of bounds')
-            self.TM.KillTracker(self, event)
+            self.TM._KillTracker(self, event)
             return False
-        if self.Activity < self.TM._DetectorDefaultWindowsLength * self.TM._TrackerMinDeathActivity: # Activity remaining too low
+        if self.Activity < self.TM._TrackerDiameter * self.TM._TrackerMinDeathActivity: # Activity remaining too low
             if self.Lock:
                 self.Unlock('low activity')
-            self.TM.KillTracker(self, event)
+            self.TM._KillTracker(self, event)
             return False
 
         return True
@@ -533,7 +563,7 @@ class TrackerClass:
 
         Xm = (self.MeanPositionSummed / self.Activity)
         if self.TM._TrackerUsePositionMean and not self.Lock:
-            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._DetectorDefaultWindowsLength
+            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._TrackerDiameter
             if (DiffaXm > 0).any():
                 self.Position += self.TM._TrackerMeanPositionAccelerationFactor * DiffaXm * np.sign(Xm) / self.Activity
 
@@ -686,7 +716,7 @@ class TrackerClass:
 
         Xm = (self.MeanPositionSummed / self.Activity)
         if self.TM._TrackerUsePositionMean and not self.Lock:
-            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._DetectorDefaultWindowsLength
+            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._TrackerDiameter
             if (DiffaXm > 0).any():
                 self.Position += self.TM._TrackerMeanPositionAccelerationFactor * DiffaXm * np.sign(Xm) / self.Activity
 
@@ -746,7 +776,7 @@ class TrackerClass:
         CanBeLocked = True
         if self.ApertureIssue:
             CanBeLocked = False
-        elif self.Activity > self.TM._TrackerLockMaxRelativeActivity * self.TM._DetectorDefaultWindowsLength:
+        elif self.Activity > self.TM._TrackerLockMaxRelativeActivity * self.TM._TrackerDiameter:
             CanBeLocked = False
             Reason = "excessive absolute activity"
         elif self.ScalarCorrectionActivity < self.TM._TrackerLockedRelativeCorrectionsFailures * self.Activity:
@@ -770,7 +800,7 @@ class TrackerClass:
                 self.Lock = LockClass(t, self.Activity, list(self.ProjectedEvents))
                 self.LocksSaves += [LockClass(t, self.Activity, list(self.ProjectedEvents))]
                 
-                self.TM.OnTrackerLock(self)
+                self.TM._OnTrackerLock(self)
 
                 self.TM.Log("Tracker {0} has locked".format(self.ID))
                 return None # We assume we have checked everything here
@@ -820,314 +850,6 @@ class TrackerClass:
         SpeedError = DeltaP / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaP
 
-class TrackerMatcher(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
-        '''
-        Class to match trackers from SpeedTracker class onto another camera
-        '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-
-        self.__ReferencesAsked__ = ['CameraTracker', 'OppositeMemory']
-        self.__Type__ = 'Computation'
-
-        self._MaxEpipolarPixelsBonusDistance = 0.
-        self._MaxTravelDistanceComparison = 2.
-        self._MaxTrackerEventsToRadiusRatio = 2.
-
-        self._NAnglesSearched = 1
-        self._MaxAngleAmplitude = np.pi/4
-        self._NScalesSearched = 1
-        self._MaxScaling = 1.5
-
-    def _InitializeModule(self, **kwargs):
-        self._CameraTracker = self.__Framework__.Tools[self.__CreationReferences__['CameraTracker']]
-        self._CameraTracker.AddLocksSubscriber(self.OnLockListener)
-        self._OppositeMemory = self.__Framework__.Tools[self.__CreationReferences__['OppositeMemory']]
-        self.__CameraIndexRestriction__ = self._OppositeMemory.__CameraIndexRestriction__
-
-        self.EpipolarEstimator = EpipolarEstimatorClass(self._OppositeMemory.STContext.shape[:2])
-
-        self.TrackersBeingSearched = []
-        self.TrackersEventsIndexes = {}
-        self.TrackersMatchMaps = {}
-        self.TrackersStartPositions = {}
-        self.TrackersEventsArray = {}
-
-        self.TrackersRSedEventsArray = {}
-        self.TrackersRSedEventsIndexes = {}
-        self.TrackersRSedEventsAnglesIndexes = {}
-        self.TrackersRSedEventsScalesIndexes = {}
-        
-        self.MatchedTrackers = {}
-        self.MissedTrackers = []
-
-        self._NAnglesSearched = self._NAnglesSearched | 0B1
-        if self._NAnglesSearched > 1:
-            self.SearchedAngles = np.linspace(-self._MaxAngleAmplitude, self._MaxAngleAmplitude, self._NAnglesSearched)
-        else:
-            self.SearchedAngles = np.array([0.])
-        self.SearchedRotationMultipliers = [np.array([[np.cos(Angle), -np.sin(Angle)], [np.sin(Angle), np.cos(Angle)]]) for Angle in self.SearchedAngles]
-
-        # We force 1 scaling factor to appear
-        self._NScalesSearched = self._NScalesSearched | 0B1 
-        if self._NScalesSearched > 1:
-            self.SearchedScales = self._MaxScaling ** np.linspace(-1, 1, self._NScalesSearched)
-        else:
-            self.SearchedScales = np.array([1.])
-
-        #self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self.EpipolarEstimator.EpipolarDistance # Sqrt for diagonal of the square patch
-        self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self._MaxEpipolarPixelsBonusDistance # Sqrt for diagonal of the square patch
-        return True
-
-    def _OnEventModule(self, event):
-        self.RunComparison(event)
-
-        return event
-
-    def RunComparison(self, event):
-        if 2 * min(event.location.min(), (self._OppositeMemory.STContext.shape[:2] - event.location).min()) < self._CameraTracker._DetectorDefaultWindowsLength: # We avoid sides or it will get messy
-            return
-        Point = np.array([event.location[0], event.location[1], 1.])
-
-        for Tracker in list(self.TrackersBeingSearched):
-            if np.linalg.norm(Tracker.Position - self.TrackersStartPositions[Tracker.ID]) > self._MaxTravelDistanceComparison:
-                self.UnsubscribeTracker(Tracker)
-                continue
-            if 2 * min(Tracker.Position.min(), (self._OppositeMemory.STContext.shape[:2] - Tracker.Position).min()) < self._CameraTracker._DetectorDefaultWindowsLength: # If the tracker itself is too close from edges
-                self.UnsubscribeTracker(Tracker)
-                continue
-
-            EpiLine = self.ComputeEpipolarLine(Tracker.Position)
-            Distance = abs((Point * EpiLine).sum())
-            if Distance > self.MaxEpipolarPixelsDistance:
-                continue
-
-            Offsets = (event.location - self.TrackersRSedEventsArray[Tracker.ID])
-            xs = Offsets[:,0]
-            xs[np.where(xs < 0)] = 0
-            xs[np.where(xs >= self._OppositeMemory.STContext.shape[0])] = 0
-            ys = Offsets[:,1]
-            ys[np.where(ys < 0)] = 0
-            ys[np.where(ys >= self._OppositeMemory.STContext.shape[1])] = 0 # Unsatisfying patch. Much change that
-            self.TrackersMatchMaps[Tracker.ID][xs, ys, self.TrackersRSedEventsIndexes[Tracker.ID], self.TrackersRSedEventsAnglesIndexes[Tracker.ID], self.TrackersRSedEventsScalesIndexes[Tracker.ID]] = True
-            
-    def UnsubscribeTracker(self, Tracker):
-        #self.MatchedTrackers[Tracker.ID] = {'map': self.TrackersMatchMaps[Tracker.ID].sum(axis = 2), 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate}
-        Map = self.TrackersMatchMaps[Tracker.ID]
-        Map[0,0,:,:,:] = 0 # Cf patch
-        SummedMap = Map.sum(axis = 2)
-        BestPositionsIn4DSpace = np.where(SummedMap == SummedMap.max())
-        xs, ys, thetas, scales = BestPositionsIn4DSpace
-        MaxConfidence = SummedMap.max() / (self.TrackersEventsIndexes[Tracker.ID][-1]+1)
-
-        self.EpipolarEstimator.AddMatch(X = np.array(Tracker.Position), Y = np.array([xs[0], ys[0]]), Confidence = MaxConfidence)
-        #self.MaxEpipolarPixelsDistance = self._CameraTracker._DetectorDefaultWindowsLength / np.sqrt(2) + self.EpipolarEstimator.EpipolarDistance
-
-        self.MatchedTrackers[Tracker.ID] = {'matches': BestPositionsIn4DSpace, 'tracker_position': np.array(Tracker.Position), 'tracker_last_update': Tracker.LastUpdate, 'map': Map}
-        print("Matched tracker {0} up to {1:.1f}%".format(Tracker.ID, 100 * MaxConfidence))
-        del self.TrackersEventsIndexes[Tracker.ID]
-        del self.TrackersMatchMaps[Tracker.ID]
-        del self.TrackersStartPositions[Tracker.ID]
-        del self.TrackersEventsArray[Tracker.ID]
-
-        del self.TrackersRSedEventsArray[Tracker.ID]
-        del self.TrackersRSedEventsIndexes[Tracker.ID]
-        del self.TrackersRSedEventsAnglesIndexes[Tracker.ID]
-        del self.TrackersRSedEventsScalesIndexes[Tracker.ID]
-        self.TrackersBeingSearched.remove(Tracker)
-
-    def OnLockListener(self, Tracker):
-        if not Tracker in self.TrackersBeingSearched: # In case a release and re-lock happend before any match
-            self.TrackersBeingSearched += [Tracker]
-        NEventsCompared = min(len(Tracker.Lock.Events), int(Tracker.HalfSize * self._MaxTrackerEventsToRadiusRatio))
-        self.TrackersEventsIndexes[Tracker.ID] = np.arange(0, NEventsCompared, 1)
-        self.TrackersMatchMaps[Tracker.ID] = np.zeros(self._OppositeMemory.STContext.shape[:2] + (NEventsCompared, self._NAnglesSearched, self._NScalesSearched), dtype = bool)
-        self.TrackersStartPositions[Tracker.ID] = np.array(Tracker.Position)
-        self.TrackersEventsArray[Tracker.ID] = np.array(Tracker.Lock.Events[-NEventsCompared:])[:,1:] # Potentially need offset of 0.5
-
-        self.TrackersRSedEventsArray[Tracker.ID] = np.zeros((NEventsCompared * self._NScalesSearched * self._NAnglesSearched, 2), dtype = np.int16)
-        self.TrackersRSedEventsIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int16)
-        self.TrackersRSedEventsAnglesIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int8)
-        self.TrackersRSedEventsScalesIndexes[Tracker.ID] = np.zeros(NEventsCompared * self._NScalesSearched * self._NAnglesSearched, dtype = np.int8)
-        LocalIndexes = np.zeros((NEventsCompared, 3))
-
-        for nAngle, Multiplier in enumerate(self.SearchedRotationMultipliers):
-            TmpLocations = np.array([Multiplier.dot(Vector[1:]) for Vector in Tracker.Lock.Events[:NEventsCompared]])
-            for nScaling, Scaling in enumerate(self.SearchedScales):
-                StartIndex = (nAngle * self._NScalesSearched + nScaling) * NEventsCompared
-                self.TrackersRSedEventsArray[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = (TmpLocations * Scaling).astype(np.int16)
-
-                self.TrackersRSedEventsIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int16(self.TrackersEventsIndexes[Tracker.ID])
-                self.TrackersRSedEventsAnglesIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int8(nAngle)
-                self.TrackersRSedEventsScalesIndexes[Tracker.ID][StartIndex : StartIndex + NEventsCompared] = np.int8(nScaling)
-
-    def RunComparisonTS(self, event):
-        UsableRadius = int(min(self._CameraTracker._DetectorDefaultWindowsLength / 2, min(event.location.min(), (np.array(self._OppositeMemory.STContext.shape[:2]) - event.location).min() - 1)))
-        if UsableRadius < self._MinimumComparisonRadius:
-            return
-        Point = np.array([event.location[0], event.location[1], 1.])
-
-        EventPatch = None
-        for Tracker in list(self.TrackersBeingSearched):
-            if np.linalg.norm(Tracker.Position - self.TrackersStartPositions[Tracker.ID]) > self._MaxTravelDistanceComparison:
-                self.UnsubscribeTracker(Tracker)
-                continue
-
-            EpiLine = self.ComputeEpipolarLine(Tracker.Position)
-            Distance = abs((Point * EpiLine).sum())
-            if Distance > self._MaxEpipolarPixelsDistance:
-                continue
-
-            if EventPatch is None:
-                EventPatch = self._OppositeMemory.GetPatch(event.location[0], event.location[1], UsableRadius, UsableRadius).max(axis = 2) - event.timestamp
-            Tau = Tracker.TimeConstant
-            TrackerPatch = self._CameraTracker._LinkedMemory.GetPatch(int(Tracker.Position[0]), int(Tracker.Position[1]), UsableRadius, UsableRadius).max(axis = 2) - Tracker.LastUpdate
-            TrackerST = np.e**(TrackerPatch / Tau)
-            EventST = np.e**(EventPatch / Tau)
-
-            MinorEpipolarAxis = (abs(EpiLine[:-1])).argmax()
-            TrackerActivity = TrackerST.sum(axis = MinorEpipolarAxis)
-            EventActivity = EventST.sum(axis = MinorEpipolarAxis)
-
-            CosineSimilarity = (EventActivity * TrackerActivity).sum() / (np.linalg.norm(TrackerActivity) * np.linalg.norm(EventActivity))
-
-            if CosineSimilarity > self.TrackersBestMatches[Tracker.ID][0]:
-                self.TrackersBestMatches[Tracker.ID] = (CosineSimilarity, event.location, event.timestamp)
-                if CosineSimilarity >= self._AutoMatchValue:
-                    self.UnsubscribeTracker(Tracker)
-
-        return 
-
-    def UnsubscribeTrackerTS(self, Tracker): #TODO
-        if self.TrackersBestMatches[Tracker.ID][0] >= self._MinimalMatchValue:
-            self.MatchedTrackers[Tracker.ID] = self.TrackersBestMatches[Tracker.ID]
-            print("Found match for tracker {0}, currently at {1} with event at {2} with {3:.1f} match".format(Tracker.ID, Tracker.Position, self.MatchedTrackers[Tracker.ID][1], self.TrackersBestMatches[Tracker.ID][0]*100))
-        else:
-            self.MissedTrackers += [Tracker.ID]
-            print("Canceling matching for tracker {0}, best match was {1}".format(Tracker.ID, self.TrackersBestMatches[Tracker.ID][0]))
-        del self.TrackersBestMatches[Tracker.ID]
-        del self.TrackersStartPositions[Tracker.ID]
-        self.TrackersBeingSearched.remove(Tracker)
-
-    def ComputeEpipolarLine(self, Location):
-        # Normalize two first digits
-        return np.array([0., 1., - Location[1]]) # Default parallel calibrated cameras
-        #return self.EpipolarEstimator.GetEpipolarLine(Location)
-
-class EpipolarEstimatorClass:
-    def __init__(self, ScreenGeometry):
-        self.ScreenGeometry = np.array(ScreenGeometry)
-
-        self.DefaultF = np.array([[0., 0., 0.], [0., 0., -2 / self.ScreenGeometry[1]], [0., 0., 1.]]) / np.linalg.norm(np.array([1., -2 / self.ScreenGeometry[1]]))
-        self._DefaultSecondLambdaTrigger = 0.9
-
-        self._MinimumSmashFactor = 0.1
-
-        self.C = np.identity(9)
-
-        self._OrthogonalizeVectors = True
-        self.SetNormalization('isotropic') # Can be 'isometric' for same scaling for each axis, 'anisometric' for specific scaling along each axis or 'none' for no scaling at all
-
-        self.EpipolarDistance = self.ScreenGeometry[1] / 2
-
-        self._MaxMatchesBuffered = 10 # should be about that, as its the order of degrees of freedom this problem has to solve
-        self.MatchesBuffer = []
-
-        self.ExtractF()
-
-    def SetNormalization(self, Type):
-        self._NormalizationType = Type
-
-        ScreenGeometry = self.ScreenGeometry
-        if self._NormalizationType == 'isotropic':
-            AvgScaling = np.sqrt(ScreenGeometry[0] * ScreenGeometry[1])
-            self.N = 1 / np.array([AvgScaling**2, AvgScaling**2, AvgScaling, AvgScaling**2, AvgScaling**2, AvgScaling, AvgScaling, AvgScaling, 1.])
-
-        elif self._NormalizationType == 'anisotropic':
-            self.N = 1 / np.array([ScreenGeometry[0]**2, ScreenGeometry[0]*ScreenGeometry[1], ScreenGeometry[0], ScreenGeometry[0]*ScreenGeometry[1], ScreenGeometry[1]*ScreenGeometry[1], ScreenGeometry[1], ScreenGeometry[0], ScreenGeometry[1], 1])
-
-        elif self._NormalizationType == 'none':
-            self.N = 1
-
-        else:
-            raise Exception("Wrong normalization type set")
-        self.InvN =  1 / self.N
-
-    def AddMatch(self, X, Y, Confidence):
-        self.MatchesBuffer = [(np.array(X), np.concatenate(( Y, np.array([1]) )) )] + self.MatchesBuffer[:self._MaxMatchesBuffered-1]
-        self.ComputeCurrentDistance() # Puttin g it here allow for a prediction check. If distance doesnt go down now, then the correction is actually necessary
-
-        self.V = np.array([X[0]*Y[0], X[1]*Y[0], Y[0], X[0]*Y[1], X[1]*Y[1], Y[1], X[0], X[1], 1])
-        self.V = self.V / np.linalg.norm(self.V)
-        self.U = self.N * self.V
-        self.U = self.U / np.linalg.norm(self.U)
-
-        if self._OrthogonalizeVectors:
-            self.U = self.C.dot(self.U)
-            Norm = np.linalg.norm(self.U)
-            if Norm == 0:
-                print("Fully smashed vector. Returning as current computation is void")
-                return
-            self.U = self.U / Norm
-
-        # Space stretching solution
-        self.T = np.zeros((9,9))
-        for i in range(9):
-            if i == 0:
-                u = np.array(self.U)
-            else:
-                v = np.zeros(9)
-                v[i] = 1
-                u = np.array(v)
-                for j in range(i):
-                    u = u - (v * self.T[:,j]).sum() * self.T[:,j]
-                u = u / np.linalg.norm(u)
-            self.T[:,i] = u
-        S = np.identity(9)
-        S[0,0] = max(self._MinimumSmashFactor, min(1, self.ConfidenceSmashingFunction(Confidence)))
-
-        #self.M = self.T.T.dot(S.dot(self.T))
-        self.M = self.T.dot(S.dot(self.T.T)) # Correct one considering eigenvectors scalar self.U
-
-        self.C = self.C.dot(self.M)
-
-        self.ExtractF()
-
-    def ConfidenceSmashingFunction(self, Confidence):
-        return 1 - Confidence
-
-    def ExtractF(self): # Also Normalizes C
-        lambdas, vecs = np.linalg.eig(self.C)
-        
-        EigenArgs = np.argsort(abs(lambdas))
-        l1, l2 = np.real(lambdas[EigenArgs[-1]]), np.real(lambdas[EigenArgs[-2]])
-        if l1 == 0:
-            print("Null first eigenvalue. Falling back to default epipolar geometry provided")
-            self.F = np.array(self.DefaultF)
-            return
-        self.C = self.C / l1
-        self.EigenValuesRatio = abs(l2/l1)
-        if self.EigenValuesRatio > self._DefaultSecondLambdaTrigger:
-            print("Excessive second eigenvalue. Falling back to default epipolar geometry provided")
-            self.F = np.array(self.DefaultF)
-            return
-        NewF = (np.real(vecs[:,EigenArgs[-1]]) * self.N).reshape((3,3))
-        NewF = NewF / max(NewF.min(), NewF.max(), key = abs)
-        #self.F = (self.F + NewF)/2 # No need to normalize as eigenvectors are unit long
-        self.F = NewF
-
-    def ComputeCurrentDistance(self):
-        DistanceSum = 0
-        for Xth, Yth in self.MatchesBuffer:
-            YEpiLine = self.GetEpipolarLine(Xth)
-            DistanceSum += abs((Yth * YEpiLine).sum())
-        #self.EpipolarDistance = (self.EpipolarDistance * (self._MaxMatchesBuffered - 1) + DistanceSum / len(self.MatchesBuffer)) / self._MaxMatchesBuffered # Smooth the correction
-        self.EpipolarDistance = (self.EpipolarDistance + DistanceSum / len(self.MatchesBuffer))/2 # Smooth the correction
-
-    def GetEpipolarLine(self, X):
-        Line = self.F.dot(np.concatenate(( X, np.array([1]) )) )
-        return Line / np.linalg.norm(Line[:2])
-
 from pycpd import rigid_registration as registration
 
 class FeatureManagerClass:
@@ -1160,7 +882,6 @@ class FeatureManagerClass:
     def AddLock(self, Tracker):
         self.SpeedsLockVectorsDict[Tracker.ID] = Tracker.Speed
         self.PositionsLockVectorsDict[Tracker.ID] = Tracker.Position
-        #self.FindAssociatedFeatureWith(Tracker)
 
     def RemoveLock(self, Tracker):
         del self.SpeedsLockVectorsDict[Tracker.ID]
@@ -1173,7 +894,7 @@ class FeatureManagerClass:
         CurrentPoints = Tracker.Lock.Events[:,1:]
         CurrentPoints = CurrentPoints - CurrentPoints.mean(axis = 0)
         for Feature in self.Features:
-            if (abs(Feature.CenterRelativePosition - RelativeDistance)).max() <= self.TrackerManager._DetectorDefaultWindowsLength / 2:
+            if (abs(Feature.CenterRelativePosition - RelativeDistance)).max() <= self.TrackerManager._TrackerDiameter / 2:
                 for Tracker, LockIndex in Feature.Trackers:
                     ReferencePoints = Tracker.LockSaves[LockIndex].Events[:,1:]
                     ReferencePoints = ReferencePoints - ReferencePoints.mean(axis = 0)
@@ -1250,7 +971,7 @@ from scipy import misc
 class GTMakerClass:
     def __init__(self, SpeedTracker, LookupRadius = 2):
         self.SpeedTracker = SpeedTracker
-        self.WindowSize = int(SpeedTracker._DetectorDefaultWindowsLength * 1.5)
+        self.WindowSize = int(SpeedTracker._TrackerDiameter * 1.5)
         self.WindowSize -= self.WindowSize%2
         self.LookupRadius = LookupRadius
 
@@ -1519,7 +1240,7 @@ class Plotter:
             else:
                 TrackerLineStyle = self.PropertiesLineStyles[S._PropertiesNames[PropertyValue]]
             try:
-                HalfSize = self.TM._DetectorDefaultWindowsLength / 2
+                HalfSize = self.TM._TrackerDiameter / 2
                 Location = np.array(self.TM.TrackersPositionsHistory[SnapshotNumber][TrackerID])
                 Orientation = self.TM.TrackersRotationsHistory[SnapshotNumber][TrackerID]
                 M = np.array([[np.cos(Orientation), np.sin(Orientation)], [-np.sin(Orientation), np.cos(Orientation)]])
@@ -1771,7 +1492,7 @@ class Plotter:
         ScalarRatiosAx.set_title('Speed error, vectorial and aperture relative scalars in delta (x) and speed (v)')
         ScalarRatiosAx.plot([0., Tracker.PEH[-1][0]], [0, 0], '--k')
         ScalarRatiosAx.plot([0., Tracker.PEH[-1][0]], [100, 100], '--k')
-        DeathValue = S._DetectorDefaultWindowsLength * S._TrackerMinDeathActivity
+        DeathValue = S._TrackerDiameter * S._TrackerMinDeathActivity
         StartValue = S._DetectorMinActivityForStart
         ActivityAx.plot([0., S.DeathTimes[Tracker.ID]], [DeathValue, DeathValue], '--k')
         ActivityAx.plot([0., S.DeathTimes[Tracker.ID]], [StartValue, StartValue], '--k')
@@ -2259,8 +1980,8 @@ class Plotter:
                 axs[1,1].plot(Angles, TrackersAngularVariancesDict[TrackerID_j])
 
                 if AddLines:
-                    PlotLines(LinesDict[TrackerID_i], self.TM._DetectorDefaultWindowsLength, axs[0,0])
-                    PlotLines(LinesDict[TrackerID_j], self.TM._DetectorDefaultWindowsLength, axs[1,0])
+                    PlotLines(LinesDict[TrackerID_i], self.TM._TrackerDiameter, axs[0,0])
+                    PlotLines(LinesDict[TrackerID_j], self.TM._TrackerDiameter, axs[1,0])
 
             if PlotScenes:
                 SnapID_i = ((np.array(self.TM.TrackersPositionsHistoryTs) - self.TM.Trackers[TrackerID_i].LocksSaves[0].Time) > 0).tolist().index(True)
@@ -2273,19 +1994,19 @@ class Plotter:
 
 
     def GetAngularRepartition(self, TrackerID, NLinesHoriz = 10, nReducedPoints = None):
-        dLine = self.TM._DetectorDefaultWindowsLength / float(NLinesHoriz - 1)
+        dLine = self.TM._TrackerDiameter / float(NLinesHoriz - 1)
         NAngles = int(np.pi / (2 * np.arctan(1. / NLinesHoriz)))
         dTheta = np.pi / NAngles
         Angles = [i*dTheta for i in range(NAngles)]
         Lines = []
-        XF = np.array([self.TM._DetectorDefaultWindowsLength/2., self.TM._DetectorDefaultWindowsLength/2.])
+        XF = np.array([self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
         for Angle in Angles:
             if Angle < np.pi/2:
-                X0 = np.array([self.TM._DetectorDefaultWindowsLength/2., -self.TM._DetectorDefaultWindowsLength/2.])
-                XF = np.array([-self.TM._DetectorDefaultWindowsLength/2., self.TM._DetectorDefaultWindowsLength/2.])
+                X0 = np.array([self.TM._TrackerDiameter/2., -self.TM._TrackerDiameter/2.])
+                XF = np.array([-self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
             else:
-                X0 = np.array([self.TM._DetectorDefaultWindowsLength/2., self.TM._DetectorDefaultWindowsLength/2.])
-                XF = np.array([-self.TM._DetectorDefaultWindowsLength/2., -self.TM._DetectorDefaultWindowsLength/2.])
+                X0 = np.array([self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
+                XF = np.array([-self.TM._TrackerDiameter/2., -self.TM._TrackerDiameter/2.])
             X = np.array(X0)
             Lines += [[]]
             n = np.array([-np.sin(Angle), np.cos(Angle)])

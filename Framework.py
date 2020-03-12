@@ -8,10 +8,12 @@ import types
 import copy
 
 from Plotting_methods import *
-
-TypesLimits = {}
+from pydoc import locate
 
 class Framework:
+    _Terminal_Width = 300
+    _Default_Color = '\033[0m'
+    _LogColors = {0:'\033[0m', 1: "\033[1;33;40m", 2: "\033[1;31;40m", 3: "\033[1;32;40m"}
     '''
     Main event-based framework file.
     Each tool is in a  different file, and caan be added through 'Project files', that create the sequence of events processing.
@@ -46,6 +48,7 @@ class Framework:
 
         self.ProjectFile = ProjectFile
         self.Modified = False
+        self._LogType = 'raw'
 
         self.__Type__ = 'Framework'
 
@@ -61,7 +64,12 @@ class Framework:
             self._ProjectRawData = {}
             self._GenerateEmptyProject()
 
+        self.Running = False
+        self.Paused = ''
+
     def Initialize(self, **ArgsDict):
+        self._LogType = 'columns'
+        self._LogInit()
         for tool_name in self.ToolsList:
             ToolArgsDict = {}
             for key, value in ArgsDict.items():
@@ -69,8 +77,11 @@ class Framework:
                     ToolArgsDict['_'+'_'.join(key.split('_')[1:])] = value
             InitializationAnswer = Module.__Initialize__(self.Tools[tool_name], **ToolArgsDict)
             if not InitializationAnswer:
-                print("Tool {0} failed to initialize. Aborting.".format(tool_name))
+                self._Log("Tool {0} failed to initialize. Aborting.".format(tool_name), 2)
                 return False
+        self._Log("Framework initialized", 3, AutoSendIfPaused = False)
+        self._Log("")
+        self._SendLog()
         return True
 
     def _OnClosing(self):
@@ -94,7 +105,7 @@ class Framework:
                     if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
                         Geometry = np.maximum(Geometry, InputTool.Geometry)
                 else:
-                    print("Unable to retreive geometry from input tool {0}, probably due to wrong tool order.".format(InputToolName))
+                    self._Log("Unable to retreive geometry from input tool {0}, possibly due to wrong tool order.".format(InputToolName), 1)
         return Geometry
 
     def _GetStreamFormattedName(self, Tool):
@@ -114,13 +125,18 @@ class Framework:
                     if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
                         StreamsNames += [InputTool.StreamName]
                 else:
-                    print("Unable to retreive geometry from input tool {0}, probably due to wrong tool order.".format(InputToolName))
+                    self._Log("Unable to retreive stream name from input tool {0}, possibly due to wrong tool order.".format(InputToolName), 1)
         return '\n'.join(StreamsNames)
 
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
-    def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, **kwargs):
+    def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, **kwargs):
+        if self._LogType == 'columns':
+            if len(self.ToolsList) > 6:
+                self._LogType = 'raw'
+            else:
+                self._LogInit()
         if StreamName is None:
             N = 0
             StreamName = "DefaultStream_{0}".format(N)
@@ -134,19 +150,19 @@ class Framework:
                     self.CurrentInputStreams[ToolName] = StreamName
             elif type(StreamName) == dict:
                 if len(StreamName) != len(self.CurrentInputStreams):
-                    print("Wrong number of stream names specified :")
-                    print("Framework contains {0} input tools, while {1} tool(s) has been given a file".format(len(self.CurrentInputStreams), len(StreamName)))
+                    self._Log("Wrong number of stream names specified :", 2)
+                    self._Log("Framework contains {0} input tools, while {1} tool(s) has been given a file".format(len(self.CurrentInputStreams), len(StreamName)), 2)
                     return None
                 for key in StreamName.keys():
                     if key not in self.CurrentInputStreams.keys():
-                        print("Wrong input tool key specified in stream names : {0}".format(key))
+                        self._Log("Wrong input tool key specified in stream names : {0}".format(key), 2)
                         return None
                     self.CurrentInputStreams[key] = StreamName[key]
             else:
-                print("Wrong StreamName type. It can be :")
-                print(" - None : Default name is then placed, for None file specific input tools.")
-                print(" - str : The same file is then used for all input tools.")
-                print(" - dict : Dictionnary with input tools names as keys and specified filenames as values")
+                self._Log("Wrong StreamName type. It can be :", 2)
+                self._Log(" - None : Default name is then placed, for None file specific input tools.", 2)
+                self._Log(" - str : The same file is then used for all input tools.", 2)
+                self._Log(" - dict : Dictionnary with input tools names as keys and specified filenames as values", 2)
                 return None
             
             self.StreamHistory += [self.CurrentInputStreams]
@@ -157,7 +173,7 @@ class Framework:
         self.Running = True
         self.Paused = ''
         while self.Running and not self.Paused:
-            t = self.NextEvent(start_at)
+            t = self.NextEvent(start_at, AtEventMethod)
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
@@ -166,15 +182,15 @@ class Framework:
             if t is None or t > stop_at:
                 self.Paused = 'Framework'
         if not self.Running:
-            print("Main loop finished without error.")
+            self._Log("Main loop finished without error.")
         else:
             if self.Paused:
-                print("Paused at t = {0:.3f} by {1}.".format(t, self.Paused))
+                self._Log("Paused at t = {0:.3f} by {1}.".format(t, self.Paused), 1, Raw = True)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
-    def NextEvent(self, start_at):
+    def NextEvent(self, start_at, AtEventMethod = None):
         PropagatedEvent = None
         t = None
         for tool_name in self.ToolsList:
@@ -186,6 +202,9 @@ class Framework:
                     t = PropagatedEvent.timestamp
                 if t < start_at:
                     break
+            if not PropagatedEvent is None and not AtEventMethod is None:
+                AtEventMethod(PropagatedEvent)
+        self._SendLog()
         return t
 
     def Rewind(self, t):
@@ -197,13 +216,12 @@ class Framework:
             return ForbiddingModules
         for tool_name in reversed(self.ToolsList):
             self.Tools[tool_name]._Rewind(t)
-        print("Framework : rewinded to {0:.3f}".format(t))
+        self._Log("Framework : rewinded to {0:.3f}".format(t), 1)
 
 #### Project Management ####
 
     def _GenerateEmptyProject(self):
         self.Tools = {}
-        self.Types = {}
         self._ToolsCreationReferences = {}
         self._ToolsExternalParameters = {}
         self._ToolsCamerasRestrictions = {}
@@ -213,6 +231,7 @@ class Framework:
         self.ToolsList = []
 
     def LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
+        self._LogType = 'raw'
         self._GenerateEmptyProject()
 
         if ProjectFile is None:
@@ -236,7 +255,7 @@ class Framework:
                 self._ToolsCamerasRestrictions[tool_name] = []
 
             self.ToolsOrder[tool_name] = data[tool_name]['Order']
-            print("Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class']))
+            self._Log("Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class']))
 
         if len(self.ToolsOrder.keys()) != 0:
             MaxOrder = max(self.ToolsOrder.values()) + 1
@@ -248,15 +267,15 @@ class Framework:
             if self.ToolsList[self.ToolsOrder[tool_name]] is None:
                 self.ToolsList[self.ToolsOrder[tool_name]] = tool_name
             else:
-                print("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[tool_name]))
+                self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[tool_name]), 2)
                 return None
         if None in self.ToolsList:
             while None in self.ToolsList:
                 self.ToolsList.remove(None)
 
-        print("")
-        print("Successfully generated tools order")
-        print("")
+        self._Log("")
+        self._Log("Successfully generated tools order")
+        self._Log("")
         
         for tool_name in self.ToolsList:
             self.Tools[tool_name] = self._ToolsClasses[tool_name](tool_name, self, self._ToolsCreationReferences[tool_name])
@@ -265,25 +284,15 @@ class Framework:
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
 
-            NewType = self.Tools[tool_name].__Type__
-            if NewType not in self.Types.keys():
-                self.Types[NewType] = 0
-            self.Types[NewType] += 1
-            if NewType in TypesLimits.keys() and self.Types[NewType] > TypesLimits[NewType]:
-                print("Project contains too many {0} types, aborting Projectfile loading.".format(NewType))
-                continue
-
     def _UpdateToolsParameters(self, tool_name):
         for key, value in self._ToolsExternalParameters[tool_name].items():
             if key in self.Tools[tool_name].__dict__.keys():
                 try:
                     self.Tools[tool_name].__dict__[key] = type(self.Tools[tool_name].__dict__[key])(value)
                 except:
-                    print("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, tool_name, type(self.Tools[tool_name].__dict__[key]), value))
-            #elif key[0] == '_':
-            #    print("Trying to modify protected variable {0} for tool {1}, ignoring.".format(key, tool_name))
+                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, tool_name, type(self.Tools[tool_name].__dict__[key]), value), 1)
             else:
-                print("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name))
+                self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name), 1)
         self.Tools[tool_name].__CameraIndexRestriction__ = self._ToolsCamerasRestrictions[tool_name]
 
     def SaveProject(self, ProjectFile):
@@ -292,20 +301,20 @@ class Framework:
         self.Modified = False
 
     def AddTool(self):
-        print("Current project :")
+        self._Log("Current project :")
         self.DisplayCurrentProject()
-        print("")
+        self._Log("")
         FieldList = [('File', str, False), ('Class', str, False), ('Order', int, True), ('CreationReferences', str, False), ('ExternalParameters', list, True)]
         
         Name = input('Enter the name of the new tool : ')                   # Tool name 
         if Name == '' or Name in self._ProjectRawData.keys():
-            print("Invalid entry (empty or already existing).")
+            self._Log("Invalid entry (empty or already existing).", 2)
             return None
         self._ProjectRawData[Name] = {}
         try:
             entry = ''
             while entry == '' :                                                 # Filename and Class definition
-                print("Enter the tool filename :")
+                self._Log("Enter the tool filename :")
                 entry = input('')
             if '.py' in entry:
                 entry = entry.split('.py')[0]
@@ -314,38 +323,33 @@ class Framework:
             classFound = False
             PossibleClasses = []
             if not 'Module' in fileLoaded.__dict__.keys():
-                print("File does not contain any class derived from 'Module'. Aborting entry")
+                self._Log("File does not contain any class derived from 'Module'. Aborting entry", 2)
                 del self._ProjectRawData[Name]
                 return None
             for key in fileLoaded.__dict__.keys():
                 if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_' and fileLoaded.__dict__['Module'] in fileLoaded.__dict__[key].__bases__:
                     PossibleClasses += [key]
-#                    if key == entry:
-#                        classFound = True
-#                        self._ProjectRawData[Name]['Class'] = entry
-#                        print("Found the corresponding class in the file.")
-#                        break
             if not classFound:
                 if len(PossibleClasses) == 0:
-                    print("No possible Class is available in this file. Aborting.")
+                    self._Log("No possible Class is available in this file. Aborting.", 2)
                     del self._ProjectRawData[Name]
                     return None
                 elif len(PossibleClasses) == 1:
-                    print("Using class {0}".format(PossibleClasses[0]))
+                    self._Log("Using class {0}".format(PossibleClasses[0]))
                     self._ProjectRawData[Name]['Class'] = PossibleClasses[0]
                 else:
                     entry = ''
                     while entry == '' :
-                        print("Enter the tool class among the following ones :")
+                        self._Log("Enter the tool class among the following ones :")
                         for Class in PossibleClasses:
-                            print(" * {0}".format(Class))
+                            self._Log(" * {0}".format(Class))
                         entry = input('')
                     if entry not in PossibleClasses:
-                        print("Invalid class, absent from tool file or not a ClassType.")
+                        self._Log("Invalid class, absent from tool file or not a ClassType.", 2)
                         del self._ProjectRawData[Name]
                         return None
                     self._ProjectRawData[Name]['Class'] = entry
-            print("")
+            self._Log("")
                                                                                   # Loading the class to get the references needed and parameters
 
             TmpClass = fileLoaded.__dict__[self._ProjectRawData[Name]['Class']](Name, self, {})
@@ -357,13 +361,13 @@ class Framework:
                 if var[0] == '_' and var[1] != '_':
                     PossibleVariables += [var]
             if TmpClass.__Type__ != 'Input':
-                print("Enter the tool order number :")                             # Order definition
+                self._Log("Enter the tool order number :")                             # Order definition
                 entry = ''
                 while entry == '':
                     entry = input('')
                 self._ProjectRawData[Name]['Order'] = int(entry)
             else:
-                print("Input Type detected. Setting to next default index.")
+                self._Log("Input Type detected. Setting to next default index.")
                 self._ProjectRawData[Name]['Order'] = 0
                 for tool_name in self._ProjectRawData.keys():
                     if tool_name != Name and self._ProjectRawData[tool_name]['IsInput']:
@@ -373,34 +377,34 @@ class Framework:
                 if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name]['Order']:
                     NumberTaken = True
             if NumberTaken:
-                print("Compiling new order.")
+                self._Log("Compiling new order.")
                 for tool_name in self._ProjectRawData.keys():
                     if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys():
                         if self._ProjectRawData[tool_name]['Order'] >= self._ProjectRawData[Name]['Order']:
                             self._ProjectRawData[tool_name]['Order'] += 1
-                print("Done")
-                print("")
+                self._Log("Done")
+                self._Log("")
 
             self._ProjectRawData[Name]['CreationReferences'] = {}
             if ReferencesAsked:
-                print("Fill tool name for the needed references. Currently available tool names:")
+                self._Log("Fill tool name for the needed references. Currently available tool names:")
                 for key in self._ProjectRawData.keys():
                     if key == Name:
                         continue
-                    print(" * {0}".format(key))
+                    self._Log(" * {0}".format(key))
                 for Reference in ReferencesAsked:
-                    print("Reference for '" + Reference + "'")
+                    self._Log("Reference for '" + Reference + "'")
                     entry = ''
                     while entry == '':
                         entry = input('-> ')
                     self._ProjectRawData[Name]['CreationReferences'][Reference] = entry
             else:
-                print("No particular reference needed for this tool.")
-            print("")
+                self._Log("No particular reference needed for this tool.")
+            self._Log("")
             if TmpClass.__Type__ == 'Input':
-                print("Enter camera index for this input module, if necessary.")
+                self._Log("Enter camera index for this input module, if necessary.")
             else:
-                print("Enter camera index(es) handled by this module, coma separated. Void will not create any restriction.")
+                self._Log("Enter camera index(es) handled by this module, coma separated. Void will not create any restriction.")
             entry = input(" -> ")
             self._ProjectRawData[Name]['CamerasHandled'] = []
             if entry:
@@ -409,76 +413,124 @@ class Framework:
 
             self._ProjectRawData[Name]['ExternalParameters'] = {}
             if PossibleVariables:
-                print("Current tool parameters :")
+                self._Log("Current tool parameters :")
                 for var in PossibleVariables:
-                    print(" * {0} : {1}".format(var, TmpClass.__dict__[var]))
+                    self._Log(" * {0} : {1}".format(var, TmpClass.__dict__[var]))
                 entryvar = 'nothing'
                 while entryvar != '':
-                    print("Enter variable to change :")
+                    self._Log("Enter variable to change :")
                     entryvar = input('-> ')
                     if entryvar != '' and entryvar in PossibleVariables:
-                        print("Enter new value :")
+                        self._Log("Enter new value :")
                         entryvalue = input('-> ')
                         if entryvalue != '':
                             try:
-                                self._ProjectRawData[Name]['ExternalParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
+                                if type(TmpClass.__dict__[entryvar]) == list:
+                                    values = entryvalue.strip('][').split(',') 
+                                    if TmpClass.__dict__[entryvar]:
+                                        aimedType = type(TmpClass.__dict__[entryvar][0])
+                                    else:
+                                        aimedType = float
+                                    self._ProjectRawData[Name]['ExternalParameters'][entryvar] = [aimedType(value) for value in values]
+                                else:
+                                    self._ProjectRawData[Name]['ExternalParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
                             except ValueError:
-                                print("Could not parse entry into the correct type")
+                                self._Log("Could not parse entry into the correct type", 1)
                     elif '=' in entryvar:
                         entryvar, entryvalue = entryvar.split('=')
                         if entryvar.strip() in PossibleVariables:
                             try:
                                 self._ProjectRawData[Name]['ExternalParameters'][entryvar.strip()] = type(TmpClass.__dict__[entryvar.strip()])(entryvalue.strip())
                             except ValueError:
-                                print("Could not parse entry into the correct type")
+                                self._Log("Could not parse entry into the correct type", 1)
                     elif entryvar != '':
-                        print("Wrong variable name.")
-            print("")
+                        self._Log("Wrong variable name.", 1)
+            self._Log("")
 
         except KeyboardInterrupt:
-            print("Canceling entries.")
+            self._Log("Canceling entries.", 1)
             del self._ProjectRawData[Name]
             return None
         except ImportError:
-            print("No such file found. Canceling entries")
+            self._Log("No such file found. Canceling entries", 2)
             del self._ProjectRawData[Name]
             return None
 
-        print("AddTool finished. Reloading project.")
+        self._Log("AddTool finished. Reloading project.")
         self.LoadProject()
-        print("New project : ")
-        print("")
+        self._Log("New project : ")
+        self._Log("")
         self.DisplayCurrentProject()
         self.Modified = True
 
     def DisplayCurrentProject(self):
-        print("# Framework")
-        print("")
+        self._Log("# Framework\n", 3)
+        self._Log("")
 
         nOrder = 0
         for tool_name in self.ToolsList:
             filename = inspect.getfile(self.Tools[tool_name].__class__)
-            print("# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1], filename))
-            print("     Type : {0}".format(self.Tools[tool_name].__Type__))
+            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1][:-2], filename), 3)
+            self._Log("     Type : {0}".format(self.Tools[tool_name].__Type__))
             if self.Tools[tool_name].__CameraIndexRestriction__:
-                print("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraIndexRestriction__]))
+                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraIndexRestriction__]))
             else:
-                print("     Uses all cameras inputs.")
+                self._Log("     Uses all cameras inputs.")
             if self._ToolsCreationReferences[tool_name]:
-                print("     Creation References:")
+                self._Log("     Creation References:")
                 for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
-                    print("         -> Access to {0} from tool {1}".format(argName, toolReference))
+                    self._Log("         -> Access to {0} from tool {1}".format(argName, toolReference))
             else:
-                print("     No creation reference.")
+                self._Log("     No creation reference.")
             if self._ToolsExternalParameters[tool_name]:
-                print("     Modified Parameters:")
+                self._Log("     Modified Parameters:")
                 for var, value in  self._ToolsExternalParameters[tool_name].items():
-                    print("         -> {0} = {1}".format(var, value))
+                    self._Log("         -> {0} = {1}".format(var, value))
             else:
-                print("     Using default parameters.")
-            print("")
+                self._Log("     Using default parameters.")
+            self._Log("")
             
             nOrder += 1
+
+    def _Log(self, Message, MessageType = 0, ModuleName = 'Framework', Raw = False, AutoSendIfPaused = True):
+        if self._LogType == 'columns' and not Raw:
+            while len(Message) > self._MaxColumnWith:
+                FirstPart, Message = Message[:self._MaxColumnWith], Message[self._MaxColumnWith:]
+                self._EventLogs[ModuleName] += [self._LogColors[MessageType] + FirstPart]
+            if Message:
+                self._EventLogs[ModuleName] += [self._LogColors[MessageType] + Message + (self._MaxColumnWith-len(Message))*' ']
+            self._HasLogs = max(self._HasLogs, len(self._EventLogs[ModuleName]))
+            if (not self.Running or self.Paused) and AutoSendIfPaused:
+                self._SendLog()
+        elif self._LogType == 'raw' or Raw:
+            Message = self._LogColors[MessageType] + ModuleName + ': ' + Message
+            print(Message + self._LogColors[0])
+    def _SendLog(self):
+        if self._LogType == 'raw' or not self._HasLogs:
+            return
+        for nLine in range(self._HasLogs):
+            CurrentLine = self._Default_Color
+            if self._EventLogs['Framework']:
+                CurrentLine += self._EventLogs['Framework'].pop(0)
+            else:
+                CurrentLine += self._MaxColumnWith*' '
+            for ToolName in self.ToolsList:
+                if self._EventLogs[ToolName]:
+                    CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ToolName].pop(0)
+                else:
+                    CurrentLine += self._Default_Color + ' | ' + self._MaxColumnWith*' '
+            print(CurrentLine)
+        self._HasLogs = 0
+
+    def _LogInit(self):
+        self._HasLogs = 2
+        self._MaxColumnWith = int((self._Terminal_Width - len(self.ToolsList)*3 ) / (len(self.ToolsList) + 1))
+        self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in ['Framework'] + self.ToolsList}
+        self._SendLog()
+        self._LogReset()
+    def _LogReset(self):
+        self._EventLogs = {ToolName:[] for ToolName in self._EventLogs.keys()}
+        self._HasLogs = 0
 
 class Module:
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -487,16 +539,22 @@ class Module:
         Each module in the Framework should inherit this class, whose 3 main methods and main parameters are required annd defined here.
         Type should be set manually.
         '''
-        print("Generation of module {0}".format(Name))
-        self.__ReferencesAsked__ = []
-        self.__Name__ = Name
         self.__Framework__ = Framework
+        self.__Name__ = Name
+
+        self.Log("Generating module")
+        self.__ReferencesAsked__ = []
         self.__CreationReferences__ = dict(argsCreationReferences)
         self.__Type__ = None
         self.__Initialized__ = False
         self.__RewindForbidden__ = False
         self.__SavedValues__ = {}
         self.__CameraIndexRestriction__ = []
+        
+        self._MonitoredVariables = []
+        self._MonitorDt = 0
+        self.__LastMonitoredTimestamp = -np.inf
+        
         try:
             self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
         except:
@@ -504,7 +562,7 @@ class Module:
 
     def __Initialize__(self, **kwargs):
         # First restore all prevous values
-        print(" > Initializing module {0}".format(self.__Name__))
+        self.Log(" > Initializing module")
         if self.__SavedValues__:
             for key, value in self.__SavedValues__.items():
                 self.__dict__[key] = value
@@ -515,9 +573,8 @@ class Module:
                 key = '_' + key
             if key not in self.__dict__:
                 pass
-                #print("Specified value {0} not previously defined in {1} of module {2}".format(key, self.__Name__, self.__class__.__name__))
             else:
-                print("Changed specific value {0} from {1} to {2} for {3}".format(key, self.__dict__[key], value, self.__Name__))
+                self.Log("Changed specific value {0} from {1} to {2}".format(key, self.__dict__[key], value))
                 self.__SavedValues__[key] = copy.copy(self.__dict__[key])
                 self.__dict__[key] = value
         
@@ -527,25 +584,95 @@ class Module:
 
         # Finalize Module initialization
         if self.__CameraIndexRestriction__ and self.__Type__ != 'Input':
-            self.__OnEvent__ = self.__OnEventRestricted__
+            OnEventMethodUsed = self.__OnEventRestricted__
         else:
-            self.__OnEvent__ = self._OnEventModule
+            OnEventMethodUsed = self._OnEventModule
+
+        if self._MonitorDt and self._MonitoredVariables:
+            self.History = {'t':[]}
+            self.__MonitorRetreiveMethods = {'t': lambda event: event.timestamp}
+            for Variable in self._MonitoredVariables:
+                if type(Variable) == tuple:
+                    VarName, Type = Variable
+                else:
+                    VarName = Variable
+                    Type = None
+                self.History[VarName] = []
+                try:
+                    self.__MonitorRetreiveMethods[VarName] = self.__GetRetreiveMethod__(VarName, Type)
+                except:
+                    self.LogWarning("Unable to get a valid retreive method for {0}".format(VarName))
+
+            self.__LastMonitoredTimestamp = -np.inf
+
+            self.__OnEvent__ = lambda event: self.__OnEventMonitor__(OnEventMethodUsed(event))
+        else:
+            self.__OnEvent__ = OnEventMethodUsed
+
         self.__Initialized__ = True
         return True
 
     def _InitializeModule(self, **kwargs):
+        # Template for user-filled module initialization
         return True
-
     def _OnEventModule(self, event):
+        # Template for user-filled module event running method
         return event
+
     def __OnEventRestricted__(self, event):
         if event.cameraIndex in self.__CameraIndexRestriction__:
             return self._OnEventModule(event)
         else:
             return event
 
+    def __OnEventMonitor__(self, event):
+        if event.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
+            self.__LastMonitoredTimestamp = event.timestamp
+            for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
+                self.History[VarName] += [RetreiveMethod(event)]
+        return event
+
+    def __GetRetreiveMethod__(self, VarName, UsedType):
+        if '@' in VarName:
+            Container, Key = VarName.split('@')
+            if type(self.__dict__[Container]) == list:
+                if UsedType is None:
+                    ExampleVar = self.__dict__[Container][0].__dict__[Key]
+                    UsedType = type(ExampleVar)
+                return lambda event: [UsedType(Instance.__dict__[Key]) for Instance in self.__dict__[Container]]
+            elif type(self.__dict__[Container]) == dict:
+                if UsedType is None:
+                    ExampleVar = self.__dict__[Container].values()[0].__dict__[Key]
+                    UsedType = type(ExampleVar)
+                return lambda event: [(LocalDictKey, UsedType(Instance.__dict__[Key])) for LocalDictKey, Instance in self.__dict__[Container].items()]
+            else:
+                if UsedType is None:
+                    ExampleVar = self.__dict__[Container].__dict__[Key]
+                    UsedType = type(ExampleVar)
+                print(UsedType)
+                return lambda event: UsedType(self.__dict__[Container].__dict__[Key])
+        else:
+            if UsedType is None:
+                UsedType = type(self.__dict__[VarName])
+            return lambda event: UsedType(self.__dict__[VarName])
+
     def _Rewind(self, t):
         None
+
+    def Log(self, Message, MessageType = 0):
+        '''
+        Log system to be used for verbose. for more clear information.
+        Message :  str, message specific to the module
+        MessageType : int. 0 for simple information, 1 for warning, 2 for error, stopping the stream, 3 for green highlight
+        '''
+        self.__Framework__._Log(Message, MessageType, self.__Name__)
+    def LogWarning(self, Message):
+        self.Log(Message, 1)
+    def LogError(self, Message):
+        self.Log(Message, 2)
+        self.__Framework__.Paused = self.__Name__
+
+# Listing all the events existing
 
 class Event:
     def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):
@@ -555,43 +682,18 @@ class Event:
             self.polarity = polarity
             self.cameraIndex = cameraIndex # Used for indexing cameras incase of multiple cameras, for stereoscopy in particular
         else:
-            self.timestamp = original.timestamp
-            self.location = original.location
-            self.polarity = original.polarity
-            self.cameraIndex = original.cameraIndex
+            for key, value in original.__dict__.items():
+                self.__dict__[key] = value
 
-    def __le__(self, rhs):
-        if type(rhs) == float or type(rhs) == np.float64 or type(rhs) == int:
-            return self.timestamp <= rhs
-        elif type(rhs) == type(self) and rhs.__class__.__name__ == self.__class__.__name__:
-            return self.timestamp <= rhs.timestamp
-        else:
-            print("Event .__le__ type not implemented : {0}".format(type(rhs)))
-            return NotImplemented
+    def _AsList(self):
+        return self.location.tolist() + [self.timestamp, self.polarity]
 
-    def __ge__(self, rhs):
-        if type(rhs) == float or type(rhs) == np.float64 or type(rhs) == int:
-            return self.timestamp >= rhs
-        elif type(rhs) == type(self) and rhs.__class__.__name__ == self.__class__.__name__:
-            return self.timestamp >= rhs.timestamp
-        else:
-            print("Event .__le__ type not implemented : {0}".format(type(rhs)))
-            return NotImplemented
+class TrackerEvent(Event):
+    def __init__(self, original, TrackerLocation = None, TrackerID = None):
+        super().__init__(original = original)
+        self.TrackerLocation = np.array(TrackerLocation)
+        self.TrackerID = TrackerID
 
-    def __lt__(self, rhs):
-        if type(rhs) == float or type(rhs) == np.float64 or type(rhs) == int:
-            return self.timestamp < rhs
-        elif type(rhs) == type(self) and rhs.__class__.__name__ == self.__class__.__name__:
-            return self.timestamp < rhs.timestamp
-        else:
-            print("Event .__le__ type not implemented : {0}".format(type(rhs)))
-            return NotImplemented
+    def _AsList(self):
+        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist()
 
-    def __gt__(self, rhs):
-        if type(rhs) == float or type(rhs) == np.float64 or type(rhs) == int:
-            return self.timestamp > rhs
-        elif type(rhs) == type(self) and rhs.__class__.__name__ == self.__class__.__name__:
-            return self.timestamp > rhs.timestamp
-        else:
-            print("Event .__le__ type not implemented : {0}".format(type(rhs)))
-            return NotImplemented

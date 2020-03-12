@@ -8,7 +8,7 @@ import mpl_toolkits.mplot3d.art3d as art3d
 from matplotlib.text import TextPath
 from matplotlib.transforms import Affine2D
 
-from Framework import Module, Event
+from Framework import Module, Event, TrackerEvent
 
 _SPACE_DIM = 3
 _VOXEL_SIZE = 0.1
@@ -20,8 +20,8 @@ _GAUSSIAN_LOOKUP_TABLE_LOCATIONS = {1: [0.],
                                     5: [-1.281551565545, -0.5244005127080, 0., 0.5244005127080, 1.281551565545],
                                     6: [-1.382994127101, -0.6744897501961, -0.2104283942479, 0.2104283942479, 0.6744897501961, 1.382994127101]}
 _MAX_T = 100.
-_SIMULATED_MAP_DENSITY = 0.0001
-_MAP_RELATIVE_BIGINING_OFFSET = np.array([0.06, 0.5, 0.5])
+_SIMULATED_MAP_DENSITY = 0.0003
+_MAP_RELATIVE_BIGINING_OFFSET = np.array([0., 0.5, 0.5])
 
 # Movement estimators
 _ANGULAR_SIGMA_ACC = 1. # rads/s^2
@@ -214,7 +214,7 @@ class Map3DClass:
 
         self.BaseMap.Voxels[xs, ys, zs] = 1.
         for nObject in range(NCube):
-            self.EventsGenerators += [EventGeneratorClass(np.array([xs[nObject], ys[nObject], zs[nObject]]) * _VOXEL_SIZE, np.array([xs, ys, zs]), BiCameraSystem, self.Voxels)]
+            self.EventsGenerators += [EventGeneratorClass(nObject, np.array([xs[nObject], ys[nObject], zs[nObject]]) * _VOXEL_SIZE, np.array([xs, ys, zs]), BiCameraSystem, self.Voxels)]
 
     def _GenerateCubesMap(self, BiCameraSystem):
         LinearInterval = int((1. / self._Density)**(1./3))
@@ -229,45 +229,7 @@ class Map3DClass:
                     #print(Indexes)
                     X = Indexes * _VOXEL_SIZE
                     self.Voxels[x, y, z] = 1.
-                    self.EventsGenerators += [EventGeneratorClass(X, np.array([x,y,z]), BiCameraSystem, self.Voxels)]
-
-class SlamSolverClass:
-    def __init__(self, Name, Framework, argsCreationReferences):
-        '''
-        Class to emulate stereo system moving with artificial map
-        '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-
-        self.__ReferencesAsked__ = ['Event3DMatcher']
-        self.__Type__ = 'Computation'
-
-    def _InitializeModule(self, **kwargs):
-
-        self._BiCameraSystem = BiCameraClass()
-        self.EstimatedMap = Map3DClass()
-        self.Event3DMatchMethod = self.__Framework__.Tools[self.__CreationReferences__['Event3DMatcher']].EventToEvent3DMatch
-
-        self.nEvent3d = 0
-        self._BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * _MAP_RELATIVE_BIGINING_OFFSET, t = 0.) # We offset the etimator at the same place as the simulator, to get coherent and comparable data.
-
-        return True
-
-    def _OnEventModule(self, event):
-        Event3D = self.Event3DMatchMethod(event)
-
-        if self.Event3DMatchMethod(event) is None:
-            return event
-    
-        self.nEvent3d += 1
-        return event
-
-    def GenerateBiCameraView(self):
-        if not self.__Initialized__:
-            self._BiCameraSystem = BiCameraClass()
-            self.EstimatedMap = Map3DClass()
-            self._BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * _MAP_RELATIVE_BIGINING_OFFSET, t = 0.)
-
-        return self._BiCameraSystem._GenerateView(self.EstimatedMap, ['3d'])
+                    self.EventsGenerators += [EventGeneratorClass(len(self.EventsGenerators), X, np.array([x,y,z]), BiCameraSystem, self.Voxels)]
 
 class MovementSimulatorClass(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -282,18 +244,29 @@ class MovementSimulatorClass(Module):
         self._dt = 0.0001
         self._RelativeBeginingOffset = np.array(_MAP_RELATIVE_BIGINING_OFFSET)
 
-        self._TranslationSpeed = np.array([0., 0., 0.])
-        self._RotationSpeed = np.array([0., 0., 0.])
+        self._Sequence = []
+        self._TranslationSpeed = [0., 0., 0.]
+        self._RotationSpeed = [0., 0., 0.]
+
+        self._SingleCameraMode = False
+        self._CreateTrackerEvents = True
+        self._TrackersLocationGaussianNoise = 0.
+
+        self._MaxStepsNoEvents = 100
+        self._AddAxes = False
 
     def _InitializeModule(self, **kwargs):
 
-        self.PoseGraphs, self.PoseAxs = plt.subplots(2,1)
-        self.PoseAxs[0].set_title('X')
-        self.PoseAxs[1].set_title('Thetas')
-        self._BiCameraSystem = BiCameraClass(PoseGraphs = self.PoseAxs)
+        if self._AddAxes:
+            self.PoseGraphs, self.PoseAxs = plt.subplots(2,1)
+            self.PoseAxs[0].set_title('X')
+            self.PoseAxs[1].set_title('Thetas')
+        else:
+            self.PoseAxs = None
+        self._BiCameraSystem = BiCameraClass(self.PoseAxs, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
         self.BaseMap = Map3DClass(self._MapType, self._BiCameraSystem)
 
-        self.StreamName = self.__Framework__.StreamHistory[-1]
+        self.StreamName = self.__Framework__._GetStreamFormattedName(self)
         self.Geometry = BiCameraClass.Definition.tolist() + [2]
 
         self.nEvent = 0
@@ -301,22 +274,40 @@ class MovementSimulatorClass(Module):
         self.T = 0.
         self._BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * self._RelativeBeginingOffset, t = 0.)
 
+        self.nSequenceStep = 0
+        if not self._Sequence:
+            self._TranslationSpeed = np.array(self._TranslationSpeed)
+            self._RotationSpeed = np.array(self._RotationSpeed)
+        else:
+            self._TranslationSpeed = np.array(self._Sequence[self.nSequenceStep][0])
+            self._RotationSpeed = np.array(self._Sequence[self.nSequenceStep][1])
 
         if (self._TranslationSpeed == 0).all() and (self._RotationSpeed == 0).all():
-            print("Null speeds. No events will be produced.")
+            self.LogError("Null speeds. No events will be produced.")
             return False
 
         return True
 
     def _OnEventModule(self, event):
 
-        while self.T < _MAX_T and not self._BiCameraSystem.Events:
+        NoEventsSteps = 0
+        while self.T < _MAX_T and not self._BiCameraSystem.Events and NoEventsSteps < self._MaxStepsNoEvents:
             self.T += self._dt
             self._BiCameraSystem.Pose.UpdatePose(self._BiCameraSystem.Pose.X + self._dt * self._TranslationSpeed, self._BiCameraSystem.Pose.Thetas + self._dt * self._RotationSpeed, t = self.T)
 
             for EG in self.BaseMap.EventsGenerators:
                 EG.ComputeCameraLocations()
+            NoEventsSteps += 1
+            if len(self._Sequence) > self.nSequenceStep + 1:
+                if self.T >= self._Sequence[self.nSequenceStep][2]:
+                    self.nSequenceStep += 1
+                    self._TranslationSpeed = np.array(self._Sequence[self.nSequenceStep][0])
+                    self._RotationSpeed = np.array(self._Sequence[self.nSequenceStep][1])
 
+        if not self._BiCameraSystem.Events:
+            self.__Framework__.Running = False
+            self.LogWarning("No displayed object in virtual scene left.")
+            return None
         NewEvent = self._BiCameraSystem.Events.pop(0)
         NewEvent.timestamp = self.T
 
@@ -324,6 +315,10 @@ class MovementSimulatorClass(Module):
 
         if self.__Framework__.Running:
             self.nEvent += 1
+            if (self.nEvent & 2047) == 0:
+                self.Log("Current pose:")
+                self.Log(" X = {0}".format(self._BiCameraSystem.Pose.X))
+                self.Log(" Thetas = {0}".format(self._BiCameraSystem.Pose.Thetas))
             return NewEvent
         else:
             return None
@@ -345,7 +340,8 @@ class MovementSimulatorClass(Module):
             EG.ComputeCameraLocations(self._BiCameraSystem)
 
 class EventGeneratorClass:
-    def __init__(self, Location, Index, BiCamera, BaseVoxelsMap):
+    def __init__(self, ID, Location, Index, BiCamera, BaseVoxelsMap):
+        self.ID = ID
         self.Location = Location
         self.Index = Index
         self.BiCamera = BiCamera
@@ -364,8 +360,14 @@ class EventGeneratorClass:
         self.BiCameraFocalDistance = 0.
         self.CameraFrame3DLocation = np.array([0., 0., 0.])
 
+        self.CheckForOcclusions = False
+
     def ComputeCameraLocations(self, OnlyUpdateBoth = False):
-        FirstCamera = random.randint(0,1)
+        if self.BiCamera.SingleCameraMode:
+            CamerasRandomOrder = [0]
+        else:
+            FirstCamera = random.randint(0,1)
+            CamerasRandomOrder = [FirstCamera, 1-FirstCamera]
         Spikes = 0
         
         ObjectBiCameraVector = self.Location - self.BiCamera.Pose.X
@@ -374,7 +376,7 @@ class EventGeneratorClass:
                                               (ObjectBiCameraVector * self.BiCamera.Pose.Uy()).sum()])
 
         
-        for CameraIndex in [FirstCamera, 1-FirstCamera]:
+        for CameraIndex in CamerasRandomOrder:
             BiCameraFrameObjectCameraVector = self.CameraFrame3DLocation - self.BiCamera.CameraFrameCamerasOffsets[CameraIndex]
             self.BiCamera3DDistance[CameraIndex] = np.linalg.norm(BiCameraFrameObjectCameraVector)
             self.BiCameraFocalDistance = BiCameraFrameObjectCameraVector[0]
@@ -383,16 +385,25 @@ class EventGeneratorClass:
                 self.OnBiCameraPresence[CameraIndex] = False
                 continue
             
-            AxisScalars = BiCameraFrameObjectCameraVector[1:] / (self.BiCamera3DDistance[CameraIndex] * self.BiCamera.SinApertureValues)
-            if (abs(AxisScalars) > 1.0).any():
-                self.OnBiCameraPresence[CameraIndex] = False
-                continue
+            if self.BiCamera.ProjectionMethod == 1:
+                AxisScalars = BiCameraFrameObjectCameraVector[1:] / (self.BiCamera3DDistance[CameraIndex] * self.BiCamera.SinApertureValues)
+                if (abs(AxisScalars) > 1.0).any():
+                    self.OnBiCameraPresence[CameraIndex] = False
+                    continue
 
-            self.OnBiCameraPresence[CameraIndex] = True
-            OnCameraLocation = self.BiCamera.Definition/2 * (np.array([-1, 1]) * AxisScalars + 1)
-            #print(AxisScalars, OnCameraLocation)
-            # Occlusion check
-            self.OcclusionCheck(CameraIndex, StopAtFirstEncounter = True)
+                self.OnBiCameraPresence[CameraIndex] = True
+                OnCameraLocation = self.BiCamera.Definition/2 * (np.array([-1, 1]) * AxisScalars + 1)
+            elif self.BiCamera.ProjectionMethod == 0:
+                Xi = self.BiCamera.K.dot(BiCameraFrameObjectCameraVector)
+                OnCameraLocation = Xi[:-1] / Xi[-1]
+                if (OnCameraLocation < 0).any() or (OnCameraLocation > self.BiCamera.Definition).any():
+                    self.OnBiCameraPresence[CameraIndex] = False
+                    continue
+            else:
+                raise Exception("Non implemented screen projection method")
+
+            if self.CheckForOcclusions:
+                self.OcclusionCheck(CameraIndex, StopAtFirstEncounter = True)
 
             HalfScalarAperture = ((_VOXEL_SIZE / 2) / self.BiCamera3DDistance[CameraIndex])
             self.OnBiCameraRadius[CameraIndex] = max(int(HalfScalarAperture / self.BiCamera.ScalarAperturePerPixel), 1)
@@ -423,15 +434,15 @@ class EventGeneratorClass:
 
         StartLocation = StartLocation + Offset
         Location  = np.array(StartLocation)
-        VoxelIndex = np.array([-1, -1, -1])
+        VoxelIndex = None
 
         EspsilonDisplacements = [-self.EpsilonSideVoxels * Displacement, self.EpsilonSideVoxels*Displacement]
         VoxelsEncountered = []
-        while (VoxelIndex != self.Index).any():
+        while VoxelIndex is None or ((VoxelIndex != self.Index).any() and (VoxelIndex >= 0).all() and (VoxelIndex < self.BaseVoxelsMap.shape).all()):
             Location = Location + Displacement
             for LocalDisplacement in EspsilonDisplacements:
                 CurrentLocation = Location + LocalDisplacement
-                CurrentVoxelIndex = GetVoxelIndexes(CurrentLocation)
+                CurrentVoxelIndex = np.minimum(np.array(self.BaseVoxelsMap.shape) - 1, GetVoxelIndexes(CurrentLocation))
                 if (CurrentVoxelIndex == self.Index).all():
                     VoxelIndex = CurrentVoxelIndex
                     break
@@ -456,12 +467,16 @@ class EventGeneratorClass:
         Loc = np.array(self.OnBiCameraLocations[CameraIndex] + self.OnBiCameraRadius[CameraIndex] * np.array([np.cos(Angle), np.sin(Angle)]), dtype = int)
         if (Loc < 0).any() or (Loc >= self.BiCamera.Definition).any():
             return None
-        self.BiCamera.AddEvent(Loc, CameraIndex)
+        self.BiCamera.AddEvent(Loc, CameraIndex, self.OnBiCameraLocations[CameraIndex], self.ID)
 
 class BiCameraClass: # Allows to emulate events from events generator
     Definition = np.array([640, 480])
-    def __init__(self, PoseGraphs = None):
+    def __init__(self, PoseGraphs = None, CreateTrackerEvents = False, TrackerGaussianNoise = 0., SingleCameraMode = False):
         self.Pose = PoseClass(Graphs = PoseGraphs)
+        self.CreateTrackerEvents = CreateTrackerEvents
+        self.TrackersLocationGaussianNoise = TrackerGaussianNoise
+        self.SingleCameraMode = SingleCameraMode
+
         self.InterCamDistance = 0.3
         self.HalfAngularApertureWidth = np.pi / 6
 
@@ -470,26 +485,42 @@ class BiCameraClass: # Allows to emulate events from events generator
 
         self.SinApertureValues = np.array([np.sin(self.HalfAngularApertureWidth), np.sin(self.HalfAngularApertureHeight)])
 
+        self.K = np.array([[self.Definition[0]/2, self.Definition[0], 0], [self.Definition[1]/2, 0, self.Definition[0]], [1, 0, 0]])
+
+        self.ProjectionMethod = 0 # 0 for K matrix, 1 for scalar values
 
         self.CameraNames = ['Left', 'Right']
-        self.CameraFrameCamerasOffsets = [np.array([0., self.InterCamDistance/2, 0.]), np.array([0., -self.InterCamDistance/2, 0.])] # WARNING : Ux is oriented alog negative x cameras pixels values.
+        if self.SingleCameraMode:
+            self.CameraFrameCamerasOffsets = [np.array([0., 0., 0.])]
+            self.CamerasIndexesUsed = [0]
+        else:
+            self.CameraFrameCamerasOffsets = [np.array([0., self.InterCamDistance/2, 0.]), np.array([0., -self.InterCamDistance/2, 0.])] # WARNING : Ux is oriented alog negative x cameras pixels values.
+            self.CamerasIndexesUsed = [0,1]
         
         self.Events3D = []
         self.Events = []
 
     def AddEvent3D(self, CameraFrame3DLocation):
         self.Events3D += [CameraFrame3DLocation]
-    def AddEvent(self, OnCameraLocation, CameraIndex):
-        self.Events += [Event(location = OnCameraLocation, polarity = 0, cameraIndex = CameraIndex)] #BiCameraSystem doesn't know the time.
+    def AddEvent(self, EventOnCameraLocation, CameraIndex, EGOnCameraLocation = None, EGID = None):
+        NewEvent = Event(location = EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
+        if self.CreateTrackerEvents:
+            TrackerLocation = EGOnCameraLocation + np.random.normal(0, self.TrackersLocationGaussianNoise, size = 2)
+            if not ((TrackerLocation < 0).any() or (TrackerLocation >= self.Definition).any()):
+                self.Events += [TrackerEvent(original = NewEvent, TrackerLocation = TrackerLocation, TrackerID = EGID)]
+            else:
+                self.Events += [NewEvent]
+        else:
+            self.Events += [NewEvent] 
 
     def _GenerateView(self, Map, Views = ['3d', 'Left', 'Right'], AlphaOffset = True):
         f = plt.figure()
         ax_3d = f.add_subplot(131, projection='3d')
-        axs = [f.add_subplot(132), f.add_subplot(133)]
+        axs = [f.add_subplot(100 + 10*(1+len(self.CamerasIndexesUsed)) + 2+i) for i in range(len(self.CamerasIndexesUsed))]
         BiCameraMaps = np.zeros(list(reversed(self.Definition)) + [3, 2])
 
         for EG in Map.EventsGenerators:
-            for CameraIndex in [0,1]:
+            for CameraIndex in self.CamerasIndexesUsed:
                 if not self.CameraNames[CameraIndex] in Views:
                     continue
                 if EG.OnBiCameraPresence[CameraIndex]:
@@ -507,7 +538,7 @@ class BiCameraClass: # Allows to emulate events from events generator
                                         BiCameraMaps[y, x, 0, CameraIndex] = 1.
                                     else:
                                         BiCameraMaps[y, x, 1, CameraIndex] = 1.
-        for CameraIndex in [0,1]:
+        for CameraIndex in self.CamerasIndexesUsed:
             axs[CameraIndex].imshow(BiCameraMaps[:,:,:,CameraIndex], origin = 'lower')
             axs[CameraIndex].set_title(self.CameraNames[CameraIndex])
 
@@ -525,7 +556,7 @@ class BiCameraClass: # Allows to emulate events from events generator
         ax_3d.scatter(xs, ys, zs, c = Colors)
 
         BiCameraCenter = self.Pose.X
-        for CameraIndex in [0,1]:
+        for CameraIndex in self.CamerasIndexesUsed:
             CameraLocation = (BiCameraCenter + self.Pose.Ux() * self.CameraFrameCamerasOffsets[CameraIndex][1]) / _VOXEL_SIZE
             for BaseVector, Color in zip([self.Pose.Uv() / _VOXEL_SIZE, self.Pose.Ux() / _VOXEL_SIZE, self.Pose.Uy() / _VOXEL_SIZE], ['r', 'g', 'b']):
                 ax_3d.plot([CameraLocation[0], (CameraLocation + BaseVector)[0]], [CameraLocation[1], (CameraLocation + BaseVector)[1]], [CameraLocation[2], (CameraLocation + BaseVector)[2]], Color, lw = 5)

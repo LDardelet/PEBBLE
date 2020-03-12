@@ -25,7 +25,7 @@ class Refractory(Module):
         return True
 
     def _OnEventModule(self, event):
-        if not self._Active or event >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
+        if not self._Active or event.timestamp >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
             self.AllowedEvents += 1
             return event
         else:

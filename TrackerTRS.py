@@ -80,7 +80,6 @@ class TrackerTRS(Module):
         self._ComputeSpeedErrorMethod = 'LinearMean'                                # String. Speed error computation method. Can be 'LinearMean', 'ExponentialMean' or 'TwoPointsProjection'. See associated functions for details. Default : 'LinearMean'
         # Monitoring Variables
 
-        self._FullEventsHistory = True                                              # Bool. Storing of all tracker's history of events projections and associated events. For post-processing. Default : True
         self._SnapDt = 0.01                                                         # Float. Time difference between two snapshots of the system.
 
         self._StatusesNames = {self._STATUS_DEAD: 'Dead', self._STATUS_IDLE:'Idle', self._STATUS_STABILIZING:'Stabilizing', self._STATUS_CONVERGED:'Converged'} # Statuses names with associated int values.
@@ -405,12 +404,6 @@ class TrackerClass:
         #self.PositionError = np.array([0., 0.])
         self._ComputeSpeedError = self.__class__.__dict__['_ComputeSpeedError' + self.TM._ComputeSpeedErrorMethod]
 
-        if self.TM._FullEventsHistory:
-            self.IgnoredComputationReasons = []
-            self.PEH = []
-            self.AssociationsHistory = []
-            self.SpeedsModsHistory = []
-
     def UpdateWithEvent(self, event):
         DeltaUpdate = event.timestamp - self.LastUpdate
         self.LastUpdate = event.timestamp
@@ -475,21 +468,10 @@ class TrackerClass:
         if self.TM._TrackerIgnoreBorderEvents and (abs(CurrentProjectedEvent[1:]) > (self.HalfSize - self.TM._ClosestEventProximity)).any(): # MOVED HERE (Limit event)
             if not self.Lock:
                 self.ProjectedEvents += [SavedProjectedEvent]
-            if self.TM._FullEventsHistory:
-                self.PEH += [SavedProjectedEvent]
-                self.AssociationsHistory += [[]]
-                self.SpeedsModsHistory += [np.array([0., 0.])]
-                self.IgnoredComputationReasons += ["Limit event"]
             return True
 
         if self.Status == self.TM._STATUS_IDLE:
             self.ProjectedEvents += [SavedProjectedEvent]
-            if self.TM._FullEventsHistory:
-                self.PEH += [SavedProjectedEvent]
-                self.AssociationsHistory += [[]]
-                self.SpeedsModsHistory += [np.array([0., 0.])]
-                self.IgnoredComputationReasons += ["Not Initialized"]
-
             if self.Activity > self.TM._DetectorMinActivityForStart: # This StatusUpdate is put here, since it would be costly in computation to have it somewhere else and always be checked 
                 self.Status = self.TM._STATUS_STABILIZING
                 self.TM.StartTimes[self.ID] = event.timestamp
@@ -518,14 +500,7 @@ class TrackerClass:
                     if len(ConsideredNeighbours) == self.TM._MaxConsideredNeighbours:
                         break
 
-        if self.TM._FullEventsHistory:
-            self.PEH += [SavedProjectedEvent]
-            self.AssociationsHistory += [list(ConsideredNeighbours)]
-            self.SpeedsModsHistory += [np.array([0., 0.])]
-
         if len(ConsideredNeighbours) < self.TM._MinConsideredNeighbours:
-            if self.TM._FullEventsHistory:
-                self.IgnoredComputationReasons += ["MinConsideredNeighbours"]
             return True
 
         ConsideredNeighbours = np.array(ConsideredNeighbours)
@@ -578,161 +553,6 @@ class TrackerClass:
             
             self.ApertureScalarEstimationByDelta += ((DeltaPos * self.AverageOrientation).sum() / (nOrientation))**2
 
-        if self.TM._FullEventsHistory:
-            self.SpeedsModsHistory[-1] = np.array(SpeedMod)
-        SpeedNorm = np.linalg.norm(self.Speed)
-        if SpeedNorm > 0:
-            self.TimeConstant = min(1./SpeedNorm, self.TM._TrackerDefaultTimeConstant)
-            if SpeedErrorNorm > 0:
-                ScalarValue = (SpeedError * self.Speed).sum() / (SpeedErrorNorm * SpeedNorm)
-                self.ScalarCorrectionValue += ScalarValue
-                VectorialValue = (self.Speed[0]*SpeedError[1] - self.Speed[1]*SpeedError[0]) / (SpeedErrorNorm * SpeedNorm)
-                self.VectorialCorrectionValue += VectorialValue
-
-        else:
-            self.TimeConstant = self.TM._TrackerDefaultTimeConstant
-
-        if SpeedErrorNorm > 0:
-            SpeedModOrientation = SpeedError / SpeedErrorNorm
-            RotatedSpeedModOrientation = np.array([SpeedModOrientation[0]**2 - SpeedModOrientation[1]**2, 2*SpeedModOrientation[0]*SpeedModOrientation[1]])
-            if np.linalg.norm(RotatedSpeedModOrientation) > 1.05:
-                self.TM.LogWarning("{0}, {1}".format(SpeedError, RotatedSpeedModOrientation))
-            if SpeedMod[0] < 0:
-                SpeedModOrientation = - SpeedModOrientation
-            self.AverageSpeedCorrectionOrientation += SpeedModOrientation
-            self.ApertureVectorEstimationBySpeed += RotatedSpeedModOrientation
-
-            self.ApertureScalarEstimationBySpeed += ((self.AverageSpeedCorrectionOrientation * SpeedModOrientation).sum() / np.linalg.norm(self.AverageSpeedCorrectionOrientation))**2
-
-
-        self.IgnoredComputationReasons += [None]
-        self.ComputeCurrentStatus(event.timestamp)
-        return True
-
-    def RunEventOld(self, event):
-        if not self.UpdateWithEvent(event): # We update the position and activity. They do not depend on the event location. False return means the tracker has died : out of screen or activity too low (we should potentially add 1 for current event but shoud be marginal)
-            return False # We also consider that even if the event may have matched, the tracker still dies. The activity increase of 1 is not enough
-
-        RC = np.cos(self.Rotation)
-        RS = np.sin(self.Rotation)
-        Dx, Dy = event.location[0] - self.Position[0], event.location[1] - self.Position[1]
-        Dx2, Dy2 = Dx**2, Dy**2
-
-        if (Dx2 + Dy2) > self.HS2:
-            return False
-
-        CurrentProjectedEvent = np.array([float(event.timestamp), Dx*RC + Dy*RS, Dy*RC - Dx*RS])
-        SavedProjectedEvent = np.array(CurrentProjectedEvent) # Possibly error here, as reference to event.timestamp is lost
-
-        self.Activity += 1
-        self.MeanPositionSummed += CurrentProjectedEvent[1:]
-        if self.TM._TrackerIgnoreBorderEvents and (abs(CurrentProjectedEvent[1:]) > (self.HalfSize - self.TM._ClosestEventProximity)).any(): # MOVED HERE (Limit event)
-            if not self.Lock:
-                self.ProjectedEvents += [SavedProjectedEvent]
-            if self.TM._FullEventsHistory:
-                self.PEH += [SavedProjectedEvent]
-                self.AssociationsHistory += [[]]
-                self.SpeedsModsHistory += [np.array([0., 0.])]
-                self.IgnoredComputationReasons += ["Limit event"]
-            return True
-
-        if self.Status == self.TM._STATUS_IDLE:
-            self.ProjectedEvents += [SavedProjectedEvent]
-            if self.TM._FullEventsHistory:
-                self.PEH += [SavedProjectedEvent]
-                self.AssociationsHistory += [[]]
-                self.SpeedsModsHistory += [np.array([0., 0.])]
-                self.IgnoredComputationReasons += ["Not Initialized"]
-
-            if self.Activity > self.TM._DetectorMinActivityForStart: # This StatusUpdate is put here, since it would be costly in computation to have it somewhere else and always be checked 
-                self.Status = self.TM._STATUS_STABILIZING
-                self.TM.StartTimes[self.ID] = event.timestamp
-            return True
-
-        # FROM HERE (Limit event)
-
-        if not self.Lock:
-            while len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.TimeConstant * self.TM._TrackerTimeConstantRatioRemoval: # We look for the first event recent enough
-                self.ProjectedEvents.pop(0)
-        
-        if self.Lock:
-            CurrentProjectedEvent[0] = self.Lock.Time + self.TimeConstant
-            UsedEventsList = self.Lock.Events
-            self.ProjectedEvents = self.ProjectedEvents[:self.TM._TrackerLockingMaxRecoveryBuffer-1] + [SavedProjectedEvent]
-        else:
-            UsedEventsList = self.ProjectedEvents
-            self.ProjectedEvents += [SavedProjectedEvent]
-
-        ConsideredNeighbours = []
-        for nEventReversed in range(len(UsedEventsList)):
-            ArrayedEvent = UsedEventsList[-(nEventReversed+1)]
-            if np.linalg.norm(CurrentProjectedEvent[1:] - ArrayedEvent[1:]) < self.TM._ClosestEventProximity:
-                if self.Lock or CurrentProjectedEvent[0] - ArrayedEvent[0] > self.TM._ObjectEdgePropagationTC:
-                    ConsideredNeighbours += [np.array(ArrayedEvent)]
-                    if len(ConsideredNeighbours) == self.TM._MaxConsideredNeighbours:
-                        break
-
-        if self.TM._FullEventsHistory:
-            self.PEH += [SavedProjectedEvent]
-            self.AssociationsHistory += [list(ConsideredNeighbours)]
-            self.SpeedsModsHistory += [np.array([0., 0.])]
-
-        if len(ConsideredNeighbours) < self.TM._MinConsideredNeighbours:
-            if self.TM._FullEventsHistory:
-                self.IgnoredComputationReasons += ["MinConsideredNeighbours"]
-            return True
-
-        ConsideredNeighbours = np.array(ConsideredNeighbours)
-        SpeedError, ProjectionError = self._ComputeSpeedError(self, CurrentProjectedEvent, ConsideredNeighbours)
-        if self.Lock:
-            SpeedMod = SpeedError / self.Lock.Activity ** self.TM._TrackerLockedActivityPower
-            self.Position += self.TM._TrackerLockedPosModFactor * ProjectionError / self.Lock.Activity ** self.TM._TrackerLockedPosModDisplacementActivityPower
-        else:
-            SpeedMod = SpeedError / self.Activity ** self.TM._TrackerUnlockedActivityPower
-
-        SpeedErrorNorm = np.linalg.norm(SpeedError)
-        self.ScalarCorrectionActivity += 1
-
-        self.SpeedError += SpeedError
-        self.Speed += SpeedMod * self.TM._TrackerAccelerationFactor
-
-        if self.TM._CorrectAxialRotation and Dx2 + Dy2 > self.HS2 * self.TM._MinRotCorrectionSizeRatio2:
-            EventLocalError = SpeedError - (self.SpeedError / self.ScalarCorrectionActivity)
-            #RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / (Dx2 + Dy2)
-            RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / self.HalfSize
-
-            #Weight = np.e**(-self.HalfSize / (Dx2 + Dy2))
-            Weight = 1.
-            self.WeightedRotationalActivity += Weight
-            if self.Lock:
-                RotSpeedMod = RotSpeedError / self.Lock.Activity ** self.TM._TrackerLockedActivityPower
-                #InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / (Dx2 + Dy2)
-                InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / self.HalfSize
-                self.Rotation += Weight * self.TM._TrackerLockedRotModFactor * InducedRotation / (self.WeightedRotationalActivity ** self.TM._TrackerLockedRotModDisplacementActivityPower)
-            else:
-                RotSpeedMod = Weight * RotSpeedError / (self.WeightedRotationalActivity ** self.TM._TrackerUnlockedActivityPower)
-            self.RotSpeedError += RotSpeedError
-            self.RotSpeed += Weight * RotSpeedMod * self.TM._TrackerAccelerationFactor
-
-        Xm = (self.MeanPositionSummed / self.Activity)
-        if self.TM._TrackerUsePositionMean and not self.Lock:
-            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._TrackerDiameter
-            if (DiffaXm > 0).any():
-                self.Position += self.TM._TrackerMeanPositionAccelerationFactor * DiffaXm * np.sign(Xm) / self.Activity
-
-        DeltaPos = CurrentProjectedEvent[1:] - Xm
-        if DeltaPos[0] < 0:
-            DeltaPos *= -1
-        nDelta = np.linalg.norm(DeltaPos)
-        if nDelta > 0:
-            DeltaPos = DeltaPos / nDelta
-            self.AverageOrientation += DeltaPos
-            nOrientation = np.linalg.norm(self.AverageOrientation)
-            
-            self.ApertureScalarEstimationByDelta += ((DeltaPos * self.AverageOrientation).sum() / (nOrientation))**2
-
-        if self.TM._FullEventsHistory:
-            self.SpeedsModsHistory[-1] = np.array(SpeedMod)
         SpeedNorm = np.linalg.norm(self.Speed)
         if SpeedNorm > 0:
             self.TimeConstant = min(1./SpeedNorm, self.TM._TrackerDefaultTimeConstant)
@@ -1462,6 +1282,13 @@ class Plotter:
 
     def FullAnalysisOfTracker(self, TrackerID, SpeedLogValue = 2):
         S = self.TM
+        try:
+            if not self.TS._FullEventsHistory:
+                raise Exception
+        except:
+            print("Unable to perform full analysis, as \"_FullEventsHistory\" isn't defined or set to False")
+            return
+
         self._TrackerMeanPositionRelativeTC = 2.
         Tracker = S.Trackers[TrackerID]
         tStart = S.StartTimes[Tracker.ID]

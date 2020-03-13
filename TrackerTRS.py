@@ -40,7 +40,7 @@ class TrackerTRS(Module):
 
         self._TrackerDiameter = 20                                                  # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
         self._TrackerTimeConstantRatioRemoval = 4.                                  # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
-        self._DetectorDefaultSpeedTrigger = 5.                                      # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
+        self._DetectorDefaultSpeedTrigger = 10.                                     # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
         self._TrackerMinDeathActivity = 0.7                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
@@ -55,15 +55,8 @@ class TrackerTRS(Module):
         self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
         self._TrackerMeanPositionAccelerationFactor = 1.2                           # Float. Amount of correction due to recentering process. Default : 1.2
 
-        self._TrackerLockedRotModFactor = 1.                                        # Float. Displacement factor for rotation correction when locked. Default : 1.
-        self._TrackerLockedRotModDisplacementActivityPower = 1.                     # Float. Exponent of the activity power of the activity used for the locked tracker rotation correction. Default : 0.2
-        self._TrackerLockedRotActivityPower = 1.                                    # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
-
         self._TrackerConvergenceThreshold = 0.2                                     # Float. Amount of correction relative to activity allowing for a converged feature. Default : 0.2
         self._TrackerConvergenceHysteresis = 0.1                                    # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.1
-
-        self._TrackerApertureIssueByDeltaThreshold = 0.8                            # Float. Amount of aperture scalar value by shape relative to correction activity. Default : 0.8
-        self._TrackerApertureIssueByDeltaHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueByDeltaThreshold. Default : 0.05
 
         self._TrackerApertureIssueBySpeedThreshold = 0.25                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
         self._TrackerApertureIssueBySpeedHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueBySpeedThreshold. Default : 0.05
@@ -71,16 +64,16 @@ class TrackerTRS(Module):
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
         self._TrackerLockingMaxRecoveryBuffer = 100                                 # Int. Size of the buffer storing events while locked, used in case of feature loss. Greater values increase computationnal cost. Default : 100
         self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
-        self._TrackerLockedPosModFactor = 1.                                        # Float. Displacement factor for position correction when locked. Default : 1.
         self._TrackerLockedRelativeCorrectionsFailures = 0.6                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
-        self._TrackerLockedPosModDisplacementActivityPower = 0.2                    # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
-        self._TrackerLockedActivityPower = 0.1                                      # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
+        self._TrackerLockedSpeedModActivityPower = 0.1                              # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 0.1
+        self._TrackerLockedisplacementModActivityPower = 0.2                        # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
         self._TrackerLockedCanHardCorrect = True                                    # Bool. Allows trackers to remain locked even with high speed correction values. Default : True
 
         self._ComputeSpeedErrorMethod = 'LinearMean'                                # String. Speed error computation method. Can be 'LinearMean', 'ExponentialMean' or 'TwoPointsProjection'. See associated functions for details. Default : 'LinearMean'
         # Monitoring Variables
 
-        self._SnapDt = 0.01                                                         # Float. Time difference between two snapshots of the system.
+        self._MonitorDt = 0.01                                                         # Float. Time difference between two snapshots of the system.
+        self._MonitoredVariables = [('Trackers@TrackerActivity', float)]
 
         self._StatusesNames = {self._STATUS_DEAD: 'Dead', self._STATUS_IDLE:'Idle', self._STATUS_STABILIZING:'Stabilizing', self._STATUS_CONVERGED:'Converged'} # Statuses names with associated int values.
         self._PropertiesNames = {0: 'None', 1: 'Aperture issue', 2:'Locked'}                                                                                    # Properties names with associated int values.
@@ -141,7 +134,7 @@ class TrackerTRS(Module):
 
     def _OnEventModule(self, event):
         UpdateEvent = False
-        if event.timestamp - self.LastTsSnap >= self._SnapDt:
+        if event.timestamp - self.LastTsSnap >= self._MonitorDt:
             UpdateEvent = True
 
         self.NewTrackersAsked = 0
@@ -149,13 +142,13 @@ class TrackerTRS(Module):
         for TrackerID in self.AliveIDs:
             if not Associated or not self._TrackerSingleTrackerPoint:
                 Associated = self.Trackers[TrackerID].RunEvent(event)
-                if Associated and self.Trackers[TrackerID].Lock:
-                    event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
+                if Associated and (True or self.Trackers[TrackerID].Lock):
+                    event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID)
             else:
                 if UpdateEvent:
                     self.Trackers[TrackerID].UpdateWithEvent(event)
-                    if self.Trackers[TrackerID].Lock:
-                        event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
+                    if True or self.Trackers[TrackerID].Lock:
+                        event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID)
 
         if UpdateEvent:
             self.LastTsSnap = event.timestamp
@@ -194,7 +187,7 @@ class TrackerTRS(Module):
             for InitialPositionID, InitialPosition in enumerate(self.DetectorInitialPositions):
                 InitialPositionMinDistance = np.inf
                 for AliveID in self.AliveIDs:
-                    InitialPositionMinDistance = min(InitialPositionMinDistance, np.linalg.norm(InitialPosition - self.Trackers[AliveID].Position))
+                    InitialPositionMinDistance = min(InitialPositionMinDistance, np.linalg.norm(InitialPosition - self.Trackers[AliveID].Position[:2]))
                 if InitialPositionMinDistance >= MaxDistance:
                     MaxDistance = InitialPositionMinDistance
                     SelectedPositionID = InitialPositionID
@@ -226,48 +219,68 @@ class LockClass:
         self.Events = Events
         self.ReleaseTime = None
 
-class FlowEstimator:
+class EstimatorTemplate:
     def __init__(self):
-        # Hidden variables are the sums. Displayed variables are the weights sum, or the averaged variables
-
         self.LastUpdate = -np.inf
+        self.W = 0
+        self._DecayingVars = ['W']
+        self._GeneralVars = []
+    def AddDecayingVar(self, VarName, Dimension = 1, GeneralVar = False):
+        if Dimension == 1:
+            self.__dict__['_'+VarName] = 0.
+            if GeneralVar:
+                self.__dict__[VarName] = 0.
+                self._GeneralVars += [VarName]
+        else:
+            self.__dict__['_'+VarName] = np.zeros(Dimension)
+            if GeneralVar:
+                self.__dict__[VarName] = np.zeros(Dimension)
+                self._GeneralVars += [VarName]
+        self._DecayingVars += ['_'+VarName]
+    def RecoverGeneralData(self):
+        for VarName in self._GeneralVars:
+            self.__dict__[VarName] = self.__dict__['_'+VarName] / self.W
+    def EstimatorStep(self, newT, Tau):
+        DeltaUpdate = newT - self.LastUpdate
+        self.LastUpdate = newT
+        Decay = np.e**(-DeltaUpdate/Tau)
+        for VarName in self._DecayingVars:
+            self.__dict__[VarName] *= Decay
+        self.W += 1
+
+class DynamicsEstimatorClass(EstimatorTemplate):
+    def __init__(self, Radius):
+        EstimatorTemplate.__init__(self)
         self._UpToDateMatrix = False
-        self.W = 0.
+        self._FallBackToIdealMatrix = True
+        self._IdealMatrix = np.identity(4) * 2
+        self._IdealMatrix[2,2] /= Radius**2
+        self._IdealMatrix[3,3] /= Radius**2
+
         self._M = np.zeros((4,4))
         self._InvM = np.zeros((4,4))
 
-        self._Es = np.array([0., 0., 0., 0.]) # Estimator in speed
-        self._Ed = np.array([0., 0., 0., 0.]) # Estimator in displacement
+        self.AddDecayingVar('Es', 4)
+        self.AddDecayingVar('Ed', 4)
 
-        self._x = self._y = 0.
-        self._r = 0 # This aditionnal variable is useful to recover the time constant. We put it here for simplicity
+        self.AddDecayingVar('X', 2, GeneralVar = True)
+        self.AddDecayingVar('r', 1, GeneralVar = True)
+        self.AddDecayingVar('r2', 1, GeneralVar = True)
 
-        self._Sc  = 0. # use W for _Ss
-        self._Sxc = self._Sxs = 0.
-        self._Syc = self._Sys = 0.
+        for ConvergingSum in ['Sc', 'Sxc', 'Sxs', 'Syc', 'Sys']:
+            self.AddDecayingVar(ConvergingSum)
+        for OneDimensionResidue in ['Rcs', 'Rxcs', 'Rycs', 'Rxxcs', 'Ryycs', 'Rxycs', 'Rxycc', 'Rxyss']:
+            self.AddDecayingVar(OneDimensionResidue)
+        self.AddDecayingVar('RXcc', 2)
 
-        self._Rcs = 0.
-        self._Rxcs = self._Rycs = 0.
-        self._Rxcc = 0. # use _x for _Rxss
-        self._Rycc = 0. # use _y for _Ryss
-
-        self._Rxxcs = self._Ryycs = 0.
-        self._Rxycs = self._Rxycc = self._Rxyss = 0.
-
-    def _RecoverGeneralData(self):
-        self.x = self._x / self.W
-        self.y = self._y / self.W
-        self.r = self._r / self.W
-
-    def AddData(self, Event, Flow, Displacement, Tau):
+    def AddData(self, t, relativeLocation, Flow, Displacement, Tau):
         F2 = Flow**2
         N2 = F2.sum()
         if N2 == 0:
             return
+        self.EstimatorStep(t, Tau)
 
-        self._Decay(Event.timestamp, Tau)
-
-        x, y = Event.location
+        x, y = relativeLocation
         xx, yy = x**2, y**2
         xy = x*y
 
@@ -276,13 +289,12 @@ class FlowEstimator:
         cc, ss = F2/N2
         cs = c*s
 
-        self.W += 1
         self._Es += np.array([Flow[0], Flow[1], Flow[1]*x-Flow[0]*y, Flow[0]*x+Flow[1]*y])
         self._Ed += np.array([Displacement[0], Displacement[1], Displacement[1]*x-Displacement[0]*y, Displacement[0]*x+Displacement[1]*y])
 
-        self._x += x
-        self._y += y
+        self._X += relativeLocation
         self._r += np.sqrt(xx+yy)
+        self._r2 += xx+yy
 
         self._Sc += cc
         self._Sxc += xx*cc
@@ -293,8 +305,7 @@ class FlowEstimator:
         self._Rcs  += cs
         self._Rxcs += x*cs
         self._Rycs += y*cs
-        self._Rxcc += x*cc
-        self._Rycc += y*cc
+        self._RXcc += relativeLocation*cc
 
         self._Rxxcs += xx*cs
         self._Ryycs += yy*cs
@@ -304,70 +315,79 @@ class FlowEstimator:
 
         self.UpToDateMatrix = False
 
-    def _Decay(self, newT, Tau):
-        DeltaUpdate = newT - self.LastUpdate
-        self.LastUpdate = newT
-        Decay = np.e**(-DeltaUpdate/Tau)
-
-        self.W *= Decay
-
-        self._Es *= Decay
-        self._Ed *= Decay
-
-        self._x *= Decay
-        self._y *= Decay
-        self._r *= Decay
-
-        self._Sc  *= Decay
-        self._Sxc *= Decay
-        self._Sxs *= Decay
-        self._Syc *= Decay
-        self._Sys *= Decay
-
-        self._Rcs  *= Decay
-        self._Rxcs *= Decay
-        self._Rycs *= Decay
-        self._Rxcc *= Decay
-        self._Rycc *= Decay
-
-        self._Rxxcs *= Decay
-        self._Ryycs *= Decay
-        self._Rxycs *= Decay
-        self._Rxycc *= Decay
-        self._Rxyss *= Decay
-
     def _GetInverseMatrix(self):
         if self._UpToDateMatrix:
-            return
+            return (self._FallBackToIdealMatrix or (abs(self.MDet) > 1.))
         self._M[0,0] = self._Sc
         self._M[1,1] = self.W - self._Sc
         self._M[2,2] = self._Sxs + self._Syc - 2*self._Rxycs
         self._M[3,3] = self._Sxc + self._Sys + 2*self._Rxycs
 
         self._M[1,0] = self._M[0,1] = self._Rcs
-        self._M[2,0] = self._M[0,2] = self._Rxcs - self._Rycc
-        self._M[3,0] = self._M[0,3] = self._Rxcc + self._Rycs
+        self._M[2,0] = self._M[0,2] = self._Rxcs - self._RXcc[1]
+        self._M[3,0] = self._M[0,3] = self._RXcc[0] + self._Rycs
 
-        self._M[2,1] = self._M[1,2] = (self._x - self._Rxcc) - self._Rycs
-        self._M[3,1] = self._M[1,3] = self._Rxcs + (self._y - self._Rycc)
+        RXss = self._X - self._RXcc
+        self._M[2,1] = self._M[1,2] = (RXss[0]) - self._Rycs
+        self._M[3,1] = self._M[1,3] = self._Rxcs + (RXss[1])
         self._M[3,2] = self._M[2,3] = self._Rxxcs + self._Rxyss - self._Rxycc - self._Ryycs
-        
-        self._InvM = np.linalg.inv(self._M)
+
+        self.MDet = np.linalg.det(self._M)
         self._UpToDateMatrix = True
+        if abs(self.MDet) > 1.: # Should be homogeneous to px^2 rad^2, so 1 is decent
+            self._InvM = np.linalg.inv(self._M)
+            return True
+        else:
+            if self._FallBackToIdealMatrix:
+                self._InvM = self._IdealMatrix
+                return True
+            else:
+                return False
 
     def GetSpeed(self):
-        self._GetInverseMatrix()
-        return self._InvM.dot(self._Es)
+        if self._GetInverseMatrix():
+            return self._InvM.dot(self._Es)
+        else:
+            return None
     def GetDisplacement(self):
-        self._GetInverseMatrix()
-        return self._InvM.dot(self._Ed)
+        if self._GetInverseMatrix():
+            return self._InvM.dot(self._Ed)
+        else:
+            return None
 
-class TrackerClass:
+class SpeedConvergenceEstimatorClass(EstimatorTemplate):
+    def __init__(self):
+        EstimatorTemplate.__init__(self)
+
+        self.AddDecayingVar('Vector', Dimension = 2, GeneralVar = True)
+
+    def AddData(self, t, Flow, Tau):
+        NFlow = np.linalg.norm(Flow)
+        if NFlow == 0:
+            return
+        self.EstimatorStep(t, Tau)
+
+        self._Vector += Flow / NFlow
+
+class ApertureEstimatorClass(EstimatorTemplate):
+    def __init__(self):
+        EstimatorTemplate.__init__(self)
+
+        self.AddDecayingVar('Vector', 2, GeneralVar = True)
+
+    def AddData(self, t, Flow, Tau):
+        N = np.linalg.norm(Flow)
+        if N == 0:
+            return
+        self.EstimatorStep(t, Tau)
+
+        u = Flow / N
+        self._Vector += np.array([u[0]**2 - u[1]**2, 2*u[0]*u[1]])
+
+class TrackerClass(EstimatorTemplate):
     def __init__(self, TrackerManager, ID, InitialPosition):
         self.TM = TrackerManager
         self.ID = ID
-
-        self.Estimator = FlowEstimator()
 
         self.Status = self.TM._STATUS_IDLE
         # Non status properties :
@@ -379,62 +399,39 @@ class TrackerClass:
         self.Speed    = np.array([0., 0., 0., 0.], dtype = float)
         # self.Position = [tx, ty, theta, s]
         self.Radius = self.TM._TrackerDiameter / 2
-        self.SquaredRadius = self.HalfSize**2
+        self.SquaredRadius = self.Radius**2
 
         self.TimeConstant = self.TM._TrackerDefaultTimeConstant
         
         self.ProjectedEvents = []
         self.LastUpdate = 0.
+        self.TrackerActivity = 0.
+        self.DynamicsEstimator = DynamicsEstimatorClass(self.Radius)
+        self.ApertureEstimator = ApertureEstimatorClass()
+        self.SpeedConvergenceEstimator = SpeedConvergenceEstimatorClass()
 
-        self.Activity = 0.
-        self.ScalarCorrectionActivity = 0.
-        self.ScalarCorrectionValue = 0.
-        self.VectorialCorrectionValue = 0.
 
-        self.AverageOrientation = np.array([0.,0.])
-        self.AverageSpeedCorrectionOrientation = np.array([0., 0.])
-        self.ApertureScalarEstimationByDelta = 0.
-        self.ApertureScalarEstimationBySpeed = 0.
-        self.ApertureVectorEstimationBySpeed = np.array([0., 0.])
-
-        self.WeightedRotationalActivity = 0.
-
-        self.SpeedError = np.array([0., 0.])
-        self.RotSpeedError = 0.
-        #self.PositionError = np.array([0., 0.])
         self._ComputeSpeedError = self.__class__.__dict__['_ComputeSpeedError' + self.TM._ComputeSpeedErrorMethod]
 
     def UpdateWithEvent(self, event):
         DeltaUpdate = event.timestamp - self.LastUpdate
         self.LastUpdate = event.timestamp
         Decay = np.e**(-DeltaUpdate / (self.TimeConstant * self.TM._TrackerTimeConstantRatioRemoval))
+        self._AutoUpdateSpeed(DeltaUpdate)
 
         self.Position += self.Speed * DeltaUpdate
-        self.Rotation += self.RotSpeed * DeltaUpdate
+        self.Position[3] = min(max(self.Position[3], 0.1), 10.)
 
-        self.Activity *= Decay
-        self.SpeedError *= Decay
-        self.RotSpeedError *= Decay
-        #self.PositionError *= Decay
-        self.MeanPositionSummed *= Decay
-        self.ScalarCorrectionActivity *= Decay
-        self.ScalarCorrectionValue *= Decay
-        self.VectorialCorrectionValue *= Decay
-        self.ApertureScalarEstimationByDelta *= Decay
-        self.ApertureScalarEstimationBySpeed *= Decay
-        self.ApertureVectorEstimationBySpeed *= Decay
-        self.AverageOrientation *= Decay
-        self.AverageSpeedCorrectionOrientation *= Decay
-        self.WeightedRotationalActivity *= Decay
+        self.TrackerActivity *= Decay
 
         if self.Status == self.TM._STATUS_IDLE:
             return True
-        if (self.Position < self.HalfSize).any() or (self.Position >= np.array(self.TM._LinkedMemory.STContext.shape[:2]) - self.HalfSize).any(): # out of bounds
+        if (self.Position[:2] < self.Radius).any() or (self.Position[:2] >= np.array(self.TM._LinkedMemory.STContext.shape[:2]) - self.Radius).any(): # out of bounds
             if self.Lock:
                 self.Unlock('out of bounds')
             self.TM._KillTracker(self, event)
             return False
-        if self.Activity < self.TM._TrackerDiameter * self.TM._TrackerMinDeathActivity: # Activity remaining too low
+        if self.TrackerActivity < self.TM._TrackerDiameter * self.TM._TrackerMinDeathActivity: # Activity remaining too low
             if self.Lock:
                 self.Unlock('low activity')
             self.TM._KillTracker(self, event)
@@ -442,42 +439,38 @@ class TrackerClass:
 
         return True
 
-    def MeanPosition(self):
-        if self.Activity:
-            return self.MeanPositionSummed / self.Activity
-        else:
-            return np.array([0., 0.])
+    def _AutoUpdateSpeed(self, DeltaUpdate):
+        # Takes care of the acceleration, specifically the scaling factor that self evolves.
+        # If decaying speeds want to be considered, they should be put here
+        self.Speed[3] += 0* (2 * self.Speed[3]**2 * DeltaUpdate) / self.Position[3]
 
     def RunEvent(self, event):
         if not self.UpdateWithEvent(event): # We update the position and activity. They do not depend on the event location. False return means the tracker has died : out of screen or activity too low (we should potentially add 1 for current event but shoud be marginal)
             return False # We also consider that even if the event may have matched, the tracker still dies. The activity increase of 1 is not enough
 
-        RC, RS = np.cos(-self.Rotation), np.sin(-self.Rotation)
-        Dx, Dy = event.location - self.Position
+        RC, RS = np.cos(-self.Position[2]), np.sin(-self.Position[2])
+        Dx, Dy = event.location - self.Position[:2]
         Dx2, Dy2 = Dx**2, Dy**2
-        if Dx2 + Dy2 > self.HS2:
+        R2 = Dx2 + Dy2
+        if R2 > self.SquaredRadius:
             return False
+        self.TrackerActivity += 1
 
-        #RelativeLocation = CenteredLocation - self.MeanPosition()
+        R = np.sqrt(R2)
+        CurrentProjectedEvent = np.array([float(event.timestamp), (Dx*RC + Dy*RS) / self.Position[3], (Dy*RC - Dx*RS) / self.Position[3]])
+        SavedProjectedEvent = np.array(CurrentProjectedEvent) 
 
-        CurrentProjectedEvent = np.array([float(event.timestamp), Dx*RC + Dy*RS, Dy*RC - Dx*RS])
-        SavedProjectedEvent = np.array(CurrentProjectedEvent) # Possibly error here, as reference to event.timestamp is lost
-
-        self.Activity += 1
-        self.MeanPositionSummed += CurrentProjectedEvent[1:]
-        if self.TM._TrackerIgnoreBorderEvents and (abs(CurrentProjectedEvent[1:]) > (self.HalfSize - self.TM._ClosestEventProximity)).any(): # MOVED HERE (Limit event)
+        if self.TM._TrackerIgnoreBorderEvents and (R > (self.Radius - self.TM._ClosestEventProximity)).any(): 
             if not self.Lock:
                 self.ProjectedEvents += [SavedProjectedEvent]
             return True
 
         if self.Status == self.TM._STATUS_IDLE:
             self.ProjectedEvents += [SavedProjectedEvent]
-            if self.Activity > self.TM._DetectorMinActivityForStart: # This StatusUpdate is put here, since it would be costly in computation to have it somewhere else and always be checked 
+            if self.TrackerActivity > self.TM._DetectorMinActivityForStart: # This StatusUpdate is put here, since it would be costly in computation to have it somewhere else and always be checked 
                 self.Status = self.TM._STATUS_STABILIZING
                 self.TM.StartTimes[self.ID] = event.timestamp
             return True
-
-        # FROM HERE (Limit event)
 
         if not self.Lock:
             while len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.TimeConstant * self.TM._TrackerTimeConstantRatioRemoval: # We look for the first event recent enough
@@ -491,115 +484,51 @@ class TrackerClass:
             UsedEventsList = self.ProjectedEvents
             self.ProjectedEvents += [SavedProjectedEvent]
 
-        ConsideredNeighbours = []
-        for nEventReversed in range(len(UsedEventsList)):
-            ArrayedEvent = UsedEventsList[-(nEventReversed+1)]
-            if np.linalg.norm(CurrentProjectedEvent[1:] - ArrayedEvent[1:]) < self.TM._ClosestEventProximity:
-                if self.Lock or CurrentProjectedEvent[0] - ArrayedEvent[0] > self.TM._ObjectEdgePropagationTC:
-                    ConsideredNeighbours += [np.array(ArrayedEvent)]
-                    if len(ConsideredNeighbours) == self.TM._MaxConsideredNeighbours:
-                        break
+        FlowError, ProjectionError = self._ComputeLocalError(CurrentProjectedEvent, UsedEventsList) # In the TRS model, the flow is different from a simple speed error.
+        if FlowError is None: # Computation could not be performed, due to not enough events
+            return True
+        self.SpeedConvergenceEstimator.AddData(CurrentProjectedEvent[0], FlowError, self.TimeConstant)
+        self.ApertureEstimator.AddData(CurrentProjectedEvent[0], FlowError, self.TimeConstant)
 
-        if len(ConsideredNeighbours) < self.TM._MinConsideredNeighbours:
+        self.DynamicsEstimator.AddData(CurrentProjectedEvent[0], CurrentProjectedEvent[1:], FlowError, ProjectionError, self.TimeConstant)
+        SpeedError = self.DynamicsEstimator.GetSpeed()
+        if SpeedError is None: # We could not access TRS speed errors, as matrix is singular. We have to wait for more events to aggregate
             return True
 
-        ConsideredNeighbours = np.array(ConsideredNeighbours)
-        SpeedError, ProjectionError = self._ComputeSpeedError(self, CurrentProjectedEvent, ConsideredNeighbours)
         if self.Lock:
-            SpeedMod = SpeedError / self.Lock.Activity ** self.TM._TrackerLockedActivityPower
-            self.Position += self.TM._TrackerLockedPosModFactor * ProjectionError / self.Lock.Activity ** self.TM._TrackerLockedPosModDisplacementActivityPower
+            SpeedMod = SpeedError / self.Lock.Activity ** self.TM._TrackerLockedSpeedModActivityPower
+            DisplacementError = self.DynamicsEstimator.GetDisplacement()
+            self.Position += DisplacementError / self.Lock.Activity ** self.TM._TrackerLockedDisplacementModActivityPower
         else:
-            SpeedMod = SpeedError / self.Activity ** self.TM._TrackerUnlockedActivityPower
+            SpeedMod = SpeedError / self.TrackerActivity ** self.TM._TrackerUnlockedActivityPower
 
-        SpeedErrorNorm = np.linalg.norm(SpeedError)
-        self.ScalarCorrectionActivity += 1
-
-        self.SpeedError += SpeedError
         self.Speed += SpeedMod * self.TM._TrackerAccelerationFactor
 
-        if self.TM._CorrectAxialRotation and Dx2 + Dy2 > self.HS2 * self.TM._MinRotCorrectionSizeRatio2 and SpeedErrorNorm > 0:
-            n = SpeedError / SpeedErrorNorm
-            EventLocalError = SpeedError - (n*(n*(self.SpeedError / self.ScalarCorrectionActivity)).sum())
-            #RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / (Dx2 + Dy2)
-            RotSpeedError = -(CurrentProjectedEvent[0]*EventLocalError[1] - CurrentProjectedEvent[1]*EventLocalError[0]) / self.HalfSize
-
-            #Weight = np.e**(-self.HalfSize / (Dx2 + Dy2))
-            Weight = 1.
-            self.WeightedRotationalActivity += Weight
-            if self.Lock:
-                RotSpeedMod = RotSpeedError / self.Lock.Activity ** self.TM._TrackerLockedRotActivityPower
-                #InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / (Dx2 + Dy2)
-                InducedRotation = (CurrentProjectedEvent[0]*ProjectionError[1] - CurrentProjectedEvent[1]*ProjectionError[0]) / self.HalfSize
-                self.Rotation += Weight * self.TM._TrackerLockedRotModFactor * InducedRotation / (self.WeightedRotationalActivity ** self.TM._TrackerLockedRotModDisplacementActivityPower)
-            else:
-                RotSpeedMod = Weight * RotSpeedError / (self.WeightedRotationalActivity ** self.TM._TrackerUnlockedActivityPower)
-            self.RotSpeedError += RotSpeedError
-            self.RotSpeed += Weight * RotSpeedMod * self.TM._TrackerAccelerationFactor
-
-        Xm = (self.MeanPositionSummed / self.Activity)
+        self.DynamicsEstimator.RecoverGeneralData()
         if self.TM._TrackerUsePositionMean and not self.Lock:
-            DiffaXm = abs(Xm) - self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._TrackerDiameter
-            if (DiffaXm > 0).any():
-                self.Position += self.TM._TrackerMeanPositionAccelerationFactor * DiffaXm * np.sign(Xm) / self.Activity
+            if (self.DynamicsEstimator.r > self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.TM._TrackerDiameter):
+                self.Position[:2] -= self.TM._TrackerMeanPositionAccelerationFactor * self.DynamicsEstimator.X / self.TrackerActivity
 
-        DeltaPos = CurrentProjectedEvent[1:] - Xm
-        if DeltaPos[0] < 0:
-            DeltaPos *= -1
-        nDelta = np.linalg.norm(DeltaPos)
-        if nDelta > 0:
-            DeltaPos = DeltaPos / nDelta
-            self.AverageOrientation += DeltaPos
-            nOrientation = np.linalg.norm(self.AverageOrientation)
-            
-            self.ApertureScalarEstimationByDelta += ((DeltaPos * self.AverageOrientation).sum() / (nOrientation))**2
+        self._UpdateTC()
 
-        SpeedNorm = np.linalg.norm(self.Speed)
-        if SpeedNorm > 0:
-            self.TimeConstant = min(1./SpeedNorm, self.TM._TrackerDefaultTimeConstant)
-            if SpeedErrorNorm > 0:
-                ScalarValue = (SpeedError * self.Speed).sum() / (SpeedErrorNorm * SpeedNorm)
-                self.ScalarCorrectionValue += ScalarValue
-                VectorialValue = (self.Speed[0]*SpeedError[1] - self.Speed[1]*SpeedError[0]) / (SpeedErrorNorm * SpeedNorm)
-                self.VectorialCorrectionValue += VectorialValue
-
-        else:
-            self.TimeConstant = self.TM._TrackerDefaultTimeConstant
-
-        if SpeedErrorNorm > 0:
-            SpeedModOrientation = SpeedError / SpeedErrorNorm
-            RotatedSpeedModOrientation = np.array([SpeedModOrientation[0]**2 - SpeedModOrientation[1]**2, 2*SpeedModOrientation[0]*SpeedModOrientation[1]])
-            if np.linalg.norm(RotatedSpeedModOrientation) > 1.05:
-                self.TM.LogWarning("{0}, {1}".format(SpeedError, RotatedSpeedModOrientation))
-            if SpeedMod[0] < 0:
-                SpeedModOrientation = - SpeedModOrientation
-            self.AverageSpeedCorrectionOrientation += SpeedModOrientation
-            self.ApertureVectorEstimationBySpeed += RotatedSpeedModOrientation
-
-            self.ApertureScalarEstimationBySpeed += ((self.AverageSpeedCorrectionOrientation * SpeedModOrientation).sum() / np.linalg.norm(self.AverageSpeedCorrectionOrientation))**2
-
-
-        self.IgnoredComputationReasons += [None]
         self.ComputeCurrentStatus(event.timestamp)
         return True
 
     def ComputeCurrentStatus(self, t): # Cannot be called when DEAD or IDLE. Thus, we first check evolutions for aperture issue and lock properties, then update the status
-        if not self.ApertureIssue and (self.ApertureScalarEstimationByDelta > self.ScalarCorrectionActivity * (self.TM._TrackerApertureIssueByDeltaThreshold + self.TM._TrackerApertureIssueByDeltaHysteresis) or np.linalg.norm(self.ApertureVectorEstimationBySpeed) > self.ScalarCorrectionActivity * (self.TM._TrackerApertureIssueBySpeedThreshold + self.TM._TrackerApertureIssueBySpeedHysteresis)):
+        self.ApertureEstimator.RecoverGeneralData()
+        if not self.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector) > self.TM._TrackerApertureIssueBySpeedThreshold + self.TM._TrackerApertureIssueBySpeedHysteresis:
             self.ApertureIssue = True
             Reason = "aperture issue"
-            if self.ApertureScalarEstimationByDelta > self.ScalarCorrectionActivity * (self.TM._TrackerApertureIssueByDeltaThreshold + self.TM._TrackerApertureIssueByDeltaHysteresis):
-                Reason = Reason + ' (Delta = {0:.3f})'.format(self.ApertureScalarEstimationByDelta/self.ScalarCorrectionActivity)
-            else:
-                Reason = Reason + ' (Speed = {0:.3f})'.format(np.linalg.norm(self.ApertureVectorEstimationBySpeed)/self.ScalarCorrectionActivity)
-        elif self.ApertureIssue and (self.ApertureScalarEstimationByDelta < self.ScalarCorrectionActivity * (self.TM._TrackerApertureIssueByDeltaThreshold - self.TM._TrackerApertureIssueByDeltaHysteresis) and np.linalg.norm(self.ApertureVectorEstimationBySpeed) < self.ScalarCorrectionActivity * (self.TM._TrackerApertureIssueBySpeedThreshold - self.TM._TrackerApertureIssueBySpeedHysteresis)):
+        elif self.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector) < self.TM._TrackerApertureIssueBySpeedThreshold - self.TM._TrackerApertureIssueBySpeedHysteresis:
             self.ApertureIssue = False
 
         CanBeLocked = True
         if self.ApertureIssue:
             CanBeLocked = False
-        elif self.Activity > self.TM._TrackerLockMaxRelativeActivity * self.TM._TrackerDiameter:
+        elif self.TrackerActivity > self.TM._TrackerLockMaxRelativeActivity * self.TM._TrackerDiameter:
             CanBeLocked = False
             Reason = "excessive absolute activity"
-        elif self.ScalarCorrectionActivity < self.TM._TrackerLockedRelativeCorrectionsFailures * self.Activity:
+        elif self.SpeedConvergenceEstimator.W < self.TM._TrackerLockedRelativeCorrectionsFailures * self.TrackerActivity:
             CanBeLocked = False
             Reason = "unsufficient number of points matching"
 
@@ -607,8 +536,10 @@ class TrackerClass:
             self.Unlock(Reason)
             return None
 
+        self.SpeedConvergenceEstimator.RecoverGeneralData()
         if self.Status == self.TM._STATUS_CONVERGED:
-            if abs(self.ScalarCorrectionValue) > self.ScalarCorrectionActivity * (self.TM._TrackerConvergenceThreshold + self.TM._TrackerConvergenceHysteresis): # Part where we downgrade to stabilizing, when the corrections are too great
+            self.SpeedConvergenceEstimator.RecoverGeneralData()
+            if np.linalg.norm(self.SpeedConvergenceEstimator.Vector) > (self.TM._TrackerConvergenceThreshold + self.TM._TrackerConvergenceHysteresis): # Part where we downgrade to stabilizing, when the corrections are too great
                 if self.Lock:
                     if not self.TM._TrackerLockedCanHardCorrect:
                         self.Unlock("excessive correction")
@@ -617,16 +548,16 @@ class TrackerClass:
                     self.Status = self.TM._STATUS_STABILIZING
                 return None
             if not self.Lock and CanBeLocked and self.TM._TrackerAllowShapeLock:
-                self.Lock = LockClass(t, self.Activity, list(self.ProjectedEvents))
-                self.LocksSaves += [LockClass(t, self.Activity, list(self.ProjectedEvents))]
+                self.Lock = LockClass(t, self.TrackerActivity, list(self.ProjectedEvents + [0., 0., 0.])) # Added event at the end allows for simplicity in neighbours search
+                self.LocksSaves += [LockClass(t, self.TrackerActivity, list(self.ProjectedEvents))]
                 
                 self.TM._OnTrackerLock(self)
 
                 self.TM.Log("Tracker {0} has locked".format(self.ID))
                 return None # We assume we have checked everything here
         elif self.Status == self.TM._STATUS_STABILIZING:
-            if abs(self.ScalarCorrectionValue) < self.ScalarCorrectionActivity * (self.TM._TrackerConvergenceThreshold - self.TM._TrackerConvergenceHysteresis):
-                if self.ScalarCorrectionActivity >= self.TM._TrackerLockedRelativeCorrectionsFailures * self.Activity:
+            if np.linalg.norm(self.SpeedConvergenceEstimator.Vector) < (self.TM._TrackerConvergenceThreshold - self.TM._TrackerConvergenceHysteresis):
+                if self.SpeedConvergenceEstimator.W >= self.TM._TrackerLockedRelativeCorrectionsFailures * self.TrackerActivity:
                     self.Status = self.TM._STATUS_CONVERGED
                     return None
 
@@ -636,6 +567,31 @@ class TrackerClass:
         self.TM.FeatureManager.RemoveLock(self)
         self.TM.LogWarning("Tracker {0} was released ({1})".format(self.ID, Reason))
 
+    def _UpdateTC(self):
+        vx, vy, w, s = self.Speed
+        TrackerAverageSpeed = np.sqrt(vx**2 + vy**2 + self.DynamicsEstimator.r2 * (w**2 + s**2) + 2 * (self.DynamicsEstimator.X * np.array([vy*w + vx*s, -vx*w + vy*s])).sum())
+        if TrackerAverageSpeed <= 0:
+            if TrackerAverageSpeed < 0:
+                self.TM.LogWarning("Tracker {0} : <||v||> < 0".format(self.ID))
+            self.TimeConstant  = self.TM._TrackerDefaultTimeConstant
+        else:
+            self.TimeConstant = min(self.TM._TrackerDefaultTimeConstant, 1. / TrackerAverageSpeed)
+
+    def _ComputeLocalError(self, CurrentProjectedEvent, PreviousEvents):
+        ConsideredNeighbours = []
+        for PreviousEvent in reversed(PreviousEvents[:-1]): # We reject the last event, that is either the CPE, or a fake event in Lock.Events
+            if np.linalg.norm(CurrentProjectedEvent[1:] - PreviousEvent[1:]) < self.TM._ClosestEventProximity:
+                if self.Lock or (CurrentProjectedEvent[0]- PreviousEvent[0]) > self.TM._ObjectEdgePropagationTC:
+                    ConsideredNeighbours += [np.array(PreviousEvent)]
+                    if len(ConsideredNeighbours) == self.TM._MaxConsideredNeighbours:
+                        break
+
+        if len(ConsideredNeighbours) < self.TM._MinConsideredNeighbours:
+            return None, None
+
+        ConsideredNeighbours = np.array(ConsideredNeighbours)
+        return self._ComputeSpeedError(self, CurrentProjectedEvent, ConsideredNeighbours)
+
     def _ComputeSpeedErrorLinearMean(self, CurrentProjectedEvent, ConsideredNeighbours):
         MeanPoint = np.array([(ConsideredNeighbours[:,1]*ConsideredNeighbours[:,0]).sum(), (ConsideredNeighbours[:,2]*ConsideredNeighbours[:,0]).sum()]) / ConsideredNeighbours[:,0].sum()
         MeanTS = ConsideredNeighbours[:,0].mean()
@@ -643,7 +599,6 @@ class TrackerClass:
         DeltaPos = (CurrentProjectedEvent[1:] - MeanPoint)
         SpeedError = DeltaPos / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaPos
-
     def _ComputeSpeedErrorExponentialMean(self, CurrentProjectedEvent, ConsideredNeighbours):
         Weights = np.e**((ConsideredNeighbours[:,0] - CurrentProjectedEvent[0]) / (self.TimeConstant * self.TM._TrackerTimeConstantRatioRemoval))
         MeanPoint = np.array([(ConsideredNeighbours[:,1] * Weights).sum(), (ConsideredNeighbours[:,2] * Weights).sum()]) / Weights.sum()
@@ -652,23 +607,6 @@ class TrackerClass:
         DeltaPos = (CurrentProjectedEvent[1:] - MeanPoint)
         SpeedError = DeltaPos / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaPos
-
-    def _ComputeSpeedErrorTwoPointsProjection(self, CurrentProjectedEvent, ConsideredNeighbours):
-
-        Epsilon12 = ConsideredNeighbours[0,1:] - ConsideredNeighbours[1,1:]
-        N2 = (Epsilon12 * Epsilon12).sum()
-        if N2 <= 1.1:
-            return np.array([0., 0.])
-        Epsilon02 = CurrentProjectedEvent[1:] - ConsideredNeighbours[1,1:]
-
-        Lambda = (Epsilon02 * Epsilon12).sum() / (Epsilon12 * Epsilon12).sum()
-        #if Lambda < 0 or Lambda > 1: # Here, we check that the point newly arrived is inside the considered segment.
-        #    return np.array([0., 0.])
-        DeltaP = Epsilon02 - Epsilon12 * Lambda
-        MeanTS = ConsideredNeighbours[:,0].mean()
-
-        SpeedError = DeltaP / (CurrentProjectedEvent[0] - MeanTS)
-        return SpeedError, DeltaP
 
 from pycpd import rigid_registration as registration
 
@@ -1148,7 +1086,7 @@ class Plotter:
     
     def GenerateTrackingGif(self, TrackerIDs = None, IgnoreTrackerIDs = [], AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None, TrailDt = 0, TrailWidth = 2, ForcedColors = {}):
         if BinDt is None:
-            BinDt = self.TM._SnapDt
+            BinDt = self.TM._MonitorDt
 
         if AddVirtualPoint:
             VirtualPoint = [np.array(self.TM._LinkedMemory.STContext.shape[:2], dtype = float) / 2, np.array([0., 0.])]
@@ -1193,7 +1131,7 @@ class Plotter:
     
         if DoGif:
             GifFile = 'tracking_'+datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')+'.gif'
-            command = 'convert -delay {0} -loop 0 '.format(int(1000*self.TM._SnapDt))+Folder+'*.png ' + Folder + GifFile
+            command = 'convert -delay {0} -loop 0 '.format(int(1000*self.TM._MonitorDt))+Folder+'*.png ' + Folder + GifFile
             print("Generating gif. (command : " + command + " )")
             os.system(command)
             print("GIF generated : {0}".format(GifFile))

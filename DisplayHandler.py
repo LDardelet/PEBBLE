@@ -27,6 +27,7 @@ class DisplayHandler(Module):
 
         self.__PostTransporters__ = {'Event':self._SendEvent, 'Segment':self._SendSegment}
         self.Socket = None
+        atexit.register(self.EndTransmission)
 
     def _InitializeModule(self, **kwargs):
         if not self.Socket is None:
@@ -51,7 +52,6 @@ class DisplayHandler(Module):
         self.MainUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 
         self.__Started__ = True
-        atexit.register(self.EndTransmission)
 
         time.sleep(0.1)
 
@@ -222,6 +222,7 @@ class DisplayHandler(Module):
         except:
             self.LogWarning("Display seems down (DestroySocket)")
         ResponseUDP.close()
+        self.Socket = None
 
     def _GetDisplaySocket(self):
         Geometry = self.__Framework__._GetStreamGeometry(self)

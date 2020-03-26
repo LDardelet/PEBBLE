@@ -11,7 +11,7 @@ from Plotting_methods import *
 from pydoc import locate
 
 class Framework:
-    _Terminal_Width = 300
+    _Terminal_Width = 250
     _Default_Color = '\033[0m'
     _LogColors = {0:'\033[0m', 1: "\033[1;33;40m", 2: "\033[1;31;40m", 3: "\033[1;32;40m"}
     '''
@@ -689,11 +689,13 @@ class Event:
         return self.location.tolist() + [self.timestamp, self.polarity]
 
 class TrackerEvent(Event):
-    def __init__(self, original, TrackerLocation = None, TrackerID = None):
+    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerColor = 'b', TrackerMarker = 'o'): # Some options are added for dev purposes.
         super().__init__(original = original)
         self.TrackerLocation = np.array(TrackerLocation)
         self.TrackerID = TrackerID
+        self.TrackerColor = TrackerColor
+        self.TrackerMarker = TrackerMarker
 
     def _AsList(self):
-        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist()
+        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist() + [self.TrackerColor, self.TrackerMarker]
 

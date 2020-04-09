@@ -75,7 +75,7 @@ class Reader(Module):
             self._NextEvent = self._NextEventAedat
             return self._InitializeAedat()
         else:
-            print("Invalid filename.")
+            self.LogWarning("Invalid filename.")
             return False
 
     def _OnEventModule(self, event):
@@ -124,12 +124,10 @@ class Reader(Module):
                     stdout.write("t = {0:.3f} / {1:.3f}\r".format(NextEvent.timestamp, t))
                     stdout.flush()
                 if NextEvent.timestamp >= t:
-                    print("")
-                    print("Done.")
+                    self.Log("Done.")
                     break
         except KeyboardInterrupt:
-            print("")
-            print("Stopped fast forward at t = {0:.3f}".format(NextEvent.timestamp))
+            self.LogWarning("Stopped fast forward at t = {0:.3f}".format(NextEvent.timestamp))
 
     def _Rewind(self, tNew):
         if tNew >= self.CurrentStream[-1].timestamp:
@@ -259,11 +257,6 @@ class Reader(Module):
         return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
 
     def _ATIS_BYTES_ANALYSIS(self, Bytes):
-        #print "Current Batch:"
-        #print Bytes
-        #for Byte in Bytes:
-        #    print "{0:8b}".format(Byte)
-        
         td = Bytes[0] >> 2
         self.PreviousEventTs += td
 
@@ -276,11 +269,6 @@ class Reader(Module):
             y = self.yMax - ((Bytes[4] << 8) | (Bytes[3]))
         else:
             y = (Bytes[4] << 8) | (Bytes[3])
-        #print "Gives :"
-        #print "t = {0:.6f} (td = {1:.6f})".format(self.PreviousEventTs, td)
-        #print "p = {0}".format(p)
-        #print "x = {0}".format(x)
-        #print "y = {0}".format(y)
 
         return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
 
@@ -290,16 +278,16 @@ class Reader(Module):
         Header = self.CurrentFile.read(_ES_HEADER_SIZE)
         Version = Header[12]
         if Version != 2:
-            print("Wrong .es version.")
+            self.LogWarning("Wrong .es version.")
             return False
 
         self.Event_Type = ord(self.CurrentFile.read(1))
         self.Event_Size = 5
 
-        print("Reading Event Stream file, with {0} types".format(_EVENT_TYPE_NAME[self.Event_Type]))
+        self.Log("Reading Event Stream file, with {0} types".format(_EVENT_TYPE_NAME[self.Event_Type]))
 
         if not _EVENT_TYPE_HANDLED[self.Event_Type]:
-            print("Event type not handled yet. Too bad...")
+            self.LogWarning("Event type not handled yet. Too bad...")
             return False
 
         self.OverflowValue = _EVENT_TYPE_OVERFLOW_VALUE[self.Event_Type]
@@ -319,7 +307,7 @@ class Reader(Module):
 
         self.BatchSize = self._BatchEventSize * self.Event_Size
 
-        print("> Found stream geometry of {0}".format(self.Geometry))
+        self.Log("Found stream geometry of {0}".format(self.Geometry))
         return True
 
     # .DAT FILES METHODS
@@ -329,9 +317,9 @@ class Reader(Module):
 
         HeaderHandled = self._DealWithHeaderDat()
         if self.Geometry == self.DefaultGeometry:
-            print("No geometry found.")
+            self.Log("No geometry found.")
             if self._TryUseDefaultGeometry:
-                print("Using default geometry : {0}".format(self.Geometry))
+                self.LogWarning("Using default geometry : {0}".format(self.Geometry))
             else:
                 self._CloseFile()
                 return False
@@ -362,7 +350,7 @@ class Reader(Module):
     
         self.NEvents = int( (stop-start)/self.Event_Size)
         dNEvents = self.NEvents/100
-        print(("> The file contains %d events." %self.NEvents))
+        self.Log("The file contains %d events." %self.NEvents)
 
         self.nEvent = 0
         self.CurrentByteBatch = b''
@@ -386,7 +374,7 @@ class Reader(Module):
                 self.Geometry[0] = int(HeaderNextLine.lower().split(b'width')[1].strip())
 
         if FoundHeightOrWidth:
-            print("> Found stream geometry of {0}".format(self.Geometry))
+            self.Log("Found stream geometry of {0}".format(self.Geometry))
         if self.Header:
             self.Event_Type = unpack('B',self.CurrentFile.read(1))[0]
             self.Event_Size = unpack('B',self.CurrentFile.read(1))[0]
@@ -479,8 +467,7 @@ class Reader(Module):
     def _LoadNewBatch(self):
         Buffer = self.CurrentFile.read(self.BatchSize)
         if not Buffer:
-            print("")
-            print("Input reached EOF.")
+            self.Log("Input reached EOF.")
             self.__Framework__.Running = False
         
         self.CurrentByteBatch = self.CurrentByteBatch + Buffer
@@ -494,7 +481,7 @@ class Reader(Module):
     def _CloseFile(self):
         if not self.CurrentFile is None:
             self.CurrentFile.close()
-            print("Closed file {0}".format(self.StreamName))
+            self.Log("Closed file {0}".format(self.StreamName))
             self.CurrentFile = None
 
 def peek(f, length=1):

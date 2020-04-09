@@ -64,10 +64,14 @@ class Framework:
             self._ProjectRawData = {}
             self._GenerateEmptyProject()
 
+        self.PropagatedEvent = None
         self.Running = False
+        self._Initializing = False
         self.Paused = ''
 
     def Initialize(self, **ArgsDict):
+        self._Initializing = True
+        self.PropagatedEvent = None
         self._LogType = 'columns'
         self._LogInit()
         for tool_name in self.ToolsList:
@@ -82,6 +86,7 @@ class Framework:
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
         self._SendLog()
+        self._Initializing = False
         return True
 
     def _OnClosing(self):
@@ -170,6 +175,7 @@ class Framework:
             if not InitializationAnswer:
                 return None
 
+        self.PropagatedEvent = None
         self.Running = True
         self.Paused = ''
         while self.Running and not self.Paused:
@@ -191,19 +197,19 @@ class Framework:
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
     def NextEvent(self, start_at, AtEventMethod = None):
-        PropagatedEvent = None
+        self.PropagatedEvent = None
         t = None
         for tool_name in self.ToolsList:
-            PropagatedEvent = self.Tools[tool_name].__OnEvent__(PropagatedEvent)
-            if PropagatedEvent is None:
+            self.PropagatedEvent = self.Tools[tool_name].__OnEvent__(self.PropagatedEvent)
+            if self.PropagatedEvent is None:
                 break
             else:
                 if t is None:
-                    t = PropagatedEvent.timestamp
+                    t = self.PropagatedEvent.timestamp
                 if t < start_at:
                     break
-            if not PropagatedEvent is None and not AtEventMethod is None:
-                AtEventMethod(PropagatedEvent)
+            if not self.PropagatedEvent is None and not AtEventMethod is None:
+                AtEventMethod(self.PropagatedEvent)
         self._SendLog()
         return t
 
@@ -494,16 +500,21 @@ class Framework:
 
     def _Log(self, Message, MessageType = 0, ModuleName = 'Framework', Raw = False, AutoSendIfPaused = True):
         if self._LogType == 'columns' and not Raw:
+            if self._LogT is None:
+                if not self.PropagatedEvent is None:
+                    self._LogT = self.PropagatedEvent.timestamp
+                    self._Log('t = {0:.3f}s'.format(self._LogT))
+
             while len(Message) > self._MaxColumnWith:
                 FirstPart, Message = Message[:self._MaxColumnWith], Message[self._MaxColumnWith:]
                 self._EventLogs[ModuleName] += [self._LogColors[MessageType] + FirstPart]
             if Message:
                 self._EventLogs[ModuleName] += [self._LogColors[MessageType] + Message + (self._MaxColumnWith-len(Message))*' ']
             self._HasLogs = max(self._HasLogs, len(self._EventLogs[ModuleName]))
-            if (not self.Running or self.Paused) and AutoSendIfPaused:
+            if (not self.Running or self.Paused) and AutoSendIfPaused and not self._Initializing:
                 self._SendLog()
         elif self._LogType == 'raw' or Raw:
-            Message = self._LogColors[MessageType] + ModuleName + ': ' + Message
+            Message = self._LogColors[MessageType] + int(bool(Message))*ModuleName + ': ' + Message
             print(Message + self._LogColors[0])
     def _SendLog(self):
         if self._LogType == 'raw' or not self._HasLogs:
@@ -521,9 +532,11 @@ class Framework:
                     CurrentLine += self._Default_Color + ' | ' + self._MaxColumnWith*' '
             print(CurrentLine)
         self._HasLogs = 0
+        self._LogT = None
 
     def _LogInit(self):
         self._HasLogs = 2
+        self._LogT = None
         self._MaxColumnWith = int((self._Terminal_Width - len(self.ToolsList)*3 ) / (len(self.ToolsList) + 1))
         self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in ['Framework'] + self.ToolsList}
         self._SendLog()

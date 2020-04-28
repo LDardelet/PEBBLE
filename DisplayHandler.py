@@ -38,7 +38,6 @@ class DisplayHandler(Module):
         DisplayUp = self._IsDisplayUp()
 
         if not DisplayUp:
-            self.LogWarning("Aborting initialization process")
             self.__Started__ = False
             return not self._CompulsoryModule
 

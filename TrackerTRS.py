@@ -66,11 +66,11 @@ class TrackerTRS(Module):
         self._TrackerMinDeathActivity = 0.1                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
-        self._TrackerAccelerationFactor = 1.                                        # Float. Acceleration factor for speed correction. Default : 1.
-        self._TrackerDisplacementFactor = 0.8                                        # Float. Displacement factor for position correction with the relative flow. Default : 1.
+        self._TrackerAccelerationFactor = 0.8                                        # Float. Acceleration factor for speed correction. Default : 1.
+        self._TrackerDisplacementFactor = 1.                                        # Float. Displacement factor for position correction with the relative flow. Default : 1.
         self._TrackerUnlockedSpeedModActivityPower = 1.                                     # Float. Exponent of the activity dividing the speed correction in unlocked mode. May allow to lower inertia in highly textured scenes. Default : 1.
         self._ObjectEdgePropagationTC = 1e-4                                        # Float. Security time window for events considered to be previous edge propagation, and not neighbours later spiking. Default : 1e-4
-        self._ClosestEventProximity = 2                                             # Float. Maximum distance for an event to be considered in the simple flow computation. Default : 2.
+        self._ClosestEventProximity = 2.5                                             # Float. Maximum distance for an event to be considered in the simple flow computation. Default : 2.
         self._MaxConsideredNeighbours = 20                                          # Int. Maximum number of considered events in the simple flow computation. Higher values slighty increase flow quality, but highly increase computation time. Default : 20
         self._MinConsideredNeighbours = int(self._ClosestEventProximity * 2 * 1.5)  # Int. Minimum number of considered events in the simple flow computation. Lower values allow for more events to be used in the correction, but lower the correction quality. Default : 4
 
@@ -93,24 +93,25 @@ class TrackerTRS(Module):
         self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
         self._TrackerLockedRelativeCorrectionsFailures = 0.6                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
         self._TrackerLockedRelativeCorrectionsHysteresis = 0.05                     # Float. Hysteresis value of _TrackerLockedRelativeCorrectionsFailures. Default : 0.05
-        self._TrackerLockedSpeedModActivityPower = 1.1                               # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 1.
+        self._TrackerLockedSpeedModActivityPower = 1.                               # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 1.
         self._TrackerLockedisplacementModActivityPower = 0.2                        # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
-        self._LockedSpeedModReduction = 0.3
+        self._LockedSpeedModReduction = 1.
         self._TrackerLockedCanHardCorrect = True                                    # Bool. Allows trackers to remain locked even with high speed correction values. Default : True
 
         self._ComputeSpeedErrorMethod = 'LinearMean'                                # String. Speed error computation method. Can be 'LinearMean', 'ExponentialMean' or 'PlanFit'. See associated functions for details. Default : 'LinearMean'
         # Monitoring Variables
 
-        self._MonitorDt = 0.05                                                         # Float. Time difference between two snapshots of the system.
+        self._MonitorDt = 0.1                                                         # Float. Time difference between two snapshots of the system.
         self._MonitoredVariables = [('Trackers@TrackerActivity', float),
                                     ('Trackers@Position', np.array),
                                      ('Trackers@Speed', np.array),
                                      #('Trackers@ApertureEstimator', list),
                                      #('Trackers@SpeedConvergenceEstimator', list),
-                                     ('Trackers@TimeConstant', float),
+                                     #('Trackers@TimeConstant', float),
                                      ('Trackers@Status', int),
-                                     ('Trackers@ApertureIssue', bool),
-                                     ('Trackers@OffCentered', bool)]
+                                     #('Trackers@ApertureIssue', bool),
+                                     #('Trackers@OffCentered', bool)
+                                     ]
 
         self._StatusesNames = {self._STATUS_DEAD: 'Dead', self._STATUS_IDLE:'Idle', self._STATUS_STABILIZING:'Stabilizing', self._STATUS_CONVERGED:'Converged', self._STATUS_LOCKED: 'Locked'} # Statuses names with associated int values.
         self._PropertiesNames = {0: 'None', 1: 'Aperture issue', 2:'OffCentered'}                                                                                    # Properties names with associated int values.
@@ -541,7 +542,7 @@ class DynamicsModifierClass:
                 ax = axs[nDoF, nColumn].twinx()
                 ax.plot(Ts, Data[:,nDoF], 'k')
             axs[0, nColumn].set_title(ModType)
-            axs[0, nColumn].legend()
+            axs[0, nColumn].legend(loc = 'upper left')
 
 class TrackerClass(EstimatorTemplate):
     def __init__(self, TrackerManager, ID, InitialPosition):
@@ -577,7 +578,7 @@ class TrackerClass(EstimatorTemplate):
 
         self.DynamicsModifier = DynamicsModifierClass(self)
         self.DynamicsModifier.AddModifier('Speed', AffectPosition = [True, True, True])
-        self.DynamicsModifier.AddModifier('Flow', AffectSpeed = [True, True, False], AffectPosition = [True, True, True])
+        self.DynamicsModifier.AddModifier('Flow', AffectSpeed = [True, True, False], AffectPosition = [True, True, False])
         if self.TM._TrackerUsePositionMean:
             self.DynamicsModifier.AddModifier('MeanPos', AffectPosition = [True, False, False])
 

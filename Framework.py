@@ -6,6 +6,7 @@ import inspect
 import atexit
 import types
 import copy
+import os
 
 from Plotting_methods import *
 from pydoc import locate
@@ -191,7 +192,7 @@ class Framework:
             self._Log("Main loop finished without error.")
         else:
             if self.Paused:
-                self._Log("Paused at t = {0:.3f} by {1}.".format(t, self.Paused), 1, Raw = True)
+                self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1, Raw = True)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)

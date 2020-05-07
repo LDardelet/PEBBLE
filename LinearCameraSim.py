@@ -15,7 +15,7 @@ _GAUSSIAN_LOOKUP_TABLE_LOCATIONS = {1: [0.],
                                     5: [-1.281551565545, -0.5244005127080, 0., 0.5244005127080, 1.281551565545],
                                     6: [-1.382994127101, -0.6744897501961, -0.2104283942479, 0.2104283942479, 0.6744897501961, 1.382994127101]}
 _MAX_T = 100.
-_SIMULATED_MAP_DENSITY = 0.0001
+_SIMULATED_MAP_DENSITY = 0.0002
 _MAP_RELATIVE_BEGINING_OFFSET = np.array([0., 0.])
 _MAP_OBJECTS_CENTER = 'visible'
 
@@ -77,13 +77,14 @@ class RotationClass(BaseMoveClass):
 
     def SpecialMovement(self, PoseClass, dt):
         AngularVar = dt * self.AngularVelocity
+        X = PoseClass.CameraToWorldLocation(0)
+        if self.ReferenceFrame == 'world':
+            R = self.Center - X
+        elif self.ReferenceFrame == 'camera':
+            R = PoseClass.CameraToWorldVector(self.Center)
         PoseClass.Theta += AngularVar
-        if type(self.Center) == np.ndarray:
-            if self.ReferenceFrame == 'world':
-                R = PoseClass.WorldToCameraLocation(self.Center)
-            elif self.ReferenceFrame == 'camera':
-                R = self.Center - PoseClass.T
-            PoseClass.T += AngularVar * np.array([R[1], -R[0]])
+        PoseClass.UpToDate = False
+        PoseClass.T = PoseClass.WorldToCameraVector(X + AngularVar * np.array([R[1], -R[0]]))
 
 class TranslationClass(BaseMoveClass):
     def __init__(self, Duration, TranslationSpeed, ReferenceFrame):
@@ -131,7 +132,7 @@ class PoseClass:
         return self._R
 
     def RT(self):
-        self._RT[:, :2] = self.R()
+        self._RT[:, :2] = self.R().T
         self._RT[:,2] = -self.T
         return self._RT
 
@@ -278,7 +279,9 @@ class MovementSimulatorClass(Module):
                 self.CurrentSequenceStep.Start(self.BiCameraSystem.Pose)
                 self.Log("Next sequence step")
 
-            for EG in self.BaseMap.EventsGenerators:
+            RandomGenerators = list(self.BaseMap.EventsGenerators)
+            random.shuffle(RandomGenerators)
+            for EG in RandomGenerators:
                 EG.ComputeCameraLocations()
 
         if not self.BiCameraSystem.Events:
@@ -294,7 +297,7 @@ class MovementSimulatorClass(Module):
             self.nEvent += 1
             if (self.nEvent & 2047) == 0:
                 self.Log("Current pose:")
-                self.Log(" X = {0}, T = {1}".format(self.BiCameraSystem.Pose.T, self.BiCameraSystem.Pose.CameraToWorldLocation(np.array([0., 0.]))))
+                self.Log(" T = {0}, X = {1}".format(self.BiCameraSystem.Pose.T, self.BiCameraSystem.Pose.CameraToWorldLocation(np.array([0., 0.]))))
                 self.Log(" Theta = {0}".format(self.BiCameraSystem.Pose.Theta))
             return NewEvent
         else:

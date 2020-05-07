@@ -658,7 +658,7 @@ class Module:
                 if UsedType is None:
                     ExampleVar = self.__dict__[Container].values()[0].__dict__[Key]
                     UsedType = type(ExampleVar)
-                return lambda event: [(LocalDictKey, UsedType(Instance.__dict__[Key])) for LocalDictKey, Instance in self.__dict__[Container].items()]
+                return lambda event: {LocalDictKey: UsedType(Instance.__dict__[Key]) for LocalDictKey, Instance in self.__dict__[Container].items()}
             else:
                 if UsedType is None:
                     ExampleVar = self.__dict__[Container].__dict__[Key]

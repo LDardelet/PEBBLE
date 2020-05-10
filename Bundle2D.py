@@ -80,6 +80,7 @@ class BundleAdjustmentWarp(Module):
                                     ('Point2DSpaceWarps@Value', np.array),
                                     ('Point2DSpaceWarps@C', np.array),
                                     ('Point2DSpaceWarps@NWarps', int),
+                                    ('Point2DSpaceWarps@ScalingFacor', float),
                                     'CameraSpaceWarp@FirstLambdaRatio']
         
         self._2DPointLocationCheatEnabled = True
@@ -129,11 +130,11 @@ class BundleAdjustmentWarp(Module):
                     Confidence = max(0.1, np.e**(-np.linalg.norm(Noise) / max(self._CheatGaussianNoise*10, 0.00001)))
                 HLocation = np.concatenate((self.__Framework__.Sim2D.BaseMap.EventsGenerators[event.TrackerID].Location + Noise, [1]))
                 Stretch = 1 - Confidence * (1-self._FullyDetermined2DPointLambdaRatio / 2)
-                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, InitialValue = HLocation, InitialStretch = Stretch, WarpMethod = self._Point2DWarpMethod)
+                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, InitialValue = HLocation, InitialStretch = Stretch, WarpMethod = self._Point2DWarpMethod, AutoScale = True)
                 if self.RemainingControlPoints:
                     self.RemainingControlPoints -= 1
             else:
-                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, WarpMethod = self._Point2DWarpMethod)
+                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, WarpMethod = self._Point2DWarpMethod, AutoScale = True)
                 Vs = self._CreateDefaultDistanceOrthogonalVector()
                 self.Point2DSpaceWarps[event.TrackerID].AddData(Vs, Stretch = self._Point2DDefaultDistanceWarp)
                 Vs = self._Generate2DPointWarpVectors(event.TrackerLocation)
@@ -310,8 +311,10 @@ class BundleAdjustmentWarp(Module):
     def PointMapProba(self, ID, fax = None, PreviousMap = None, Definition = (200, 200), Snap = None):
         if Snap is None:
             C = self.Point2DSpaceWarps[ID].C
+            SF = self.Point2DSpaceWarps[ID].ScalingFacor
         else:
             C = self.History['Point2DSpaceWarps@C'][Snap][ID]
+            SF = self.History['Point2DSpaceWarps@ScalingFacor'][Snap][ID]
 
         if fax is None:
             f, ax = plt.subplots(1,1)
@@ -328,8 +331,8 @@ class BundleAdjustmentWarp(Module):
             for ny, y in enumerate(ys):
                 X = np.array([x, y, 1])
                 #X = X/ np.linalg.norm(X)
-                Y = X.T.dot((np.identity(3)-C).dot(X))
-                Map[nx, ny] = np.e**-Y
+                Y = X.T.dot((np.identity(3)/SF-C).dot(X))*SF
+                Map[nx, ny] = np.e**Y
         if PreviousMap is None:
             PreviousMap = ax.imshow(np.transpose(Map), origin = 'lower', extent = xLims + yLims, vmin = 0., vmax = 1.)
         else:
@@ -358,6 +361,8 @@ class BundleAdjustmentWarp(Module):
     def _OnInteractiveClick(self, event, InteractiveMapElements):
         loc = np.array([event.xdata, event.ydata])
         Distances = [np.linalg.norm(loc - Point['location']) for Point in InteractiveMapElements['clickables']]
+        if np.min(Distances) > 0.2:
+            return
         NewCurrPoint = InteractiveMapElements['clickables'][np.argmin(Distances)]
         if NewCurrPoint['ID'] == InteractiveMapElements['currPoint']['ID'] and NewCurrPoint['Snap'] == InteractiveMapElements['currPoint']['Snap']:
             return
@@ -405,16 +410,17 @@ class BundleAdjustmentWarp(Module):
         return ApparentScreenLoc + Bonus
 
 class SpaceWarp:
-    _AutoScale = False
     _RemoveOthogonalVectors = False
     _WARP_METHOD = {'left': 2, 'bilateral': 3, 'right': 1}
-    def __init__(self, Dim, NormalizationMethod, DefaultStretch, InitialValue = None, InitialStretch = None, RetreiveMethod = 'lambdas', WarpMethod = 'right'):
+    def __init__(self, Dim, NormalizationMethod, DefaultStretch, InitialValue = None, InitialStretch = None, RetreiveMethod = 'lambdas', WarpMethod = 'right', AutoScale = False):
         self.Dim = Dim
         self.DefaultStretch = DefaultStretch
         self._WarpMethod = self._WARP_METHOD[WarpMethod]
+        self._AutoScale = AutoScale
         
         self.RetreiveMethod = {'lambdas':0, 'pointwarp':1}[RetreiveMethod] # 0 for Lambdas, 1 for warp of previous point
 
+        self.ScalingFacor = 1.
         self.NWarps = 0
         self._UpToDate = False
 
@@ -500,8 +506,8 @@ class SpaceWarp:
 
         self.T = np.array(_CompleteWarpBasisFrom(FinalWarpedVectors))
         self.S = np.identity(self.Dim)
-        self.S[0,0] = FinalStretches[0]
-        self.S[1,1] = FinalStretches[1]
+        self.S[0,0] = 1./FinalStretches[0]
+        self.S[1,1] = 1./FinalStretches[1]
 
         self.M = self.T.T.dot(self.S.dot(self.T))
 
@@ -512,9 +518,9 @@ class SpaceWarp:
         InitialStretchMatrix = np.identity(self.Dim)
         for i in range(1, self.Dim):
             if hasattr(InitialStretch, '__iter__'):
-                InitialStretchMatrix[i,i] = InitialStretch[i]
+                InitialStretchMatrix[i,i] = 1./InitialStretch[i]
             else:
-                InitialStretchMatrix[i,i] = InitialStretch
+                InitialStretchMatrix[i,i] = 1./InitialStretch
         self.C = InitialBasis.T.dot(InitialStretchMatrix.dot(InitialBasis))
         self.Vectors = [InitialValue]
         self.RetreiveData(Init = True)
@@ -527,12 +533,13 @@ class SpaceWarp:
         else:
             Lambdas, Vectors = [np.real(data) for data in np.linalg.eig(self.C)]
         if self.RetreiveMethod == 0:
-            if Lambdas.max() > 1.001:
+            if False and Lambdas.max() > 1.001:
                 print("Excessive lambda, dimension is {0}".format(Vectors.shape[0]))
-            Indexes = np.argsort(-Lambdas)
+            Indexes = np.argsort(Lambdas)
             
             if self._AutoScale:
                 LambdaScaling = Lambdas.max()
+                self.ScalingFacor *= LambdaScaling
                 self.C /= LambdaScaling
             else:
                 LambdaScaling = 1
@@ -559,244 +566,6 @@ class SpaceWarp:
         self.Value = self.Vectors[0]
         self._UpToDate = True
         return self.Value
-
-class BundleAdjustmentPhysical(Module):
-    _DISTANCE_NORMALIZATION_FACTOR = 1.
-
-    def __init__(self, Name, Framework, argsCreationReferences):
-        '''
-        Class to handle ST-context memory.
-        '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
-        
-        self._ScreenCenter = [320., 0]
-        self._ScreenRatio = [640., 640.]
-        self._EventsConsideredRatio = 1.
-
-        self._Point2DWarpMethod = 'bilateral'
-
-        self._Point2DDefaultDistanceWarp = 1
-        self._DefaultUnknownDepthDistance = 2.
-        self._NPointsForDistanceDefinition = 10
-        self.UsedPointsForDistanceDefinition = {}
-        self.AveragedDistance = self._DefaultUnknownDepthDistance
-
-        self._Default2DPointStretch = 0.5
-
-        self._FullyDetermined2DPointLambdaRatio = 0.1
-
-        self.LastConsideredEventTs = 0.
-        self.Determined2DPointsLocations = {}
-
-        self._MonitorDt = 0.01
-        self._MonitoredVariables = [('Point2DSpaceWarps@Value', np.array),
-                                    ('Point2DSpaceWarps@C', np.array),
-                                    ('Point2DSpaceWarps@NWarps', int)]
-
-    def _InitializeModule(self, **kwargs):
-        self.Point2DSpaceWarps = {}
-        self.LastScreenLocation = {}
-        self.Camera = PhysicalCameraClass()
-
-        self._ScreenCenter = np.array(self._ScreenCenter)
-        self._ScreenRatio = np.array(self._ScreenRatio)
-        self._Alpha = self._ScreenRatio[0]
-
-        if self._EventsConsideredRatio < 1:
-            self._RandomizeEvents = True
-        else:
-            self._RandomizeEvents = False
-        return True
-
-    def _OnEventModule(self, event):
-        if event.__class__ != TrackerEvent:
-            return event
-        if self._RandomizeEvents and np.random.rand() > self._EventsConsideredRatio:
-            return event
-        
-        if event.TrackerID not in self.Point2DSpaceWarps:
-            self.Log("Creating space warp for tracker {0}".format(event.TrackerID))
-            self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(3, self._Point2DNormalizationMethod, self._Default2DPointStretch, WarpMethod = self._Point2DWarpMethod)
-
-            Vs = self._CreateDefaultDistanceOrthogonalVector()
-            self.Point2DSpaceWarps[event.TrackerID].AddData(Vs, Stretch = self._Point2DDefaultDistanceWarp)
-
-            Vs = self._Generate2DPointWarpVectors(event.TrackerLocation)
-            self.Point2DSpaceWarps[event.TrackerID].AddData(Vs, Stretch = 0.9)
-            self.Point2DSpaceWarps[event.TrackerID].RetreiveData()
-            #Xi = self._Create2DPointAtDefaultDistance(event.TrackerID)
-
-            #InitialWarp = np.array(self.Point2DSpaceWarps[event.TrackerID].C)
-            #self.Point2DSpaceWarps[event.TrackerID]._BuildCFromInitial(Xi, self._Point2DDefaultDistanceWarp)
-            #self.Point2DSpaceWarps[event.TrackerID].C = self.Point2DSpaceWarps[event.TrackerID].C.dot(InitialWarp)
-            #self.Point2DSpaceWarps[event.TrackerID]._UpToDate = False
-
-            if len(self.UsedPointsForDistanceDefinition) < self._NPointsForDistanceDefinition:
-
-                self.UsedPointsForDistanceDefinition[event.TrackerID] = np.linalg.norm(self.Point2DSpaceWarps[event.TrackerID].Value[:-1])
-                self.AveragedDistance = np.mean(list(self.UsedPointsForDistanceDefinition.values()))
-            self.Camera.OnTrackerEvent(event.timestamp) 
-            return event
-
-        self.Camera.OnTrackerEvent(event.timestamp, event.TrackerID, self.Point2DSpaceWarps[event.TrackerID].Value[:-1] / self.Point2DSpaceWarps[event.TrackerID].Value[-1], -(event.TrackerLocation[0] - self._ScreenCenter[0]) / (self._ScreenRatio[0] / 2))
-        Vs = self._Generate2DPointWarpVectors(event.TrackerLocation)
-        self.Point2DSpaceWarps[event.TrackerID].AddData(Vs, Stretch = self._Default2DPointStretch)
-        self.Point2DSpaceWarps[event.TrackerID].RetreiveData()
-
-        if self.Point2DSpaceWarps[event.TrackerID].FirstLambdaRatio > self._FullyDetermined2DPointLambdaRatio:
-            if event.TrackerID in self.UsedPointsForDistanceDefinition.keys():
-                self.UsedPointsForDistanceDefinition[event.TrackerID] = np.linalg.norm(self.Point2DSpaceWarps[event.TrackerID].Value[:-1])
-                self.AveragedDistance = np.mean(list(self.UsedPointsForDistanceDefinition.values()))
-        elif event.TrackerID not in self.Determined2DPointsLocations.keys():
-            self.Determined2DPointsLocations[event.TrackerID] = np.array(self.Point2DSpaceWarps[event.TrackerID].Vectors[0])
-            self.Log("Added {0} to known points at {1}".format(event.TrackerID, self.Determined2DPointsLocations[event.TrackerID]), 3)
-
-        if np.random.rand() < 0.01:
-            self.Log("Point {0:3d} FLR : {1:.3f}, SLR : {2:.3f}".format(event.TrackerID, self.Point2DSpaceWarps[event.TrackerID].FirstLambdaRatio, self.Point2DSpaceWarps[event.TrackerID].Lambdas[2] / self.Point2DSpaceWarps[event.TrackerID].Lambdas[0]))
-            self.Log("CL : ({0:3f}, {1:.3f}), {2:.3f}, E : {3:.3f}".format(self.Camera.Location[0], self.Camera.Location[1], self.Camera.Angle, self.Camera.kEnergy()))
-        return event
-
-        # The two following methods are for metric renormalization
-    def _PointDistanceCorrection(self, X_i):
-        return X_i * np.array([1., 1., (self.AveragedDistance/self._DefaultUnknownDepthDistance)]) # We multiply the homogeneous coodinate by the average distance, thus normalizing distances accordingly
-    def _CameraDistanceCorrection(self, P):
-        #P[:-2] /= self.AveragedDistance # We divide the translation component by the average distance metric
-        return P
-
-    def _Point2DNormalizationMethod(self, X_i):
-        if X_i[-1] == 0:
-            return X_i
-        else:
-            return X_i/X_i[-1]
-
-    def _Generate2DPointWarpVectors(self, TrackerLocation):
-        c, s = np.sin(self.Camera.Angle), np.cos(self.Camera.Angle)
-        P = np.array([c, s, -s, c, self.Camera.Location[0], self.Camera.Location[1]])
-
-        Vs = [None]
-        delta_x_i = (TrackerLocation - self._ScreenCenter)
-        Vs[0] = np.array([self._Alpha * P[0] - delta_x_i[0] * P[2], self._Alpha * P[1] - delta_x_i[0] * P[3], self._Alpha * P[4] - delta_x_i[0] * P[5]])
-        for i in range(1):
-            Vs[i] = Vs[i] / np.linalg.norm(Vs[i])
-        return Vs
-
-    def _CreateDefaultDistanceOrthogonalVector(self):
-        xv, yv = self.Camera.GetUvUx()[0]
-        x, y = self.Camera.Location
-        V = np.array([xv, yv, -(self._DefaultUnknownDepthDistance + x*xv + y*yv)])
-        return [V/np.linalg.norm(V)]
-
-
-    def _Create2DPointAtDefaultDistance(self, PointID):
-        V1, V2 = self.Point2DSpaceWarps[PointID].Vectors[:2]
-        T = self.Camera.Location
-        if V1[-1] != 0:
-            if V2[-1] != 0:
-                D1 = V1 / V1[-1]
-                D2 = V2 / V2[-1]
-                O, Delta = V1 / V1[-1], (D1 - D2)/np.linalg.norm(D1 - D2)
-            else:
-                O, Delta = V1 / V1[-1], V2 / np.linalg.norm(V2)
-        else:
-            if V2[-1] != 0:
-                O, Delta = V2 / V2[-1], V1 / np.linalg.norm(V1)
-            else:
-                raise Exception("Both vectors describe non finite points")
-        k = (Delta[:-1] * (O[:-1] - T)).sum()
-
-        Xi = O + (k + np.sign(Delta[1])*self._DefaultUnknownDepthDistance)*Delta
-
-        return Xi
-
-class PhysicalCameraClass:
-    _M = 0.01
-    _J = 0.01
-    _Mu = 0.01
-    _JMu = 0.01
-    _k = 10.
-    _FPD = 0.1 # FocalPlanDistance
-    _Aperture = 26.56 * np.pi / 180
-
-    _SideLocationTolerance = 0.95
-
-    def __init__(self):
-        self.Location = np.array([0., 0.])
-        self.Angle = 0.
-
-        self.TSpeed = np.array([0., 0.])
-        self.RSpeed = 0.
-
-        self.LastTs = 0.
-
-        self.kForces = {}
-
-        self._tAperture = np.tan(self._Aperture)
-
-    def _Update(self, t):
-        DeltaT = t - self.LastTs
-        self.LastTs = t
-        if self.kForces:
-            Forces = np.array(list(self.kForces.values()))
-            Acceleration = Forces[:,:2].sum(axis = 0)
-            Torque = (Forces[:,2]*Forces[:,1] - self.Location[1]*Forces[:,0]).sum()
-        else:
-            Acceleration = 0.
-            Torque = 0.
-
-        self.TSpeed += DeltaT * (self._k * Acceleration - self._Mu * self.TSpeed) / self._M
-        self.RSpeed += DeltaT * (self._k * Torque - self._JMu * self.RSpeed * abs(self.RSpeed)) / self._J
-
-        self.Location += DeltaT * self.TSpeed
-        self.Angle += DeltaT * self.RSpeed
-
-    def GetForceAndApplicationPoint(self, Point2DLocation, RelativeScreenLocation):
-        Uv, Ux = self.GetUvUx()
-
-        ApplicationPoint = np.array([self._FPD, RelativeScreenLocation * self._tAperture * self._FPD]) # In (Uv, Ux)
-        PointVector = Point2DLocation - self.Location
-        PointVector /= np.linalg.norm(PointVector)
-        RelativePointVector = np.array([(PointVector*Uv).sum(), (PointVector*Ux).sum()])
-        RelativePointVector /= np.linalg.norm(RelativePointVector)
-
-        ForceValue = ApplicationPoint[0]*RelativePointVector[1] - ApplicationPoint[1]*RelativePointVector[0]
-        ForceVector = ForceValue / np.linalg.norm(ApplicationPoint) * np.array([-ApplicationPoint[1], ApplicationPoint[0]])
-
-        return ForceVector, ApplicationPoint
-
-
-    def GetUvUx(self):
-        c, s = np.cos(self.Angle), np.sin(self.Angle)
-        return np.array([c, s]), np.array([-s, c])
-
-    def AddPoint(self, ID):
-        self.kForces[ID] = np.zeros(4)
-
-    def OnTrackerEvent(self, t, ID = None, Point2DLocation = None, RelativeScreenLocation = None):
-        if not ID is None:
-            if ID not in self.kForces.keys():
-                self.AddPoint(ID)
-            if abs(RelativeScreenLocation) > self._SideLocationTolerance:
-                del self.kForces[ID]
-                self._Update(t)
-                return
-            Force, ApplicationPoint = self.GetForceAndApplicationPoint(Point2DLocation, RelativeScreenLocation)
-            self.kForces[ID][:2] = Force
-            self.kForces[ID][2:] = ApplicationPoint
-
-        self._Update(t)
-
-    def PlotForces(self):
-        f, ax = plt.subplots(1,1)
-        ax.plot(0,0, 'ok')
-        ax.plot([self._FPD, self._FPD], [-self._tAperture * self._FPD, self._tAperture * self._FPD], 'k')
-        FRatio = 0.5*self._FPD / np.linalg.norm(np.array(list(self.kForces.values()))[:,:2], axis = 1).max()
-        for ID, kForce in self.kForces.items():
-            ax.plot(kForce[2], kForce[3], 'or')
-            ax.plot([kForce[2], kForce[2]+FRatio*kForce[0]], [kForce[3], kForce[3]+FRatio*kForce[1]], 'r')
-            ax.text(kForce[2]+FRatio*kForce[0], kForce[3]+FRatio*kForce[1], str(ID), color = 'r')
-    def kEnergy(self):
-        return ((np.array(list(self.kForces.values())))[:,:2]**2).sum()
 
 class BundleAdjustment(BundleAdjustmentWarp):
     pass

@@ -48,6 +48,8 @@ class TrackerTRS(Module):
 
         self._TrackerStopIfAllDead = True                                           # Bool. Stops stream if all trackers die. Overrided if _DetectorAutoRestart is TRUE. Default : True
 
+        self._RSLockModel = True                                                    # MModel for which unlock trackers are only corrected through flow error, w/o estimators.
+
         self._DetectorPointsGridMax = (10, 8)                                       # (Int, Int). Reference grid to place trackers, capping the discrete grid made by dividing the screen with _TrackerDiameter. Default : (10,8), i.e 80 trackers
         self._DetectorMinRelativeStartActivity = 3.                                 # Float. Activity of a tracker needed to activate, divided by _TrackerDiameter. Low values are noise sensible, while high value leave tracker in IDLE state. Default : 3.
         self._DetectorAutoRestart = True                                            # Bool. Restarts or not a tracker when another dissapears. If True, overrides _TrackerStopIfAllDead to False. Default : True.
@@ -61,9 +63,10 @@ class TrackerTRS(Module):
 
         self._TCReduction = 1.
         self._TrackerDiameter = 20.                                                  # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
-        self._TrackerAimedEdgeSize = 4.                                             # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
+        self._TrackerAimedEdgeSize = 5.                                             # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
         self._DetectorDefaultSpeedTrigger = 5.                                      # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
         self._TrackerMinDeathActivity = 0.1                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
+        self._OutOfBondsDistance = 0.                                               # FLoat. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
         self._TrackerAccelerationFactor = 0.8                                        # Float. Acceleration factor for speed correction. Default : 1.
@@ -93,7 +96,7 @@ class TrackerTRS(Module):
         self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
         self._TrackerLockedRelativeCorrectionsFailures = 0.6                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
         self._TrackerLockedRelativeCorrectionsHysteresis = 0.05                     # Float. Hysteresis value of _TrackerLockedRelativeCorrectionsFailures. Default : 0.05
-        self._TrackerLockedSpeedModActivityPower = 1.                               # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 1.
+        self._TrackerLockedSpeedModActivityPower = 0.5                               # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 1.
         self._TrackerLockedisplacementModActivityPower = 0.2                        # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
         self._LockedSpeedModReduction = 1.
         self._TrackerLockedCanHardCorrect = True                                    # Bool. Allows trackers to remain locked even with high speed correction values. Default : True
@@ -208,7 +211,7 @@ class TrackerTRS(Module):
         for TrackerID in self.AliveIDs:
             Associated = self.Trackers[TrackerID].RunEvent(event)
             if Associated and self.TrackerEventCondition(TrackerID):
-                event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID, TrackerColor = self.Trackers[TrackerID].GetColor(), TrackerMarker = self.Trackers[TrackerID].GetMarker())
+                event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID, TrackerAngle = self.Trackers[TrackerID].Position[2], TrackerScaling = self.Trackers[TrackerID].Position[3], TrackerColor = self.Trackers[TrackerID].GetColor(), TrackerMarker = self.Trackers[TrackerID].GetMarker())
 
         if UpdateEvent:
             self.LastTsSnap = event.timestamp
@@ -335,9 +338,9 @@ class DynamicsEstimatorClass(EstimatorTemplate):
         self._FallBackToIdealMatrix = False
         self._FallBackToSimpleTranslation = True
         self._IdealMatrix = np.identity(4) * 2
-        self._IdealMatrix[2,2] /= Radius**2
-        self._IdealMatrix[3,3] /= Radius**2
-        self._LowerInvertLimit = (Radius/10)**4
+        self._IdealMatrix[2,2] /= Radius**2 / 3
+        self._IdealMatrix[3,3] /= Radius**2 / 3
+        self._LowerInvertLimit = (Radius/3)**4 / (2**4 * 3**2)
 
         self._M = np.zeros((4,4))
         self._InvM = np.zeros((4,4))
@@ -417,7 +420,7 @@ class DynamicsEstimatorClass(EstimatorTemplate):
 
         self.MDet = np.linalg.det(self._M) / (self.W ** 4)
         self._UpToDateMatrix = True
-        if abs(self.MDet) > self._LowerInvertLimit: # Should be homogeneous to px^4, so relative to radius
+        if abs(self.MDet) > self._LowerInvertLimit: # Should be homogeneous to px^4, so proportionnal to radius**4
             self._InvM = np.linalg.inv(self._M)
             return True
         else:
@@ -600,7 +603,7 @@ class TrackerClass(EstimatorTemplate):
 
         if self.Status == self.TM._STATUS_IDLE:
             return True
-        if (self.Position[:2] - self.Radius < 0).any() or (self.Position[:2] + self.Radius >= np.array(self.TM._LinkedMemory.STContext.shape[:2])).any(): # out of bounds
+        if ((self.Position[:2] - self.TM._OutOfBondsDistance < 0).any() or (self.Position[:2] + self.TM._OutOfBondsDistance >= np.array(self.TM._LinkedMemory.STContext.shape[:2])).any()): # out of bounds
             if self.Lock:
                 self.Unlock('out of bounds')
             self.TM._KillTracker(self, event, Reason = "out of bounds")
@@ -686,10 +689,14 @@ class TrackerClass(EstimatorTemplate):
             LocalEdge = LocalEdge / N
         self.ApertureEstimator.AddData(event.timestamp, LocalEdge, self.DecayTC)
 
-        SpeedError = self.DynamicsEstimator.GetSpeed()
-        if SpeedError is None: # We could not access TRS speed errors, as matrix is singular. We have to wait for more events to aggregate
-            return True
-        DisplacementError = self.DynamicsEstimator.GetDisplacement()
+        if self.Lock or not self.TM._RSLockModel: #RSLockModel
+            SpeedError = self.DynamicsEstimator.GetSpeed()
+            if SpeedError is None: # We could not access TRS speed errors, as matrix is singular. We have to wait for more events to aggregate
+                return True
+            DisplacementError = self.DynamicsEstimator.GetDisplacement()
+        else:
+            SpeedError = np.array([FlowError[0], FlowError[1], 0., 0.])
+            DisplacementError = np.array([ProjectionError[0], ProjectionError[1], 0., 0.])
 
         if self.Lock:
             SpeedMod = self.TM._LockedSpeedModReduction * SpeedError / self.Lock.Activity ** self.TM._TrackerLockedSpeedModActivityPower

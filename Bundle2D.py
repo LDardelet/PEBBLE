@@ -17,6 +17,14 @@ def _CompleteWarpBasisFrom(BasisVectors):
             if len(BasisVectors) == Dim:
                 return BasisVectors
 
+def _CompleteProjectiveSymetricalBasisFrom(InitialLocationVector):
+    x0, y0 = InitialLocationVector[:-1]/InitialLocationVector[-1]
+    N2 = x0**2 + y0**2
+    M = np.sqrt(1+N2)
+    u2 = np.array([-x0-M*y0, -y0+M*x0, N2])
+    u3 = np.array([-x0+M*y0, -y0-M*x0, N2])
+    return np.array([InitialLocationVector / np.linalg.norm(InitialLocationVector), u2/np.linalg.norm(u2), u3 / np.linalg.norm(u3)])
+
 def _GenerateSubSpaceBasisFrom(Vectors):
     # All input vectors must only be unitary here
     SubBasis = [Vectors.pop(0)]
@@ -91,7 +99,7 @@ class BundleAdjustmentWarp(Module):
         self.Point2DSpaceWarps = {}
         self.LastPointsReceived = {}
         self.LastTs = -np.inf
-        self.CameraSpaceWarp = SpaceWarp(6, self.CPNM, self._DefaultCameraStretch, self._DefaultCameraVector, self._InitialCameraWarp, RetreiveMethod = 'lambdas', WarpMethod = self._CameraWarpMethod)
+        self.CameraSpaceWarp = SpaceWarp(6, self.CPNM, self._DefaultCameraStretch, InitialValue = self._DefaultCameraVector, InitialStretch = self._InitialCameraWarp, RetreiveMethod = 'lambdas', WarpMethod = self._CameraWarpMethod)
         # P = (r_11, r_12, r_21, r_22, t_x, t_y)
 
         self._ScreenCenter = np.array(self._ScreenCenter)
@@ -129,8 +137,9 @@ class BundleAdjustmentWarp(Module):
                 else:
                     Confidence = max(0.1, np.e**(-np.linalg.norm(Noise) / max(self._CheatGaussianNoise*10, 0.00001)))
                 HLocation = np.concatenate((self.__Framework__.Sim2D.BaseMap.EventsGenerators[event.TrackerID].Location + Noise, [1]))
+                InitialBasis = _CompleteProjectiveSymetricalBasisFrom(HLocation)
                 Stretch = 1 - Confidence * (1-self._FullyDetermined2DPointLambdaRatio / 2)
-                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, InitialValue = HLocation, InitialStretch = Stretch, WarpMethod = self._Point2DWarpMethod, AutoScale = True)
+                self.Point2DSpaceWarps[event.TrackerID] = SpaceWarp(2+1, self._Point2DNormalizationMethod, self._Default2DPointStretch, InitialBasis = InitialBasis, InitialStretch = Stretch, WarpMethod = self._Point2DWarpMethod, AutoScale = True)
                 if self.RemainingControlPoints:
                     self.RemainingControlPoints -= 1
             else:
@@ -412,7 +421,7 @@ class BundleAdjustmentWarp(Module):
 class SpaceWarp:
     _RemoveOthogonalVectors = False
     _WARP_METHOD = {'left': 2, 'bilateral': 3, 'right': 1}
-    def __init__(self, Dim, NormalizationMethod, DefaultStretch, InitialValue = None, InitialStretch = None, RetreiveMethod = 'lambdas', WarpMethod = 'right', AutoScale = False):
+    def __init__(self, Dim, NormalizationMethod, DefaultStretch, InitialValue = None, InitialBasis = None, InitialStretch = None, RetreiveMethod = 'lambdas', WarpMethod = 'right', AutoScale = False):
         self.Dim = Dim
         self.DefaultStretch = DefaultStretch
         self._WarpMethod = self._WARP_METHOD[WarpMethod]
@@ -435,8 +444,8 @@ class SpaceWarp:
         self.T = np.identity(self.Dim)
         self.M = np.identity(self.Dim)
 
-        if not InitialValue is None:
-            self._BuildCFromInitial(InitialValue, InitialStretch)
+        if not InitialValue is None or not InitialBasis is None:
+            self._BuildCFromInitial(InitialValue = InitialValue, InitialBasis = InitialBasis, InitialStretch = InitialStretch)
         else:
             self.C = np.identity(Dim)
 
@@ -511,10 +520,11 @@ class SpaceWarp:
 
         self.M = self.T.T.dot(self.S.dot(self.T))
 
-    def _BuildCFromInitial(self, InitialValue, InitialStretch):
+    def _BuildCFromInitial(self, InitialValue = None, InitialBasis = None, InitialStretch = None):
         if InitialStretch is None:
             InitialStretch = self.DefaultStretch
-        InitialBasis = np.array(_CompleteWarpBasisFrom([InitialValue / np.linalg.norm(InitialValue)]))
+        if InitialBasis is None:
+            InitialBasis = np.array(_CompleteWarpBasisFrom([InitialValue / np.linalg.norm(InitialValue)]))
         InitialStretchMatrix = np.identity(self.Dim)
         for i in range(1, self.Dim):
             if hasattr(InitialStretch, '__iter__'):

@@ -23,7 +23,7 @@ class DisplayHandler(Module):
         self.__Started__ = False
         self._CompulsoryModule = False
 
-        self._PostBoxLimit = 10
+        self._PostBoxLimit = 7
 
         self.__PostTransporters__ = {'Event':self._SendEvent, 'Segment':self._SendSegment}
         self.Socket = None

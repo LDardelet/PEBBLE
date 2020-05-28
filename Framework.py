@@ -703,13 +703,15 @@ class Event:
         return self.location.tolist() + [self.timestamp, self.polarity]
 
 class TrackerEvent(Event):
-    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerColor = 'b', TrackerMarker = 'o'): # Some options are added for dev purposes.
+    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerAngle = 0., TrackerScaling = 1., TrackerColor = 'b', TrackerMarker = 'o'): # Some options are added for dev purposes.
         super().__init__(original = original)
         self.TrackerLocation = np.array(TrackerLocation)
         self.TrackerID = TrackerID
+        self.TrackerAngle = TrackerAngle
+        self.TrackerScaling = TrackerScaling
         self.TrackerColor = TrackerColor
         self.TrackerMarker = TrackerMarker
 
     def _AsList(self):
-        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist() + [self.TrackerColor, self.TrackerMarker]
+        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist() + [self.TrackerAngle, self.TrackerScaling, self.TrackerColor, self.TrackerMarker]
 

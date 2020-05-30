@@ -69,7 +69,7 @@ class TrackerTRS(Module):
         self._OutOfBondsDistance = 0.                                               # FLoat. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
-        self._TrackerAccelerationFactor = 0.8                                        # Float. Acceleration factor for speed correction. Default : 1.
+        self._TrackerAccelerationFactor = 1.                                        # Float. Acceleration factor for speed correction. Default : 1.
         self._TrackerDisplacementFactor = 1.                                        # Float. Displacement factor for position correction with the relative flow. Default : 1.
         self._TrackerUnlockedSpeedModActivityPower = 1.                                     # Float. Exponent of the activity dividing the speed correction in unlocked mode. May allow to lower inertia in highly textured scenes. Default : 1.
         self._ObjectEdgePropagationTC = 1e-4                                        # Float. Security time window for events considered to be previous edge propagation, and not neighbours later spiking. Default : 1e-4
@@ -78,13 +78,17 @@ class TrackerTRS(Module):
         self._MinConsideredNeighbours = int(self._ClosestEventProximity * 2 * 1.5)  # Int. Minimum number of considered events in the simple flow computation. Lower values allow for more events to be used in the correction, but lower the correction quality. Default : 4
 
         self._TrackerUsePositionMean = True                                         # Bool. Activate partial recentering of features in the center of the window. Can incrase stability. Default : True
-        self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
+        self._TrackerMeanPositionRelativeRadiusTolerance = 0.5                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
         self._TrackerMeanPositionDisplacementFactor = 0.2                            # Float. Amount of correction due to recentering process. Default : 1.
         self._LockOnlyCentered = True                                               # Bool. Forces to wait for the mean position of projected events to be within _TrackerMeanPositionRelativeRadiusTolerance
         self._FlowCorrectMeanPosDrag = False
 
-        self._TrackerConvergenceThreshold = 0.30                                     # Float. Amount of correction relative to activity allowing for a converged feature. Default : 0.2
-        self._TrackerConvergenceHysteresis = 0.05                                   # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.05
+        self._ConvergenceEstimatorType = 'PD'                                       # Str. Defines the way we compute the convergence estimator. 'PD' (ProjectedDistance) for the average distance of an event to the surrounding events.
+                                                                                    # 'CF' (CompensatedFlow) for a flow that is on average 0
+        self._TrackerConvergenceThreshold = {'CF':0.30, 'PD':0.5}[self._ConvergenceEstimatorType]                                     
+        # Float. Amount of correction relative to activity allowing for a converged feature. Default : 0.2
+        self._TrackerConvergenceHysteresis = {'CF':0.05, 'PD':0.2}[self._ConvergenceEstimatorType]                  
+        # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.05
 
         self._LocalEdgeRadius = self._ClosestEventProximity * 1.5
         self._LocalEdgeNumberOfEvents = int(2*self._LocalEdgeRadius)
@@ -94,7 +98,7 @@ class TrackerTRS(Module):
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
         self._TrackerLockingMaxRecoveryBuffer = 100                                 # Int. Size of the buffer storing events while locked, used in case of feature loss. Greater values increase computationnal cost. Default : 100
         self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
-        self._TrackerLockedRelativeCorrectionsFailures = 0.6                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
+        self._TrackerLockedRelativeCorrectionsFailures = 0.7                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
         self._TrackerLockedRelativeCorrectionsHysteresis = 0.05                     # Float. Hysteresis value of _TrackerLockedRelativeCorrectionsFailures. Default : 0.05
         self._TrackerLockedSpeedModActivityPower = 0.5                               # Float. Exponent of the activity power of the activity used for tracker speed correction. Default : 1.
         self._TrackerLockedisplacementModActivityPower = 0.2                        # Float. Exponent of the activity power of the activity used for the locked tracker displacement correction. Default : 0.2
@@ -683,7 +687,12 @@ class TrackerClass(EstimatorTemplate):
         self.DynamicsEstimator.AddData(event.timestamp, CurrentProjectedEvent[1:], FlowError, ProjectionError, self.TimeConstant)
         self.DynamicsEstimator.RecoverGeneralData()
 
-        self.SpeedConvergenceEstimator.AddData(event.timestamp, FlowError, self.TimeConstant)
+        if self.TM._ConvergenceEstimatorType == 'CF':
+            self.SpeedConvergenceEstimator.AddData(event.timestamp, FlowError, self.TimeConstant)
+        elif self.TM._ConvergenceEstimatorType == 'PD':
+            self.SpeedConvergenceEstimator.AddData(event.timestamp, ProjectionError, self.TimeConstant)
+        else:
+            raise Exception('Ill-defined convergence estimator type')
         N = np.linalg.norm(LocalEdge)
         if False and N: # Test for aperture metric.
             LocalEdge = LocalEdge / N
@@ -709,7 +718,7 @@ class TrackerClass(EstimatorTemplate):
         self.DynamicsModifier.ModPosition('Flow', self._CorrectModificationOrientationAndNorm(PositionMod * self.TM._TrackerDisplacementFactor))
 
         if self.TM._TrackerUsePositionMean and not self.Lock:
-            if (np.linalg.norm(self.DynamicsEstimator.X) > self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.Radius):
+            if self.DynamicsEstimator.r > self.TM._TrackerMeanPositionRelativeRadiusTolerance * self.Radius:
                 PositionMod = np.array([0., 0., 0., 0.])
                 PositionMod[:2] = self.TM._TrackerMeanPositionDisplacementFactor * self.DynamicsEstimator.X / self.TrackerActivity
                 self.MeanPosCorrection += PositionMod[:2]

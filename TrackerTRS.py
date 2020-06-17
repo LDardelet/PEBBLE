@@ -60,7 +60,7 @@ class TrackerTRS(Module):
         self._CorrectRotationPosition = False
         self._CorrectScalingPosition = False
 
-        self._TCReduction = 1.
+        self._TCReduction = 2.
         self._TrackerDiameter = 20.                                                  # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
         self._TrackerAimedEdgeSize = 5.                                             # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
         self._DetectorDefaultSpeedTrigger = 5.                                      # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
@@ -80,7 +80,6 @@ class TrackerTRS(Module):
         self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
         self._TrackerMeanPositionDisplacementFactor = 0.2                            # Float. Amount of correction due to recentering process. Default : 1.
         self._LockOnlyCentered = True                                               # Bool. Forces to wait for the mean position of projected events to be within _TrackerMeanPositionRelativeRadiusTolerance
-        self._FlowCorrectMeanPosDrag = False
 
         self._ConvergenceEstimatorType = 'PD'                                       # Str. Defines the way we compute the convergence estimator. 'PD' (ProjectedDistance) for the average distance of an event to the surrounding events.
                                                                                     # 'CF' (CompensatedFlow) for a flow that is on average 0
@@ -104,6 +103,8 @@ class TrackerTRS(Module):
         self._LockedSpeedModReduction = 0.5
         self._LockedPosModReduction = 1.
         self._TrackerLockedCanHardCorrect = True                                    # Bool. Allows trackers to remain locked even with high speed correction values. Default : True
+
+        self._MeanPositionDampeningFactor = 1.
 
         self._ComputeSpeedErrorMethod = 'LinearMean'                                # String. Speed error computation method. Can be 'LinearMean', 'ExponentialMean' or 'PlanFit'. See associated functions for details. Default : 'LinearMean'
         # Monitoring Variables
@@ -289,7 +290,7 @@ class StateClass:
     _PROPERTY_OFFCENTERED = 1
     
     _COLORS = {_STATUS_DEAD:'k', _STATUS_IDLE: 'r', _STATUS_STABILIZING:'m', _STATUS_CONVERGED: 'b', _STATUS_LOCKED:'g'}
-    _MARKERS = {0: 'o', 1: '_', 2:'s', 3: 'P'}
+    _MARKERS = {0: 'o', 1: '_', 2:'s', 3: 'D'}
     _StatusesNames = {_STATUS_DEAD: 'Dead', _STATUS_IDLE:'Idle', _STATUS_STABILIZING:'Stabilizing', _STATUS_CONVERGED:'Converged', _STATUS_LOCKED: 'Locked'} # Statuses names with associated int values.
     _PropertiesNames = {0: 'None', 1: 'Aperture issue', 2:'OffCentered'}                                                                                    # Properties names with associated int values.
 
@@ -387,10 +388,10 @@ class DynamicsEstimatorClass(EstimatorTemplate):
     def __init__(self, Radius):
         EstimatorTemplate.__init__(self)
         self._Radius = Radius
-        self._HomogeneityMatrix = np.identity(4)
+        self._HomogeneityVector = np.ones(4)
         if self._HomogeneityRadiusFactor != 0:
-            self._HomogeneityMatrix[2,2] = 1 / (self._Radius * self._HomogeneityRadiusFactor)
-            self._HomogeneityMatrix[3,3] = 1 / (self._Radius * self._HomogeneityRadiusFactor)
+            self._HomogeneityVector[2] = 1 / (self._Radius * self._HomogeneityRadiusFactor)
+            self._HomogeneityVector[3] = 1 / (self._Radius * self._HomogeneityRadiusFactor)
 
         self._UpToDateMatrix = False
         self._IdealMatrix = np.identity(4) * 2
@@ -498,7 +499,7 @@ class DynamicsEstimatorClass(EstimatorTemplate):
 
     def GetSpeed(self):
         if self._GetInverseMatrix():
-            return self._HomogeneityMatrix.dot(self._InvM.dot(self._Es))
+            return self._HomogeneityVector * self._InvM.dot(self._Es)
         elif self._FallBackToSimpleTranslation:
             SimpleTranslation = self._Es / NonZeroNumber(self.W)
             SimpleTranslation[2:] = 0
@@ -511,7 +512,7 @@ class DynamicsEstimatorClass(EstimatorTemplate):
         return self.GetDisplacement()
     def GetDisplacement(self):
         if self._GetInverseMatrix():
-            return self._HomogeneityMatrix.dot(self._InvM.dot(self._Ed))
+            return self._HomogeneityVector * self._InvM.dot(self._Ed)
         elif self._FallBackToSimpleTranslation:
             SimpleTranslation = self._Ed / NonZeroNumber(self.W)
             SimpleTranslation[2:] = 0
@@ -617,7 +618,7 @@ class DynamicsModifierClass:
             axs[0, nColumn].set_title(ModType)
             axs[0, nColumn].legend(loc = 'upper left')
 
-class TrackerClass(EstimatorTemplate):
+class TrackerClass:
     def __init__(self, TrackerManager, ID, InitialPosition):
         self.TM = TrackerManager
         self.ID = ID
@@ -874,7 +875,7 @@ class TrackerClass(EstimatorTemplate):
     def _ComputeLocalErrorAndEdge(self, CurrentProjectedEvent, PreviousEvents):
         ConsideredNeighbours = []
         LocalEdgePoints = []
-        CurrentProjectedEvent[1:] += self.TM._FlowCorrectMeanPosDrag * self.MeanPosCorrection # Minimize effects of recentering
+        CurrentProjectedEvent[1:] += self.TM._MeanPositionDampeningFactor * self.MeanPosCorrection # Minimize effects of recentering
         for PreviousEvent in reversed(PreviousEvents[:-1]): # We reject the last event, that is either the CPE, or a fake event in Lock.Events
             D = np.linalg.norm(CurrentProjectedEvent[1:] - PreviousEvent[1:])
             if D < self.TM._ClosestEventProximity:

@@ -649,22 +649,28 @@ class Module:
     def __GetRetreiveMethod__(self, VarName, UsedType):
         if '@' in VarName:
             Container, Key = VarName.split('@')
+            if '.' in Key:
+                Key, Field =  Key.split('.')
+                SubRetreiveMethod = lambda Instance: getattr(getattr(Instance, Key), Field)
+            else:
+                SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
+
             if type(self.__dict__[Container]) == list:
                 if UsedType is None:
-                    ExampleVar = self.__dict__[Container][0].__dict__[Key]
+                    ExampleVar = SubRetreiveMethod(self.__dict__[Container][0])
                     UsedType = type(ExampleVar)
-                return lambda event: [UsedType(Instance.__dict__[Key]) for Instance in self.__dict__[Container]]
+                return lambda event: [UsedType(SubRetreiveMethod(Instance)) for Instance in self.__dict__[Container]]
             elif type(self.__dict__[Container]) == dict:
                 if UsedType is None:
-                    ExampleVar = self.__dict__[Container].values()[0].__dict__[Key]
+                    ExampleVar = SubRetreiveMethod(self.__dict__[Container].values()[0])
                     UsedType = type(ExampleVar)
-                return lambda event: {LocalDictKey: UsedType(Instance.__dict__[Key]) for LocalDictKey, Instance in self.__dict__[Container].items()}
+                return lambda event: [(LocalDictKey, UsedType(SubRetreiveMethod(Instance))) for LocalDictKey, Instance in self.__dict__[Container].items()]
             else:
                 if UsedType is None:
-                    ExampleVar = self.__dict__[Container].__dict__[Key]
+                    ExampleVar = SubRetreiveMethod(self.__dict__[Container])
                     UsedType = type(ExampleVar)
                 print(UsedType)
-                return lambda event: UsedType(self.__dict__[Container].__dict__[Key])
+                return lambda event: UsedType(SubRetreiveMethod(self.__dict__[Container]))
         else:
             if UsedType is None:
                 UsedType = type(self.__dict__[VarName])

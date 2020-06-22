@@ -88,11 +88,16 @@ class BundleAdjustment(Module):
         return True
 
     def _OnEventModule(self, event):
-        if event.__class__.__name__ != 'TrackerEvent':
+        if event.Has(TrackerEvent):
             return event
         if self._RandomizeEvents and np.random.rand() > self._EventsConsideredRatio:
             return event
         
+        for SubEvent in event.Get(TrackerEvent):
+            self.OnTrackerEvent(SubEvent)
+        return event
+
+    def OnTrackerEvent(self, event):
         PreviousPose = np.array(self.CameraSpaceWarp.Vectors[0])
 
         if event.TrackerID not in self.Point3DSpaceWarps:

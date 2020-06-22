@@ -215,7 +215,7 @@ class TrackerTRS(Module):
         for TrackerID in self.AliveIDs:
             Associated = self.Trackers[TrackerID].RunEvent(event)
             if Associated and self.TrackerEventCondition(TrackerID):
-                event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID, TrackerAngle = self.Trackers[TrackerID].Position[2], TrackerScaling = self.Trackers[TrackerID].Position[3], TrackerColor = self.Trackers[TrackerID].State.GetColor(), TrackerMarker = self.Trackers[TrackerID].State.GetMarker())
+                event.Attach(TrackerEvent, TrackerLocation = np.array(self.Trackers[TrackerID].Position[:2]), TrackerID = TrackerID, TrackerAngle = self.Trackers[TrackerID].Position[2], TrackerScaling = self.Trackers[TrackerID].Position[3], TrackerColor = self.Trackers[TrackerID].State.GetColor(), TrackerMarker = self.Trackers[TrackerID].State.GetMarker())
 
         if UpdateEvent:
             self.LastTsSnap = event.timestamp
@@ -373,9 +373,6 @@ class EstimatorTemplate:
         if self.W:
             for VarName in self._GeneralVars:
                 self.__dict__[VarName] = self.__dict__['_'+VarName] / NonZeroNumber(self.W)
-        else:
-            for VarName in self._GeneralVars:
-                self.__dict__[VarName] = 0
     def EstimatorStep(self, newT, Tau, WeightIncrease = 1):
         DeltaUpdate = newT - self.LastUpdate
         self.LastUpdate = newT
@@ -950,6 +947,7 @@ class TrackerClass:
         LocalEdgeVectors[:,1] = LocalEdgePoints[:,1] - CurrentProjectedEvent[2]
         LocalEdgeNorms = np.linalg.norm(LocalEdgeVectors, axis = 1)
         NormSum = LocalEdgeNorms.sum()
+        ConsideredNeighbours = np.array(ConsideredNeighbours)
         if NormSum == 0:
             return self._ComputeSpeedError(self, CurrentProjectedEvent, ConsideredNeighbours) + tuple([np.array([0., 0.])])
 
@@ -958,7 +956,6 @@ class TrackerClass:
         Normalizers = 1 / (NormSum * LocalEdgeNorms)
         LocalEdge = np.array([(LocalEdgeRotatedVectors[:,0] * Normalizers).sum(), (LocalEdgeRotatedVectors[:,1] * Normalizers).sum()])
 
-        ConsideredNeighbours = np.array(ConsideredNeighbours)
         return self._ComputeSpeedError(self, CurrentProjectedEvent, ConsideredNeighbours) + tuple([LocalEdge])
 
     def _ComputeSpeedErrorPlanFit(self, CurrentProjectedEvent, ConsideredNeighbours):

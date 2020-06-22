@@ -503,15 +503,12 @@ class BiCameraClass: # Allows to emulate events from events generator
     def AddEvent3D(self, CameraFrame3DLocation):
         self.Events3D += [CameraFrame3DLocation]
     def AddEvent(self, EventOnCameraLocation, CameraIndex, EGOnCameraLocation = None, EGID = None):
-        NewEvent = Event(location = EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
+        NewEvent = Event(timestamp = None, location = EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
         if self.CreateTrackerEvents:
             TrackerLocation = EGOnCameraLocation + np.random.normal(0, self.TrackersLocationGaussianNoise, size = 2)
             if not ((TrackerLocation < 0).any() or (TrackerLocation >= self.Definition).any()):
-                self.Events += [TrackerEvent(original = NewEvent, TrackerLocation = TrackerLocation, TrackerID = EGID)]
-            else:
-                self.Events += [NewEvent]
-        else:
-            self.Events += [NewEvent] 
+                NewEvent.Attach(TrackerEvent, TrackerLocation = TrackerLocation, TrackerID = EGID)
+        self.Events += [NewEvent] 
 
     def _GenerateView(self, Map, Views = ['3d', 'Left', 'Right'], AlphaOffset = True):
         f = plt.figure()

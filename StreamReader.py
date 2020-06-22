@@ -184,7 +184,7 @@ class Reader(Module):
             p = (Bytes[2] >> 3) & 0B1
             t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
 
-            return Event(t / 1e6, np.array([x, y]), p)
+            return Event(timestamp = t / 1e6, location = np.array([x, y]), polarity = p)
 
     def _InitializeEs(self):
         self.CurrentFile = open(self.StreamName,'rb')
@@ -254,7 +254,7 @@ class Reader(Module):
         else:
             y = (Bytes[4] << 8) | (Bytes[3])
 
-        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
+        return Event(timestamp = float(self.PreviousEventTs) * 10**-6, location = np.array([x, y]), polarity = int(p))
 
     def _ATIS_BYTES_ANALYSIS(self, Bytes):
         td = Bytes[0] >> 2
@@ -270,7 +270,7 @@ class Reader(Module):
         else:
             y = (Bytes[4] << 8) | (Bytes[3])
 
-        return Event(float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p))
+        return Event(timestap = float(self.PreviousEventTs) * 10**-6, location = np.array([x, y]), polarity = int(p))
 
     def _DealWithHeaderEs(self):
         self.Geometry = list(self.DefaultGeometry)
@@ -412,7 +412,7 @@ class Reader(Module):
             ts = 0
         else:
             ts -= self.TsOffset
-        return Event(float(ts) * 10**-6, np.array([x, self.yMax - y]), int(p))
+        return Event(timestamp = float(ts) * 10**-6, location = np.array([x, self.yMax - y]), polarity = int(p))
 
     # .TXT METHODS
 
@@ -460,7 +460,7 @@ class Reader(Module):
         else:
             ts -= self.TsOffset
 
-        return Event(ts, np.array([x, y]), int(p))
+        return Event(timestamp = ts, location = np.array([x, y]), polarity = int(p))
 
     # GENERIC METHODS
 

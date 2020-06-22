@@ -430,15 +430,12 @@ class BiCameraClass: # Allows to emulate events from events generator
     def AddEvent2D(self, BiCameraFrame2DLocation):
         self.Events2D += [BiCameraFrame2DLocation]
     def AddEvent(self, EventOnCameraLocation, CameraIndex, EGOnCameraLocation = None, EGID = None):
-        NewEvent = Event(location = self.Definition - 1 - EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
+        NewEvent = Event(timestamp = None, location = self.Definition - 1 - EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
         if self.CreateTrackerEvents:
             TrackerLocation = np.array([EGOnCameraLocation, 0.]) + np.array([np.random.normal(0, self.TrackersLocationGaussianNoise), 0.])
             if not ((TrackerLocation < 0).any() or (TrackerLocation >= self.Definition).any()):
-                self.Events += [TrackerEvent(original = NewEvent, TrackerLocation = TrackerLocation, TrackerID = EGID)]
-            else:
-                self.Events += [NewEvent]
-        else:
-            self.Events += [NewEvent] 
+                NewEvent.Attach(TrackerEvent, TrackerLocation = TrackerLocation, TrackerID = EGID)
+        self.Events += [NewEvent] 
 
     def Plot(self, fax):
         if fax is None:

@@ -13,14 +13,14 @@ class Memory(Module):
     def _InitializeModule(self, **kwargs):
 
         self.STContext = -np.inf*np.ones(self.__Framework__._GetStreamGeometry(self))
-        self.LastEvent = Event(-np.inf, [0,0], 0)
+        self.LastEvent = Event(timestamp = -np.inf, location = np.array([0,0]), polarity = 0)
 
         self.Snapshots = []
 
         return True
 
     def _OnEventModule(self, event):
-        self.LastEvent = Event(original = event)
+        self.LastEvent = event.Copy()
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
 
         self.STContext[position] = self.LastEvent.timestamp

@@ -694,7 +694,106 @@ class Module:
 
 # Listing all the events existing
 
-class Event:
+class BareEvent:
+    _Key = 0
+    _Fields = ['timestamp']
+    def __init__(self, **kwargs):
+        for Field in self.__class__._Fields:
+            try:
+                self.__dict__[Field] = kwargs[Field]
+            except:
+                self.__dict__[Field] = self._Defaults[Field]
+        if self.__class__ == BareEvent:
+            self._Extensions = []
+            self._ExtensionKeys = set()
+            self._RunningExtensions = None
+    def AsList(self):
+        if self._Key < 0: #Ill defined Key
+            return None
+        List = [self._Key]
+        for Field in self.__class__._Fields:
+            Value = getattr(self, Field)
+            if type(Value) == np.ndarray:
+                List += [Value.tolist()]
+            else:
+                List += [Value]
+        if not self.__class__ == BareEvent:
+            return List
+        for Extension in self._Extensions:
+            ExList = Extension.AsList()
+            if not ExList is None:
+                List += [ExList]
+        return List
+    def Attach(self, Extension, **kwargs):
+        self._Extensions += [Extension(bare = True, **kwargs)]
+        self._ExtensionKeys.add(Extension._Key)
+        if Extension._AutoPublic:
+            self._Extensions[-1]._Publicize(self)
+
+    def Has(self, ExtensionRequired):
+        if not isinstance(self, BareEvent):
+            return False
+        return ExtensionRequired._Key in self._ExtensionKeys
+    def Get(self, ExtensionRequired):
+        self._RunningExtensions = [Extension for Extension in self._Extensions if ExtensionRequired._Key == Extension._Key]
+        return self.__iter__()
+    def __iter__(self):
+        if self._RunningExtensions is None:
+            raise Exception("No subevent type selected. Use Get() method first")
+        self._IterVar = 0
+        return self
+    def __next__(self):
+        if self._IterVar < len(self._RunningExtensions):
+            self._IterVar += 1
+            self._RunningExtensions[self._IterVar-1]._Publicize(self)
+            return self
+        else:
+            if not self._RunningExtensions[-1]._AutoPublic:
+                self._RunningExtensions[-1]._Hide(self)
+            self._RunningExtensions = None
+            raise StopIteration
+
+    def Copy(self):
+        SelfDict = {Key: getattr(self, Key) for Key in self._Fields}
+        NewInstance = self.__class__(**SelfDict)
+        for Extension in self._Extensions:
+            NewInstance.Attach(Extension, {Key: getattr(Extension, Key) for Key in Extension._Fields})
+        return NewInstance
+
+class _EventExtension(BareEvent):
+    _Key = -1
+    _AutoPublic = False # Careful to check that this extention _Fields are not conflicting with another publishable extension.
+    def __new__(cls, *args, **kw):
+        if not 'bare' in kw:
+            BaseInstance = BareEvent(**kw)
+            BaseInstance.Attach(cls, **kw)
+            return BaseInstance
+        else:
+            del kw['bare']
+            ExtensionInstance = object.__new__(cls)
+            BareEvent.__init__(ExtensionInstance, *args, **kw)
+            return ExtensionInstance
+    def __init__(self, *args, **kwargs):
+        BareEvent.__init__(self, **kwargs)
+    def _Publicize(self, BaseEvent):
+        for Field in self._Fields:
+            BaseEvent.__dict__[Field] = getattr(self, Field)
+    def _Hide(self, BaseEvent):
+        for Field in self._Fields:
+            del BaseEvent.__dict__[Field]
+
+class Event(_EventExtension):
+    _Key = 1
+    _Fields = ['location', 'polarity', 'cameraIndex']
+    _Defaults = {'cameraIndex':0}
+    _AutoPublic = True
+
+class TrackerEvent(_EventExtension):
+    _Key = 2
+    _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
+    _Defaults = {'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
+
+class EventOld:
     def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):
         if original == None:
             self.timestamp = timestamp
@@ -708,8 +807,8 @@ class Event:
     def _AsList(self):
         return self.location.tolist() + [self.timestamp, self.polarity]
 
-class TrackerEvent(Event):
-    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerAngle = 0., TrackerScaling = 1., TrackerColor = 'b', TrackerMarker = 'o'): # Some options are added for dev purposes.
+class TrackerEventOld(Event):
+    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerAngle = 0., TrackerScaling = 1., TrackerColor = 'b', TrackerMarker = 'o'): # Some fields are added for dev purposes.
         super().__init__(original = original)
         self.TrackerLocation = np.array(TrackerLocation)
         self.TrackerID = TrackerID

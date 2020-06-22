@@ -210,12 +210,12 @@ class SpeedTracker(Module):
             if not Associated or not self._TrackerSingleTrackerPoint:
                 Associated = self.Trackers[TrackerID].RunEvent(event)
                 if Associated and self.Trackers[TrackerID].Lock:
-                    event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
+                    event.Attach(TrackerEvent, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
             else:
                 if UpdateEvent:
                     self.Trackers[TrackerID].UpdateWithEvent(event)
                     if self.Trackers[TrackerID].Lock:
-                        event = TrackerEvent(original = event, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
+                        event.Attach(TrackerEvent, TrackerLocation = np.array(self.Trackers[TrackerID].Position), TrackerID = TrackerID)
 
         if UpdateEvent:
             self.LastTsSnap = event.timestamp

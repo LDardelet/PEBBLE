@@ -117,11 +117,16 @@ class BundleAdjustmentWarp(Module):
         return True
 
     def _OnEventModule(self, event):
-        if event.__class__ != TrackerEvent:
+        if not event.Has(TrackerEvent):
             return event
         if self._RandomizeEvents and np.random.rand() > self._EventsConsideredRatio:
             return event
-        
+
+        for SubEvent in event.Get(TrackerEvent):
+            self.OnTrackerEvent(SubEvent)
+        return event
+    
+    def OnTrackerEvent(self, event):
         self.LastTs = event.timestamp
         self.LastPointsReceived[event.TrackerID] = (np.array(event.TrackerLocation), event.timestamp)
         PreviousPose = np.array(self.CameraSpaceWarp.Vectors[0])
@@ -185,7 +190,6 @@ class BundleAdjustmentWarp(Module):
         if np.random.rand() < 0.01:
             self.Log("Point {0:3d} FLR : {1:.3f}, Pose FLR : {2:.3f}, Pose Trace : {3:.3f}".format(event.TrackerID, self.Point2DSpaceWarps[event.TrackerID].FirstLambdaRatio, self.CameraSpaceWarp.FirstLambdaRatio, self.CameraSpaceWarp.C.trace()))
             self.Log("Camera R[0,0] : {0:.3f}".format(self.CameraSpaceWarp.Value[0]))
-        return event
 
         # The two following methods are for metric renormalization
     def _PointDistanceCorrection(self, X_i):

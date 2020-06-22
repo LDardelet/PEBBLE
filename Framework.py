@@ -707,7 +707,7 @@ class BareEvent:
             self._Extensions = []
             self._ExtensionKeys = set()
             self._RunningExtensions = None
-    def AsList(self):
+    def _AsList(self):
         if self._Key < 0: #Ill defined Key
             return None
         List = [self._Key]
@@ -720,7 +720,7 @@ class BareEvent:
         if not self.__class__ == BareEvent:
             return List
         for Extension in self._Extensions:
-            ExList = Extension.AsList()
+            ExList = Extension._AsList()
             if not ExList is None:
                 List += [ExList]
         return List
@@ -757,7 +757,7 @@ class BareEvent:
         SelfDict = {Key: getattr(self, Key) for Key in self._Fields}
         NewInstance = self.__class__(**SelfDict)
         for Extension in self._Extensions:
-            NewInstance.Attach(Extension, {Key: getattr(Extension, Key) for Key in Extension._Fields})
+            NewInstance.Attach(Extension.__class__, **{Key: getattr(Extension, Key) for Key in Extension._Fields})
         return NewInstance
 
 class _EventExtension(BareEvent):

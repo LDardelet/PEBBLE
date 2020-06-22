@@ -60,25 +60,25 @@ class TrackerTRS(Module):
         self._CorrectRotationPosition = False
         self._CorrectScalingPosition = False
 
-        self._TCReduction = 2.
+        self._TCReduction = 1.5
         self._TrackerDiameter = 20.                                                  # Int. Size of a tracker's side lenght. Usually changed to 30 for 640x480 camera definitions. Default : 20
         self._TrackerAimedEdgeSize = 5.                                             # Float. Number of successive edges pixels lines kept. More pixels increases stability, but also inertia and thus lower reactivity. Default : 4.
         self._DetectorDefaultSpeedTrigger = 5.                                      # Float. Default speed trigger, giving a lower bound for speeds in the scene, and higher boundary in time constants.
         self._TrackerMinDeathActivity = 0.1                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
-        self._OutOfBondsDistance = 0.                                               # FLoat. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
+        self._OutOfBondsDistance = 0.                                               # Float. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
 
         self._TrackerIgnoreBorderEvents = False                                     # Bool. Allows to ignore events on the border of the tracker's window for correction, as they are most of the time biased toward the interior of it. Default : False
         self._TrackerAccelerationFactor = 1.                                        # Float. Acceleration factor for speed correction. Default : 1.
         self._TrackerDisplacementFactor = 1.                                        # Float. Displacement factor for position correction with the relative flow. Default : 1.
         self._TrackerUnlockedSpeedModActivityPower = 1.                                     # Float. Exponent of the activity dividing the speed correction in unlocked mode. May allow to lower inertia in highly textured scenes. Default : 1.
         self._ObjectEdgePropagationTC = 1e-4                                        # Float. Security time window for events considered to be previous edge propagation, and not neighbours later spiking. Default : 1e-4
-        self._ClosestEventProximity = 2                                             # Float. Maximum distance for an event to be considered in the simple flow computation. Default : 2.
+        self._ClosestEventProximity = 2.5                                             # Float. Maximum distance for an event to be considered in the simple flow computation. Default : 2.
         self._MaxConsideredNeighbours = 20                                          # Int. Maximum number of considered events in the simple flow computation. Higher values slighty increase flow quality, but highly increase computation time. Default : 20
         self._MinConsideredNeighbours = int(self._ClosestEventProximity * 2 * 1.5)  # Int. Minimum number of considered events in the simple flow computation. Lower values allow for more events to be used in the correction, but lower the correction quality. Default : 4
 
         self._TrackerUsePositionMean = True                                         # Bool. Activate partial recentering of features in the center of the window. Can incrase stability. Default : True
-        self._TrackerMeanPositionRelativeRadiusTolerance = 0.3                      # Float. Minimum distance of recentering relative to _TrackerDiameter. Default : 0.3
-        self._TrackerMeanPositionDisplacementFactor = 0.5                            # Float. Amount of correction due to recentering process. Default : 1.
+        self._TrackerMeanPositionRelativeRadiusTolerance = 0.4                      # Float. Minimum distance of recentering relative to _TrackerDiameter/2. Default : 0.3
+        self._TrackerMeanPositionDisplacementFactor = 0.3                            # Float. Amount of correction due to recentering process. Default : 1.
         self._LockOnlyCentered = True                                               # Bool. Forces to wait for the mean position of projected events to be within _TrackerMeanPositionRelativeRadiusTolerance
 
         self._ConvergenceEstimatorType = 'PD'                                       # Str. Defines the way we compute the convergence estimator. 'PD' (ProjectedDistance) for the average distance of an event to the surrounding events.
@@ -88,10 +88,10 @@ class TrackerTRS(Module):
         self._TrackerConvergenceHysteresis = {'CF':0.05, 'PD':0.2}[self._ConvergenceEstimatorType]                  
         # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.05
 
-        self._LocalEdgeRadius = self._ClosestEventProximity * 1.5
+        self._LocalEdgeRadius = self._ClosestEventProximity * 1.
         self._LocalEdgeNumberOfEvents = int(2*self._LocalEdgeRadius)
-        self._TrackerApertureIssueBySpeedThreshold = 0.3                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
-        self._TrackerApertureIssueBySpeedHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueBySpeedThreshold. Default : 0.05
+        self._TrackerApertureIssueThreshold = 0.45                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
+        self._TrackerApertureIssueHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueThreshold. Default : 0.05
 
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
         self._TrackerLockingMaxRecoveryBuffer = 100                                 # Int. Size of the buffer storing events while locked, used in case of feature loss. Greater values increase computationnal cost. Default : 100
@@ -104,7 +104,7 @@ class TrackerTRS(Module):
         self._LockedPosModReduction = 1.
         self._TrackerLockedCanHardCorrect = True                                    # Bool. Allows trackers to remain locked even with high speed correction values. Default : True
 
-        self._MeanPositionDampeningFactor = 1.
+        self._MeanPositionDampeningFactor = 0.8
 
         self._ComputeSpeedErrorMethod = 'LinearMean'                                # String. Speed error computation method. Can be 'LinearMean', 'ExponentialMean' or 'PlanFit'. See associated functions for details. Default : 'LinearMean'
         # Monitoring Variables
@@ -580,8 +580,6 @@ class SpeedConvergenceEstimatorClass(EstimatorTemplate):
 
     def _AddDataPD(self, t, ProjectionError, Tau):
         NProjectionError = np.linalg.norm(ProjectionError)
-        if NProjectionError == 0:
-            return
         self.EstimatorStep(t, Tau)
         self._Vector += NProjectionError
     def _GetValuePD(self):
@@ -673,7 +671,7 @@ class DynamicsModifierClass:
             axs[0, nColumn].legend(loc = 'upper left')
 
 class TrackerClass:
-    _Modifiers = {'Speed':(None, [False, False, False], [True, True, True]), # Condition variable, Speed modification, Position modification
+    _Modifiers = {'Speed':(None, [False, False, False], [True, True, True]), # Condition variable, Speed modification (T,R,S), Position modification (T,R,S)
                   'Flow': (None, [True, True, False],   [True, True, False]),
                   'MeanPos': ('_TrackerUsePositionMean', [False, False, False], [True, False, False])}
     def __init__(self, TrackerManager, ID, InitialPosition):
@@ -691,7 +689,7 @@ class TrackerClass:
         self.SquaredRadius = self.Radius**2
 
         self.TimeConstant = self.TM._TCReduction * self.TM._TrackerDefaultTimeConstant
-        self.DecayTC = self.TimeConstant * self.TM._TrackerAimedEdgeSize
+        self.EdgeTC = self.TimeConstant * self.TM._TrackerAimedEdgeSize
         
         self.ProjectedEvents = []
         self.AssociatedFlows = []
@@ -781,7 +779,7 @@ class TrackerClass:
             UsedEventsList = self.Lock.Events
             self.ProjectedEvents = self.ProjectedEvents[-(self.TM._TrackerLockingMaxRecoveryBuffer-1):] + [SavedProjectedEvent]
         else:
-            while len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.DecayTC: # We look for the first event recent enough. We remove for events older than 2 Tau, meaning a participation of 5%
+            while len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.EdgeTC: # We look for the first event recent enough. We remove for events older than N Tau, meaning a participation of 5%
                 self.ProjectedEvents.pop(0)
                 self.AssociatedFlows.pop(0)
             UsedEventsList = self.ProjectedEvents
@@ -807,7 +805,7 @@ class TrackerClass:
             self.SpeedConvergenceEstimator.AddData(event.timestamp, ProjectionError, self.TimeConstant) # Yes we do multiply by  the norm here due to division by the norm anyway in the estimator
         else:
             raise Exception('Ill-defined convergence estimator type')
-        self.ApertureEstimator.AddData(event.timestamp, LocalEdge, self.DecayTC)
+        self.ApertureEstimator.AddData(event.timestamp, LocalEdge, self.TimeConstant)
 
         if self.Lock or not self.TM._RSLockModel: #RSLockModel
             SpeedError = self.DynamicsEstimator.GetSpeed()
@@ -823,11 +821,11 @@ class TrackerClass:
             DisplacementError[2:] = 0
 
         if self.Lock:
-            SpeedMod = self.TM._LockedSpeedModReduction * SpeedError / self.Lock.Activity ** self.TM._TrackerLockedSpeedModActivityPower
-            PositionMod = self.TM._LockedPosModReduction * DisplacementError / self.Lock.Activity ** self.TM._TrackerLockedSpeedModActivityPower
+            SpeedMod = self.TM._LockedSpeedModReduction * SpeedError / self.Lock.FlowActivity ** self.TM._TrackerLockedSpeedModActivityPower
+            PositionMod = self.TM._LockedPosModReduction * DisplacementError / self.Lock.FlowActivity ** self.TM._TrackerLockedSpeedModActivityPower
         else:
-            SpeedMod = SpeedError / self.TrackerActivity ** self.TM._TrackerUnlockedSpeedModActivityPower
-            PositionMod = DisplacementError / self.TrackerActivity ** self.TM._TrackerUnlockedSpeedModActivityPower
+            SpeedMod = SpeedError / self.FlowActivity ** self.TM._TrackerUnlockedSpeedModActivityPower
+            PositionMod = DisplacementError / self.FlowActivity ** self.TM._TrackerUnlockedSpeedModActivityPower
 
         self.DynamicsModifier.ModSpeed('Flow', self._CorrectModificationOrientationAndNorm(SpeedMod * self.TM._TrackerAccelerationFactor))
         self.DynamicsModifier.ModPosition('Flow', self._CorrectModificationOrientationAndNorm(PositionMod * self.TM._TrackerDisplacementFactor))
@@ -848,10 +846,10 @@ class TrackerClass:
 
     def ComputeCurrentStatus(self, t): # Cannot be called when DEAD or IDLE. Thus, we first check evolutions for aperture issue and lock properties, then update the status
         self.ApertureEstimator.RecoverGeneralData()
-        if not self.State.Locked and not self.State.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector)**2 > self.TM._TrackerApertureIssueBySpeedThreshold + self.TM._TrackerApertureIssueBySpeedHysteresis:
+        if not self.State.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector) > self.TM._TrackerApertureIssueThreshold + self.TM._TrackerApertureIssueHysteresis:
             self.State.ApertureIssue = True
             Reason = "aperture issue"
-        elif self.State.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector)**2 < self.TM._TrackerApertureIssueBySpeedThreshold - self.TM._TrackerApertureIssueBySpeedHysteresis:
+        elif self.State.ApertureIssue and np.linalg.norm(self.ApertureEstimator.Vector) < self.TM._TrackerApertureIssueThreshold - self.TM._TrackerApertureIssueHysteresis:
             self.State.ApertureIssue = False
 
         CanBeLocked = True
@@ -915,7 +913,7 @@ class TrackerClass:
             self.TimeConstant = self.TM._TCReduction * self.TM._TrackerDefaultTimeConstant
         else:
             self.TimeConstant = self.TM._TCReduction * min(self.TM._TrackerDefaultTimeConstant, 1. / TrackerAverageSpeed)
-        self.DecayTC = self.TimeConstant * self.TM._TrackerAimedEdgeSize
+        self.EdgeTC = self.TimeConstant * self.TM._TrackerAimedEdgeSize
 
     def _CorrectModificationOrientationAndNorm(self, Mod):
         cs, ss = self.Position[3]*np.cos(self.Position[2]), self.Position[3]*np.sin(self.Position[2])

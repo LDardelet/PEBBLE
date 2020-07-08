@@ -50,6 +50,8 @@ class Framework:
         self.ProjectFile = ProjectFile
         self.Modified = False
         self._LogType = 'raw'
+        self._LogOut = sys.stdout
+        self._LastLogOut = sys.stdout
 
         self.__Type__ = 'Framework'
 
@@ -137,12 +139,30 @@ class Framework:
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
-    def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, **kwargs):
+    def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, LogFile = None, **kwargs):
+        if resume:
+            if self._LastLogOut is sys.stdout:
+                pass
+            else:
+                self._LogOut = open(self._LastLogOut.name, 'a')
+        else:
+            if LogFile is None:
+                self._LogOut = sys.stdout
+            else:
+                self._LogOut = open(LogFile, 'w')
+            self._LastLogOut = self._LogOut
         if self._LogType == 'columns':
             if len(self.ToolsList) > 6:
                 self._LogType = 'raw'
             else:
-                self._LogInit()
+                self._LogInit(resume)
+        self._RunProcess(StreamName = StreamName, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod, **kwargs)
+        if not self._LogOut is sys.stdout:
+            self._LogOut.close()
+            self._LogOut = sys.stdout
+            self._LogType = 'raw'
+
+    def _RunProcess(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, **kwargs):
         if StreamName is None:
             N = 0
             StreamName = "DefaultStream_{0}".format(N)
@@ -192,7 +212,7 @@ class Framework:
             self._Log("Main loop finished without error.")
         else:
             if self.Paused:
-                self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1, Raw = True)
+                self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
@@ -516,7 +536,7 @@ class Framework:
                 self._SendLog()
         elif self._LogType == 'raw' or Raw:
             Message = self._LogColors[MessageType] + int(bool(Message))*ModuleName + ': ' + Message
-            print(Message + self._LogColors[0])
+            self._LogOut.write(Message + self._LogColors[0] + "\n")
     def _SendLog(self):
         if self._LogType == 'raw' or not self._HasLogs:
             return
@@ -531,17 +551,19 @@ class Framework:
                     CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ToolName].pop(0)
                 else:
                     CurrentLine += self._Default_Color + ' | ' + self._MaxColumnWith*' '
-            print(CurrentLine)
+            self._LogOut.write(CurrentLine + "\n")
         self._HasLogs = 0
         self._LogT = None
 
-    def _LogInit(self):
+    def _LogInit(self, Resume = False):
         self._HasLogs = 2
         self._LogT = None
         self._MaxColumnWith = int((self._Terminal_Width - len(self.ToolsList)*3 ) / (len(self.ToolsList) + 1))
-        self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in ['Framework'] + self.ToolsList}
-        self._SendLog()
-        self._LogReset()
+        if not Resume:
+            self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in ['Framework'] + self.ToolsList}
+            self._SendLog()
+        else:
+            self._EventLogs = {ToolName:[] for ToolName in ['Framework'] + self.ToolsList}
     def _LogReset(self):
         self._EventLogs = {ToolName:[] for ToolName in self._EventLogs.keys()}
         self._HasLogs = 0
@@ -626,12 +648,18 @@ class Module:
         self.__Initialized__ = True
         return True
 
+    def GetSnapIndexAt(self, t):
+        return (abs(np.array(self.History['t']) - t)).argmin()
+
     def _InitializeModule(self, **kwargs):
         # Template for user-filled module initialization
         return True
     def _OnEventModule(self, event):
         # Template for user-filled module event running method
         return event
+    def _OnSnapModule(self):
+        # Template for user-filled module preparation for taking a snapshot. 
+        pass
 
     def __OnEventRestricted__(self, event):
         if event.cameraIndex in self.__CameraIndexRestriction__:
@@ -642,6 +670,7 @@ class Module:
     def __OnEventMonitor__(self, event):
         if event.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
             self.__LastMonitoredTimestamp = event.timestamp
+            self._OnSnapModule()
             for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
                 self.History[VarName] += [RetreiveMethod(event)]
         return event
@@ -677,7 +706,7 @@ class Module:
             return lambda event: UsedType(self.__dict__[VarName])
 
     def _Rewind(self, t):
-        None
+        pass
 
     def Log(self, Message, MessageType = 0):
         '''

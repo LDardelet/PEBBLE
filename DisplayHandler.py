@@ -8,10 +8,12 @@ import _pickle as cPickle
 from Framework import Module
 
 class DisplayHandler(Module):
-    Address = "localhost"
-    EventPort = 54242
-    QuestionPort = 54243
-    ResponsePort = 54244
+    _Address = "localhost"
+    _EventPort = 54242
+    _QuestionPort = 54243
+    _ResponsePort = 54244
+
+    _PacketSizeLimit = 2048
 
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
@@ -65,15 +67,9 @@ class DisplayHandler(Module):
             self.PostBox += [event._AsList()]
 
             if len(self.PostBox) > self._PostBoxLimit:
-                self.Post()
+                self._SendPackage()
 
         return event
-
-    def Post(self):
-        #for item in self.PostBox:
-        #    self.__PostTransporters__[item.__class__.__name__](item)
-        self._SendPackage()
-        self.PostBox = []
 
     def EndTransmission(self):
         if not self.Socket is None:
@@ -81,32 +77,36 @@ class DisplayHandler(Module):
 
     def _SendPackage(self):
         Package = [self.Socket] + self.PostBox
+        self.PostBox = []
         data = cPickle.dumps(Package)
-        self.MainUDP.sendto(data, (self.Address, self.EventPort))
+        while len(data) > self._PacketSizeLimit:
+            self.PostBox.append(Package.pop(-1))
+            data = cPickle.dumps(Package)
+        self.MainUDP.sendto(data, (self._Address, self._EventPort))
 
     def _SendEvent(self, ev):
         ev.socket = self.Socket
         data = cPickle.dumps(ev)
-        self.MainUDP.sendto(data, (self.Address, self.EventPort))
+        self.MainUDP.sendto(data, (self._Address, self._EventPort))
 
     def _SendSegment(self, seg):
         segment.socket = self.Socket
         data = cPickle.dumps(segment)
-        self.MainUDP.sendto(data, (self.Address, self.EventPort))
+        self.MainUDP.sendto(data, (self._Address, self._EventPort))
 
     def _SendStreamData(self):
         ProjectFile = self.__Framework__.ProjectFile
         StreamName = self.__Framework__._GetStreamFormattedName(self)
 
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("", self.ResponsePort)
+        listen_addr = ("", self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
         QuestionDict = {'id': id_random, 'socket': self.Socket, 'infosline1': ProjectFile+' -> ' + self.__Name__, 'infosline2': StreamName, 'command':'socketdata'}
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 
@@ -123,14 +123,14 @@ class DisplayHandler(Module):
 
     def _Rewind(self, tNew):
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("",self.ResponsePort)
+        listen_addr = ("",self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
         QuestionDict = {'id': id_random, 'socket': self.Socket, 'command':'rewind', 'tNew': tNew}
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 
@@ -147,14 +147,14 @@ class DisplayHandler(Module):
 
     def _CleanMapForStream(self):
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("",self.ResponsePort)
+        listen_addr = ("",self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
         QuestionDict = {'id': id_random, 'socket': self.Socket, 'command':'cleansocket'}
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 
@@ -171,14 +171,14 @@ class DisplayHandler(Module):
 
     def _IsDisplayUp(self):
         ResponseUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        listen_addr = ("",self.ResponsePort)
+        listen_addr = ("",self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
         QuestionDict = {'id': id_random, 'command':'isup'}
 
         QuestionUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 
@@ -200,14 +200,14 @@ class DisplayHandler(Module):
         if self.Socket is None:
             return None
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("",self.ResponsePort)
+        listen_addr = ("",self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
         QuestionDict = {'id': id_random, 'socket': self.Socket, 'command':'destroysocket'}
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 
@@ -227,7 +227,7 @@ class DisplayHandler(Module):
         Geometry = self.__Framework__._GetStreamGeometry(self)
 
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("",self.ResponsePort)
+        listen_addr = ("",self._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
@@ -239,7 +239,7 @@ class DisplayHandler(Module):
             QuestionDict['socket'] = self.Socket
 
         QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self.Address, self.QuestionPort))
+        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (self._Address, self._QuestionPort))
         QuestionUDP.close()
         ResponseUDP.settimeout(1.)
 

@@ -13,7 +13,7 @@ class Refractory(Module):
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Filter'
 
-        self._Period = 0.06 # Given is seconds
+        self._Period = 0.03 # Given is seconds
         self._Active = True
 
     def _InitializeModule(self, **kwargs):

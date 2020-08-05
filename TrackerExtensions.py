@@ -9,6 +9,8 @@ import pickle
 from sys import stdout
 from Framework import Module, TrackerEvent
 
+import imageio
+
 import pathos.multiprocessing as mp
 from functools import partial
 
@@ -60,6 +62,100 @@ class FeatureManagerClass:
                     ReferencePoints = ReferencePoints - ReferencePoints.mean(axis = 0)
                     ExpectedRotation, ExpectedScaling = Feature.Rotation - self.RotationValue, Feature.Scaling - self.Scaling
         # TODO
+
+    def EventCameraDatasetIMU(self):
+        filename = '/'.join(self.TrackerManager.__Framework__._GetStreamFormattedName(self.TrackerManager).split('/')[:-1])+'/imu.txt'
+        f = open(filename, 'r')
+        Data = [[] for i in range(7)]
+        for line in f.readlines():
+            for i, data in enumerate(line.strip().split(' ')):
+                Data[i] += [float(data)]
+        f.close()
+        return Data
+
+    def GenerateIMUData(self, NPointsMin = 5, fillVoid = False, IMUGTFunction = None, AutoScaleToGT = True, SigmaError = 2.):
+        self.IMUData = {'t':[], 'x':[], 'y':[], 'z':[]}
+        if SigmaError:
+            self.IMUError = {'t':[], 'x':[], 'y':[], 'z':[]}
+        self.ComputationData = {'Delta': [], 'S':[], 'R2':[], 'Omega':[], 'N': []}
+        PreviousIDsAndPositions = {}
+        PreviousT = None
+        ScreenCenter = self.TrackerManager.__Framework__._GetStreamGeometry(self.TrackerManager)[:2]/2
+        def AddSnap(t, x, y, z):
+            self.IMUData['t'] += [t]
+            self.IMUData['x'] += [x]
+            self.IMUData['y'] += [y]
+            self.IMUData['z'] += [z]
+        def AddSnapError(t, Sx, Sy, Sz):
+            self.IMUError['t'] += [t]
+            self.IMUError['x'] += [Sx]
+            self.IMUError['y'] += [Sy]
+            self.IMUError['z'] += [Sz]
+        for nSnap, tSnap in enumerate(self.TrackerManager.History['t']):
+            AvailableIDs = self.TrackerManager.History['RecordedTrackers@ID'][nSnap]
+            Statuses = self.TrackerManager.History['RecordedTrackers@State.Value'][nSnap]
+            Positions = self.TrackerManager.History['RecordedTrackers@Position'][nSnap]
+
+            CurrentIDsAndPositions = {}
+            MatchingIDs = set()
+            for nID, ID_Status in enumerate(zip(AvailableIDs, Statuses)):
+                ID, Status = ID_Status
+                if Status != (self.TrackerManager._StateClass._STATUS_LOCKED, 0): # If its either unlocked or is disengaged
+                    continue
+                if ID in PreviousIDsAndPositions.keys():
+                    MatchingIDs.add(ID)
+                CurrentIDsAndPositions[ID] = Positions[nID][:2] - ScreenCenter
+            if len(MatchingIDs) >= NPointsMin:
+                MeanPositions = np.array([(CurrentIDsAndPositions[ID] + PreviousIDsAndPositions[ID])/2 for ID in MatchingIDs])
+                Displacements = np.array([(CurrentIDsAndPositions[ID] - PreviousIDsAndPositions[ID]) for ID in MatchingIDs])
+
+                N = len(MatchingIDs)
+                S = MeanPositions.sum(axis = 0)
+                Delta = Displacements.sum(axis = 0)
+                Omega = (Displacements[:,0]*MeanPositions[:,1] - Displacements[:,1]*MeanPositions[:,0]).sum()
+                R2 = (MeanPositions**2).sum()
+
+                self.ComputationData['N'].append(N)
+                self.ComputationData['Delta'].append(Delta)
+                self.ComputationData['S'].append(S)
+                self.ComputationData['R2'].append(R2)
+                self.ComputationData['Omega'].append(Omega)
+                
+                DeltaT = tSnap - PreviousT
+                dwz = -(N*Omega + Delta[0]*S[1] - Delta[1]*S[0]) / (N*R2 - (S**2).sum())
+                #dwy = -(Delta[0] - S[1]*dwz)/N
+                #dwx = -(Delta[1] + S[0]*dwz)/N
+                dwy = -(Delta[0]*(R2*N - S[0]**2) + (N*Omega - S[0]*Delta[1])*S[1])/ (N * (R2*N - (S**2).sum()))
+                dwx = -(Delta[1]*(R2*N - S[1]**2) - (N*Omega + S[1]*Delta[0])*S[0])/ (N * (R2*N - (S**2).sum()))
+                
+                AddSnap((tSnap + PreviousT)/2, dwx / DeltaT, dwy / DeltaT, dwz / DeltaT)
+                if SigmaError:
+                    ddwz = 2*N*SigmaError*( abs(Delta.sum()) + np.sqrt(2)*abs(S.sum()) + 2*abs(dwz * S.sum())) / (R2*N - (S**2).sum() )
+                    ddwx = 0
+                    ddwy = 0
+                    AddSnapError((tSnap + PreviousT)/2, ddwx / DeltaT, ddwy / DeltaT, ddwz / DeltaT)
+            else:
+                if fillVoid:
+                    if PreviousT is None:
+                        PreviousT = tSnap
+                    AddSnap((tSnap + PreviousT)/2, 0, 0, 0)
+                    if SigmaError:
+                        AddSnapError((tSnap + PreviousT)/2, 0, 0, 0)
+            PreviousT = tSnap
+            PreviousIDsAndPositions = CurrentIDsAndPositions
+        if not IMUGTFunction is None:
+            Data = IMUGTFunction()
+            MaxIndex = np.where(np.array(Data[0]) > PreviousT)[0][0]
+            for nData, Name in enumerate(['tTh', 'axTh', 'ayTh', 'azTh', 'xTh', 'yTh', 'zTh']):
+                self.IMUData[Name] = np.array(Data[nData][:MaxIndex])
+            if AutoScaleToGT:
+                for Axis in ['x', 'y', 'z']:
+                    self.IMUData[Axis] = np.array(self.IMUData[Axis])
+                    Scaling = np.sqrt((self.IMUData[Axis+'Th']**2 - self.IMUData[Axis+'Th'].mean()**2).mean() / (self.IMUData[Axis]**2 - self.IMUData[Axis].mean()**2).mean())
+                    self.IMUData[Axis] *= Scaling
+                    if SigmaError:
+                        self.IMUError[Axis] = np.array(self.IMUError[Axis]) * Scaling
+                    print("Axis {0} scaling : {1:.5f}".format(Axis, Scaling))
 
     def GetSnapshot(self, t):
         self._ComputePoseInformation()
@@ -126,231 +222,235 @@ class FeatureClass:
         self.CenterRelativePosition = np.array(InitialCenterRelativePosition)
         self.Trackers = [(InitialTracker, len(InitialTracker.LocksSaves)-1)]
 
-from scipy import misc 
+import cv2
+import imutils
 
 class GTMakerClass:
-    def __init__(self, SpeedTracker, LookupRadius = 2):
-        self.SpeedTracker = SpeedTracker
-        self.WindowSize = int(SpeedTracker._TrackerDiameter * 1.5)
-        self.WindowSize -= self.WindowSize%2
-        self.LookupRadius = LookupRadius
+    def __init__(self, TrackerManager, DiameterRatio = 1):
+        self.TM = TrackerManager
+        self.WindowSize = int(self.TM._TrackerDiameter*DiameterRatio)
+        self.WidthHeigth = (int(self.TM._TrackerDiameter*DiameterRatio), int(self.TM._TrackerDiameter*DiameterRatio))
+        self.RadiusOffset = -DiameterRatio * np.array([self.TM._TrackerDiameter, self.TM._TrackerDiameter]) / 2
 
         self.DataFolder = None
         self.ImagesLookupTable = None
-        self.ImagesRefDict = {}
+        self.GTTrackersDict = {}
         self.GTPositions = {}
-        self.CurrentDataIndex = None
-
-        self.SearchVectors = None
-
-        self.DistMatch = 9e-2
-
-    def CreateSearchVectors(self):
-        xs = np.arange(0, 2*self.LookupRadius + 1) - self.LookupRadius
-        ys = np.arange(0, 2*self.LookupRadius + 1) - self.LookupRadius
-        Vectors = []
-        for x in xs:
-            for y in ys:
-                Vectors += [np.array([x,y])]
-        Norms = np.linalg.norm(np.array(Vectors), axis = 1)
-        self.SearchVectors = []
-        for i in np.argsort(Norms):
-            self.SearchVectors += [Vectors[i]]
-
-    def _OpenLookupTableFile(self, filename):
-        self.ImagesLookupTable = {'t': [], 'filename': []}
-        with open(filename, 'rb') as LookupTableFile:
-            for line in LookupTableFile.readlines():
-                t, ImageName = line.strip().split(' ')
-                self.ImagesLookupTable['t'] += [float(t)]
-                self.ImagesLookupTable['filename'] += [ImageName]
-        print("Lookup table loaded from file")
-
-    def _CreateLookupTableSnaps(self):
-        self.ImagesLookupTable = {'t': [], 'filename': []}
-        for nt, Duo in enumerate(self.SpeedTracker._LinkedMemory.Snapshots):
-            self.ImagesLookupTable['t'] += [Duo[0]]
-            self.ImagesLookupTable['filename'] += [nt]
-        print("Lookup table created from snapshots")
-
-    def GetTrackerPositionAt(self, t, TrackerID):
-        self.GetCurrentFrameIndex(t)
-        if not TrackerID in list(self.GTPositions[self.ImagesLookupTable['filename'][self.CurrentFrameIndex]].keys()):
-            return None
-        if self.CurrentFrameIndex + 1 >= len(self.ImagesLookupTable['filename']) or not self.ImagesLookupTable['filename'][self.CurrentFrameIndex + 1] in list(self.GTPositions.keys()) or not TrackerID in list(self.GTPositions[self.ImagesLookupTable['filename'][self.CurrentFrameIndex + 1]].keys()):
-            return self.GTPositions[self.ImagesLookupTable['filename'][self.CurrentFrameIndex]][TrackerID]
-        t1 = self.ImagesLookupTable['t'][self.CurrentFrameIndex]
-        t2 = self.ImagesLookupTable['t'][self.CurrentFrameIndex+1]
-        p1 = self.GTPositions[self.ImagesLookupTable['filename'][self.CurrentFrameIndex]][TrackerID]
-        p2 = self.GTPositions[self.ImagesLookupTable['filename'][self.CurrentFrameIndex+1]][TrackerID]
-        return p1 + (p2-p1) * (t-t1) / (t2-t1)
-
-    def GetTrackerPositions(self, TrackerID):
-        ts = []
-        Xs = []
-        for t, ImageFile in zip(self.ImagesLookupTable['t'], self.ImagesLookupTable['filename']):
-            if ImageFile in list(self.GTPositions.keys()):
-                if TrackerID in list(self.GTPositions[ImageFile].keys()):
-                    ts += [t]
-                    Xs += [self.GTPositions[ImageFile][TrackerID]]
-        return ts, Xs
-
-    def _FindMatch(self, TrackerID, NewPosition):
-        RefFeature = self.ImagesRefDict[TrackerID]
-        BestMatchDist = 1
-        BestMatchPosition = None
-        if (NewPosition < self.WindowSize/2).any() or (NewPosition > np.array(self.CurrentImage.shape) + self.WindowSize/2).any():
-            return None
-
-        for Vector in self.SearchVectors:
-            CurrentPosition = np.array(np.rint(NewPosition) + Vector, dtype = int)
-            CurrentFeature = np.array(self.CurrentImage[CurrentPosition[0] - self.WindowSize/2:CurrentPosition[0] + self.WindowSize/2, CurrentPosition[1] - self.WindowSize/2:CurrentPosition[1] + self.WindowSize/2], dtype = float)
-            if CurrentFeature.shape != (self.WindowSize, self.WindowSize):
-                continue
-            CurrentFeature = CurrentFeature / CurrentFeature.max()
-            #d = ((CurrentFeature - RefFeature)**2).sum() / (self.WindowSize**2)
-            d = ((CurrentFeature - RefFeature)**2).sum() / ((CurrentFeature**2).sum() * (RefFeature**2).sum())
-            if d < BestMatchDist:
-                BestMatchDist = d
-                BestMatchPosition = np.array(CurrentPosition)
-
-        self.MatchingDistance += BestMatchDist
-        if BestMatchDist < self.DistMatch:
-            self.MatchSuccess += 1
-            return BestMatchPosition
-        else:
-            self.MatchFailures += 1
-            return None
-
-    def AddActiveTracker(self, TrackerID, Position):
-        CurrentPosition = np.array(np.rint(Position), dtype = int)
-        CurrentFeature = np.array(self.CurrentImage[CurrentPosition[0] - self.WindowSize/2:CurrentPosition[0] + self.WindowSize/2, CurrentPosition[1] - self.WindowSize/2:CurrentPosition[1] + self.WindowSize/2], dtype = float)
-        if CurrentFeature.shape != (self.WindowSize, self.WindowSize):
-            return False
-        CurrentFeature = CurrentFeature / CurrentFeature.max()
-        self.ImagesRefDict[TrackerID] = CurrentFeature
-        return True
-
-    def GetCurrentDataIndex(self, t):
-        self.CurrentDataIndex = abs(np.array(self.SpeedTracker.TrackersPositionsHistoryTs) - t).argmin()
-
-    def GetCurrentFrameIndex(self, t):
-        self.CurrentFrameIndex = abs(np.array(self.ImagesLookupTable['t']) - t).argmin()
-
-    def LoadFileImage(self, filename):
-        self.CurrentImage = np.flip(np.transpose(misc.imread(self.DataFolder + filename)), axis = 1)
-
-    def LoadSTImage(self, ID, BinDt = 0.05):
-        Map = self.SpeedTracker._LinkedMemory.Snapshots[ID][1]
-        Map = Map.max(axis = 2)
-        N = np.linalg.norm(self.SpeedTracker.FeatureManager.SpeedTranslationHistory[ID])
-        if N > 0:
-            BinDt = min(BinDt, 3. / N)
-        t = self.SpeedTracker._LinkedMemory.Snapshots[ID][0]
-        self.CurrentImage = np.e**((Map - t)/BinDt) * 255.
-        #self.CurrentImage = np.array(Map > t - BinDt, dtype = float) * 255
-
-    def ComputeErrorToGT(self, TrackerID, LimitError = np.inf, tMax = np.inf):
-        tst, Xst = self.GetTrackerPositions(TrackerID)
-        ts, Xs = self.SpeedTracker.GetTrackerPositions(TrackerID)
-
-        CommonIndexes = [(i, ts.index(tst[i])) for i in range(len(tst)) if tst[i] in ts and tst[i] <= tMax]
-        if CommonIndexes:
-            Diffs = []
-            for it, i in CommonIndexes:
-                Err = np.linalg.norm(Xs[i] - Xst[it])
-                if Err <= LimitError:
-                    Diffs += [Err]
-                else:
-                    None
-                    #break
-            return Diffs, [tst[it] for it, i in CommonIndexes]
-        else:
-            return [], []
-
-    def GenerateGroundTruth(self, DataFolder = None, tMax = None, BinDt = 0.1, CheckWithGlobalSpeed = False):
-        self.CreateSearchVectors()
-        self.ImagesRefDict = {}
-        self.GTPositions = {}
+        self.GTImagesIDs = []
         self.CurrentDataIndex = None
         self.CurrentImage = None
-        self.MinActiveTrackerID = 0
-        self.UsedVectors = []
-        self.Deltas = {}
-        self.MatchingDistance = 0
 
-        self.MatchSuccess = 0
-        self.MatchFailures = 0
+    def GetGTErrorVectors(self, TrackerID):
+        if TrackerID not in self.GTPositions.keys():
+            raise Exception("Tracker missing from ground-truth database")
+        ts, xys = self.TM.RetreiveHistoryData('RecordedTrackers@Position', TrackerID)
+        ts = np.array(ts)
+        xys = xys[:,:2]
+        tths_xyths = self.GTPositions[TrackerID]
+        Errors = []
+        if self.DataFolder: # Assume images are given so GT is not extracted from snapshot. Must interpolate snaps to images
+            for tth, xth, yth in tths_xyths:
+                SnapsIndexes = (abs(ts - tth)).argsort()[:2]
+                xy = xys[Indexes[0],:] + (tth - ts[Indexes[0]]) * (xys[Indexes[0],:] - xys[Indexes[1],:]) / (ts[Indexes[0]] - ts[Indexes[1]])
+                Errors += [np.linalg.norm(xy - np.array([xth, yth]))]
+        else:
+            for tth, xth, yth in tths_xyths:
+                SnapsIndex = abs(ts - tth).argmin()
+                xy = xys[SnapsIndex,:]
+                Errors += [xy - np.array([xth, yth])]
+        return np.array(Errors)
 
+    def GetGTErrorNorms(self, TrackerID, RemoveOffsetFromBelow = 0, RemoveStaticOffset = True):
+        ErrorVectors = self.GetGTErrorVectors(TrackerID)
+        if RemoveStaticOffset:
+            ErrorVectors[:,0] -= 0.5
+            ErrorVectors[:,1] -= 0.5
+        if RemoveOffsetFromBelow:
+            ValidPoints = (np.linalg.norm(ErrorVectors, axis = 1) < RemoveOffsetFromBelow)
+            if ValidPoints.any():
+                Offset = ErrorVectors[np.where(ValidPoints),:].mean(axis = 0)
+            else:
+                Offset = np.array([0.,0.])
+        else:
+            Offset = np.array([0.,0.])
+        return norm(ErrorVectors - Offset, axis = 1)
+
+    def GetValidTrackingDuration(self, TrackerID, RemoveOffset = True, ValidDistance = 5):
+        ErrorNorms = self.GetGTErrorNorms(TrackerID, RemoveOffset)
+        return (ErrorNorms < ValidDistance).sum() * self.GTDt
+
+    def DrawGTImage(self, ImageIndex = None, delay = 1, ID = None):
+        if not ImageIndex is None:
+            self.LoadImage(self.ImagesLookupTable['filename'][ImageIndex])
+            self.t = self.ImagesLookupTable['t'][ImageIndex]
+            self.ImageIndex = ImageIndex
+        else:
+            pass
+
+        frame = self.CurrentImage.transpose(1,0,2)
+        frame = np.ascontiguousarray(frame)
+        NTrackersDisplayed = 0
+        for GTID in self.GTImagesIDs[self.ImageIndex]:
+            txys = self.GTPositions[GTID]
+            if not ID is None and ID != GTID:
+                continue
+            if len(txys) > 0:
+                txys = np.array(txys)
+                if (abs(txys[:,0] - self.t) < 1e-6).any():
+                    Index = abs(txys[:,0] - self.t).argmin()
+                    xy = txys[Index, 1:]
+                    y, x, h, w = self.TrackerToBox(xy)
+                    cv2.rectangle(np.ascontiguousarray(frame), (x, y), (x+w, y+h), (0, 255, 0), 1)
+                    NTrackersDisplayed += 1
+
+                    ts, xs = self.TM.RetreiveHistoryData('RecordedTrackers@Position', GTID)
+                    xs = xs[:,:2]
+                    Indexes = (abs(np.array(ts) - self.t)).argsort()[:2]
+                    x = xs[Indexes[0],:] + (self.t - ts[Indexes[0]]) * (xs[Indexes[0],:] - xs[Indexes[1],:]) / (ts[Indexes[0]] - ts[Indexes[1]])
+                    x = np.rint(x)
+                    cv2.circle(np.ascontiguousarray(frame), tuple(int(v) for v in x), int(self.TM._TrackerDiameter/2), (0, 0, 255), 1)
+
+        print(NTrackersDisplayed)
+        cv2.imshow("Frame", imutils.resize(np.flip(frame, axis = 0), width = 600))
+        key = cv2.waitKey(delay)
+
+    def GenerateGroundTruth(self, DataFolder = None, tMax = None, DiameterRatio = 1., BinDt = 0.02, trackerType = 'csrt', MaxAssumedDisplacement = 50):
+        self.__init__(self.TM, DiameterRatio) # Re-init all variables
+        self.TrackerCreateFunction = {
+            "csrt": cv2.TrackerCSRT_create,
+            "kcf": cv2.TrackerKCF_create,
+            "boosting": cv2.TrackerBoosting_create,
+            "mil": cv2.TrackerMIL_create,
+            "tld": cv2.TrackerTLD_create,
+            "medianflow": cv2.TrackerMedianFlow_create,
+            "mosse": cv2.TrackerMOSSE_create
+    	}[trackerType]
         if tMax is None:
-            tMax = self.SpeedTracker._LinkedMemory.LastEvent.timestamp
+            self.tMax = self.TM._LinkedMemory.LastEvent.timestamp
+        else:
+            self.tMax = tMax
 
         if not DataFolder is None:
             if DataFolder[-1] != '/':
                 DataFolder = DataFolder + '/'
             self.DataFolder = DataFolder
             self._OpenLookupTableFile(self.DataFolder + 'images.txt')
+            self.LoadImage = self.LoadFileImage
         else:
             self.DataFolder = ''
+            self.BinDt = BinDt
             self._CreateLookupTableSnaps()
+            self.LoadImage = self.LoadSTImage
 
-        PreviousFrame = None
-        PreviousT = None
-        for t, ImageFile in zip(self.ImagesLookupTable['t'], self.ImagesLookupTable['filename']):
-            if t > tMax:
-                return None
-            self.GTPositions[ImageFile] = {}
-            if self.DataFolder:
-                self.LoadFileImage(ImageFile)
+        self.ImageIndex = 0
+        self.SnapIndex = 0
+        self.t = 0.
+
+        self.MaxAssumedDisplacement = MaxAssumedDisplacement
+
+        while self.t <= self.tMax and self.ImageIndex+1 < len(self.ImagesLookupTable['t']) and self.SnapIndex+1 < len(self.TM.History['t']): # We will loop over images for GT and Snaps at the same time. Snaps will indicate which trackers to consider, and where to initialize them. When we change the frame, we update all GT trackers.
+            if self.ImagesLookupTable['t'][self.ImageIndex+1] < self.TM.History['t'][self.SnapIndex+1]:
+                self._NextImage()
             else:
-                self.LoadSTImage(ImageFile)
-            self.GetCurrentDataIndex(t)
+                self._NextSnap()
 
-            FoundAlive = False
-            MinActiveOffset = 0
-            for LocalID, StatusTuple in enumerate(self.SpeedTracker.TrackersStatuses[self.CurrentDataIndex][self.MinActiveTrackerID:]):
-                if not FoundAlive and StatusTuple[0] == self.SpeedTracker._STATUS_DEAD:
-                    MinActiveOffset += 1
-                    continue
-                elif StatusTuple[0] != self.SpeedTracker._STATUS_DEAD:
-                    FoundAlive = True
-                TrackerID = LocalID + self.MinActiveTrackerID
-                if StatusTuple[0] == self.SpeedTracker._STATUS_LOCKED or TrackerID in list(self.ImagesRefDict.keys()):
-                    if TrackerID in list(self.ImagesRefDict.keys()):
-                        NewPosition = self._FindMatch(TrackerID, self.GTPositions[PreviousFrame][TrackerID] + self.Deltas[TrackerID])
-                        if NewPosition is None:
-                            del self.ImagesRefDict[TrackerID]
-                        else:
-                            if self.DataFolder or not CheckWithGlobalSpeed:
-                                self.Deltas[TrackerID] = NewPosition - self.GTPositions[PreviousFrame][TrackerID]
-                                self.GTPositions[ImageFile][TrackerID] = np.array(NewPosition)
-                            else:
-                                if not PreviousT is None and self.SpeedTracker.FeatureManager.SpeedTranslationHistory:
-                                    V = (NewPosition - self.GTPositions[PreviousFrame][TrackerID]) / (t - PreviousT)
-                                    Vth = (self.SpeedTracker.FeatureManager.SpeedTranslationHistory[ImageFile])
-                                    if np.linalg.norm(V - Vth) < np.linalg.norm(Vth) * 10. and np.linalg.norm(V - Vth) > np.linalg.norm(Vth) * 0.1:
-                                        self.Deltas[TrackerID] = NewPosition - self.GTPositions[PreviousFrame][TrackerID]
-                                        self.GTPositions[ImageFile][TrackerID] = np.array(NewPosition)
-                                    else:
-                                        del self.ImagesRefDict[TrackerID]
-                                else:
-                                    self.Deltas[TrackerID] = NewPosition - self.GTPositions[PreviousFrame][TrackerID]
-                                    self.GTPositions[ImageFile][TrackerID] = np.array(NewPosition)
+    def _NextImage(self):
+        self.ImageIndex += 1
+        self.t = self.ImagesLookupTable['t'][self.ImageIndex]
+        self.LoadImage(self.ImagesLookupTable['filename'][self.ImageIndex])
 
-                    else:
-                        if TrackerID not in self.UsedVectors:
-                            if self.AddActiveTracker(TrackerID, self.SpeedTracker.TrackersPositionsHistory[self.CurrentDataIndex][TrackerID]):
-                                self.GTPositions[ImageFile][TrackerID] = np.rint(self.SpeedTracker.TrackersPositionsHistory[self.CurrentDataIndex][TrackerID])
-                                self.UsedVectors += [TrackerID] # Avoids reinitalize a tracker that wasn't found at one frame
-                                self.Deltas[TrackerID] = np.array([0, 0])
-                        else:
-                            None
+        self.GTImagesIDs += [[]]
+
+        NSuccess = 0
+        for ID, GTTracker_MASCOTLocation in self.GTTrackersDict.items():
+            GTTracker, box = GTTracker_MASCOTLocation
+            if not GTTracker is None:
+                success, box = GTTracker.update(self.CurrentImage)
+                if success:
+                    Displacement = int(10*np.linalg.norm(np.array(self.BoxToTracker(box)) - np.array(self.GTPositions[ID][-1][1:]))) / 10
                 else:
-                    if TrackerID in list(self.ImagesRefDict.keys()):
-                        del self.ImagesRefDict[TrackerID]
-            self.MinActiveTrackerID += MinActiveOffset
-            PreviousFrame = ImageFile
-            PreviousT = t
+                    Displacement = None
+                if success and (self.MaxAssumedDisplacement == 0 or Displacement < self.MaxAssumedDisplacement):
+                    NSuccess += 1
+                    self.GTPositions[ID] += [(self.t, ) + self.BoxToTracker(box)]
+                    self.GTImagesIDs[-1] += [ID]
+                    if (np.array(box[2:]) < 0).any():
+                        print("Negative box size")
+                else:
+                    print("Failure to match tracker {0} at t = {1:.3f} (ImageIndex = {2}), displacement = {3}.".format(ID, self.t, self.ImageIndex, Displacement))
+            else:
+                if (np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any():
+                    continue
+                self.GTPositions[ID] += [(self.t, ) + self.BoxToTracker(box)]
+                self.GTTrackersDict[ID][0] = self.TrackerCreateFunction()
+                self.GTTrackersDict[ID][0].init(self.CurrentImage, box)
+                NSuccess += 1
+                self.GTImagesIDs[-1] += [ID]
+        print("t = {0:.2f}s / {1:.2f}s, {2}/{3} active trackers".format(self.t, self.tMax, NSuccess, len(self.GTTrackersDict)))
+
+    def LoadFileImage(self, filename):
+        CurrentBinaryImage = imageio.imread(self.DataFolder + filename)
+        self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
+        self.CurrentImage[:,:,0] = CurrentBinaryImage
+        self.CurrentImage[:,:,1] = CurrentBinaryImage
+        self.CurrentImage[:,:,2] = CurrentBinaryImage
+
+    def LoadSTImage(self, ID):
+        Map = self.TM._LinkedMemory.Snapshots[ID][1]
+        Map = Map.max(axis = 2)
+        t = self.TM._LinkedMemory.Snapshots[ID][0]
+        CurrentBinaryImage = np.rint(np.e**((Map - t)/self.BinDt) * 255.)
+        self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
+        self.CurrentImage[:,:,0] = CurrentBinaryImage
+        self.CurrentImage[:,:,1] = CurrentBinaryImage
+        self.CurrentImage[:,:,2] = CurrentBinaryImage
+
+    def _NextSnap(self):
+        self.SnapIndex += 1
+        self.t = self.TM.History['t'][self.SnapIndex]
+        for ID, Status in zip(self.TM.History['RecordedTrackers@ID'][self.SnapIndex], self.TM.History['RecordedTrackers@State.Value'][self.SnapIndex]):
+            # Here we manage which tracker appears, which disappear, and so on
+            if Status == (self.TM._StateClass._STATUS_LOCKED, 0) and not ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any()):
+                xy = self.TM.RetreiveHistoryData('RecordedTrackers@Position', ID, Snap = self.SnapIndex)[1][:2]
+                box = self.TrackerToBox(xy)
+                if ID in self.GTTrackersDict.keys():
+                    self.GTTrackersDict[ID][1] = box
+                else:
+                    self.GTTrackersDict[ID] = [None, box]
+                    if ID not in self.GTPositions.keys():
+                        self.GTPositions[ID] = []
+                continue
+            else:
+                if ID in self.GTTrackersDict.keys():
+                    del self.GTTrackersDict[ID]
+                else:
+                    pass
+
+    def _OpenLookupTableFile(self, filename):
+        self.ImagesLookupTable = {'t': [], 'filename': []}
+        with open(filename, 'r') as LookupTableFile:
+            for line in LookupTableFile.readlines():
+                t, ImageName = str(line).strip().split(' ')
+                self.ImagesLookupTable['t'] += [float(t)]
+                self.ImagesLookupTable['filename'] += [ImageName]
+        self.GTDt = (self.ImagesLookupTable['t'][-1] - self.ImagesLookupTable['t'][0]) / (len(self.ImagesLookupTable['t']) - 1)
+        print("Lookup table loaded from file")
+
+    def _CreateLookupTableSnaps(self):
+        self.ImagesLookupTable = {'t': [], 'filename': []}
+        for nt, t_STContext in enumerate(self.TM._LinkedMemory.Snapshots):
+            self.ImagesLookupTable['t'] += [t_STContext[0]]
+            self.ImagesLookupTable['filename'] += [nt]
+        self.GTDt = (self.ImagesLookupTable['t'][-1] - self.ImagesLookupTable['t'][0]) / (len(self.ImagesLookupTable['t']) - 1)
+        print("Lookup table created from snapshots")
+
+    def TrackerToBox(self, xy):
+        return (int(xy[1]-self.WindowSize/2), int(xy[0]-self.WindowSize/2), self.WindowSize, self.WindowSize)
+    def BoxToTracker(self, box):
+        return (box[1] + box[3]/2, box[0] + box[2]/2)
+
+    def GetCurrentFrameIndex(self, t):
+        self.CurrentFrameIndex = abs(np.array(self.ImagesLookupTable['t']) - t).argmin()
 
 class PlotterClass:
     _TrackersScalingSize = 20
@@ -365,10 +465,10 @@ class PlotterClass:
                 self.TM.__dict__[Key] = getattr(FileLoaded, self.__class__.__name__)(self.TM)
                 break
 
-    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2):
+    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2):
         S = self.TM
         if TrackerIDs is None:
-            TrackerIDs = [ID for ID in range(len(S.Trackers)) if ID not in IgnoreTrackerIDs]
+            TrackerIDs = [ID for ID in S.History['RecordedTrackers@ID'][SnapshotNumber] if ID not in IgnoreTrackerIDs]
         else:
             for ID in IgnoreTrackerIDs:
                 if ID in TrackerIDs:
@@ -484,7 +584,7 @@ class PlotterClass:
         self.TM.Log("Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(self.TM.History['t'])))
         f = plt.figure(figsize = (16,9), dpi = 100)
         ax = f.add_subplot(1,1,1)
-        for snap_id in Snaps_IDs:
+        for nSnap, snap_id in enumerate(Snaps_IDs):
             self.TM.Log(" > {0}/{1}".format(int(snap_id/SnapRatio + 1), len(Snaps_IDs)))
 
             if AddVirtualPoint:
@@ -506,7 +606,7 @@ class PlotterClass:
     
             self.CreateTrackingShot(TrackerIDs, IgnoreTrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT, TrailDt = TrailDt, TrailWidth = TrailWidth)
     
-            f.savefig(Folder + 't_{0:05d}.png'.format(snap_id))
+            f.savefig(Folder + 't_{0:05d}.png'.format(nSnap))
             ax.cla()
         self.TM.Log(" > Done.          ")
         plt.close(f.number)

@@ -86,6 +86,7 @@ class Framework:
             if not InitializationAnswer:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(tool_name), 2)
                 return False
+        self._RunToolsTuple = tuple(self.ToolsList) # Faster way to access tools in the right order
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
         self._SendLog()
@@ -199,6 +200,10 @@ class Framework:
         self.PropagatedEvent = None
         self.Running = True
         self.Paused = ''
+        if resume:
+            for tool_name in self._RunToolsTuple:
+                self.Tools[tool_name]._Resume()
+
         while self.Running and not self.Paused:
             t = self.NextEvent(start_at, AtEventMethod)
 
@@ -213,6 +218,8 @@ class Framework:
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1)
+                for tool_name in self._RunToolsTuple:
+                    self.Tools[tool_name]._Pause(self.Paused)
 
     def Resume(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
@@ -220,7 +227,7 @@ class Framework:
     def NextEvent(self, start_at, AtEventMethod = None):
         self.PropagatedEvent = None
         t = None
-        for tool_name in self.ToolsList:
+        for tool_name in self._RunToolsTuple:
             self.PropagatedEvent = self.Tools[tool_name].__OnEvent__(self.PropagatedEvent)
             if self.PropagatedEvent is None:
                 break
@@ -659,6 +666,14 @@ class Module:
         return event
     def _OnSnapModule(self):
         # Template for user-filled module preparation for taking a snapshot. 
+        pass
+    def _Pause(self, PauseOrigin):
+        # Template method for module implications when the framework is paused. The origin of the pause is given to void the origin itself to apply consequences a second time
+        # Useful especially for threaded modules
+        pass
+    def _Resume(self):
+        # Template method for module implications when the framework is resumed after pause
+        # Useful especially for threaded modules
         pass
 
     def __OnEventRestricted__(self, event):

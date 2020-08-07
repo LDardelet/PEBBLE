@@ -229,10 +229,6 @@ class TrackerTRS(Module):
         return False
 
     def _OnEventModule(self, event):
-        UpdateEvent = False
-        if event.timestamp - self.LastTsSnap >= self._MonitorDt:
-            UpdateEvent = True
-
         self.NewTrackersAsked = 0
         Associated = False
         for Tracker in self.AliveTrackers:
@@ -240,10 +236,6 @@ class TrackerTRS(Module):
             Associated = Tracker.RunEvent(event)
             if Associated and self.TrackerEventCondition(Tracker):
                 event.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = TrackerID, TrackerAngle = Tracker.Position[2], TrackerScaling = Tracker.Position[3], TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
-
-        if UpdateEvent:
-            self.LastTsSnap = event.timestamp
-            self._LinkedMemory.GetSnapshot()
 
         if self.NewTrackersAsked:
             self._PlaceNewTrackers()
@@ -292,6 +284,12 @@ class TrackerTRS(Module):
         self.AliveTrackers += [NewTracker]
         self.StartTimes += [None]
         self.DeathTimes += [None]
+
+    def _SaveAdditionalData(self, ExternalDict):
+        # As GT generation can be quite long, we can save it here.
+        ExternalDict['GTMaker'] = self.GTMaker._SaveDataToDict()
+    def _RecoverAdditionalData(self, ExternalDict):
+        self.GTMaker._RecoverDataFromDict(ExternalDict['GTMaker'])
 
 class StateClass:
     _STATUS_DEAD = 0

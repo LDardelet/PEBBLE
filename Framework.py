@@ -7,6 +7,10 @@ import atexit
 import types
 import copy
 import os
+import _pickle as cPickle
+import json
+from datetime import datetime as dtClass
+import ast
 
 from Plotting_methods import *
 from pydoc import locate
@@ -15,6 +19,9 @@ class Framework:
     _Terminal_Width = 250
     _Default_Color = '\033[0m'
     _LogColors = {0:'\033[0m', 1: "\033[1;33;40m", 2: "\033[1;31;40m", 3: "\033[1;32;40m"}
+    _LOG_FILE_EXTENSION = 'log'
+    _PROJECT_FILE_EXTENSION = 'json'
+    _DATA_FILE_EXTENSION = 'data'
     '''
     Main event-based framework file.
     Each tool is in a  different file, and caan be added through 'Project files', that create the sequence of events processing.
@@ -41,36 +48,32 @@ class Framework:
             -> FlowComputer : Computes the optical flow of a stream of events
 
     '''
-    def __init__(self, ProjectFile = None, onlyRawData = False, verboseRatio = 10000):
-        if 'F' in globals().keys(): # Self protection line for mpython overwriting errors
-            ans = input('F Framework found in currect session. Override ? (y/N)')
-            if not ans.lower() == 'y':
-                raise Exception()
-
-        self.ProjectFile = ProjectFile
-        self.Modified = False
-        self._LogType = 'raw'
-        self._LogOut = sys.stdout
-        self._LastLogOut = sys.stdout
-
+    def __init__(self, File = None, onlyRawData = False, FullSessionLogFile = None):
         self.__Type__ = 'Framework'
-
-        self.StreamHistory = []
-
-        self.VerboseRatio = verboseRatio
-
-        atexit.register(self._OnClosing)
-
-        if not ProjectFile is None:
-            self.LoadProject(ProjectFile, onlyRawData = onlyRawData)
+        self._LogType = 'raw'
+        if FullSessionLogFile is None:
+            self._SessionLog = sys.stdout
         else:
-            self._ProjectRawData = {}
-            self._GenerateEmptyProject()
+            self._SessionLog = open(FullSessionLogFile, 'w')
+            atexit.register(self._SessionLog.close)
+        self._LogOut = self._SessionLog
+        self._LastLogOut = self._SessionLog
+        
+        self.Modified = False
+        self.StreamHistory = []
 
         self.PropagatedEvent = None
         self.Running = False
         self._Initializing = False
         self.Paused = ''
+
+        if not File is None and File.split('.')[-1] == self._DATA_FILE_EXTENSION:
+            self._LoadFromDataFile(File, onlyRawData = onlyRawData)
+        else:
+            self._LoadProject(File, onlyRawData = onlyRawData)
+
+        atexit.register(self._OnClosing)
+
 
     def Initialize(self, **ArgsDict):
         self._Initializing = True
@@ -96,8 +99,8 @@ class Framework:
     def _OnClosing(self):
         if self.Modified:
             ans = 'void'
-            while '.json' not in ans and ans != '':
-                ans = input('Unsaved changes. Please enter a file name, or leave blank to discard : ')
+            while self._PROJECT_FILE_EXTENSION not in ans and ans != '':
+                ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
             if ans != '':
                 self.SaveProject(ans)
 
@@ -142,14 +145,17 @@ class Framework:
 
     def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, LogFile = None, **kwargs):
         if resume:
-            if self._LastLogOut is sys.stdout:
+            if self._LastLogOut is self._SessionLog:
                 pass
             else:
                 self._LogOut = open(self._LastLogOut.name, 'a')
         else:
             if LogFile is None:
-                self._LogOut = sys.stdout
+                self._LogOut = self._SessionLog
             else:
+                GivenExtention = LogFile.split('.')[-1]
+                if GivenExtention != self._LOG_FILE_EXTENSION:
+                    raise Exception("Enter log file with .{0} extension".format(self._LOG_FILE_EXTENSION))
                 self._LogOut = open(LogFile, 'w')
             self._LastLogOut = self._LogOut
         if self._LogType == 'columns':
@@ -158,12 +164,107 @@ class Framework:
             else:
                 self._LogInit(resume)
         self._RunProcess(StreamName = StreamName, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod, **kwargs)
-        if not self._LogOut is sys.stdout:
+        if not self._LogOut is self._SessionLog:
             self._LogOut.close()
-            self._LogOut = sys.stdout
-            self._LogType = 'raw'
+            self._LogOut = self._SessionLog
+        self._LogType = 'raw'
 
-    def _RunProcess(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, **kwargs):
+    def _GetCommitValue(self):
+        try:
+            f = open('.git/FETCH_HEAD', 'r')
+            commit_value = f.readline().strip()
+            f.close()
+        except:
+            commit_value = "unknown"
+        return commit_value
+
+    def SaveData(self, Filename, forceOverwrite = False):
+        GivenExtention = Filename.split('.')[-1]
+        if GivenExtention != self._DATA_FILE_EXTENSION:
+            raise Exception("Enter data file with .{0} extension".format(self._DATA_FILE_EXTENSION))
+        if not forceOverwrite:
+            try:
+                f = open(Filename, 'r')
+                ans = input("File already exists. Overwrite (y/N) ? ")
+                if not ans.lower() == "y":
+                    print("Aborted")
+                    return
+                f.close()
+            except:
+                pass
+        with open(Filename, 'wb') as BinDataFile:
+            def BinWrite(data_str):
+                BinDataFile.write(str.encode(data_str))
+            now = dtClass.now()
+            dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+            BinWrite("# Edited on -> "+ dt_string + "\n")
+            commit_value = self._GetCommitValue()
+            BinWrite("# Framework git commit -> " + commit_value + "\n")
+            BinWrite("# Project File -> " + os.path.abspath(self.ProjectFile) + '\n')
+            BinWrite("# Project Hash -> " + str(hash(json.dumps(self._ProjectRawData, sort_keys=True))) + "\n")
+            BinWrite("# Input Files -> " + str({InputTool : os.path.abspath(InputFile) for InputTool, InputFile in self.CurrentInputStreams.items()}) + "\n")
+            BinWrite("# Run arguments -> " + str(self.RunKwargs) + '\n')
+            BinWrite("#########\n")
+
+            for ToolName in self.ToolsList:
+                self.Tools[ToolName]._SaveData(BinDataFile)
+
+    def _LoadFromDataFile(self, DataFile, onlyRawData = False):
+        self._Log('Loading data from saved file')
+        with open(DataFile, 'rb') as BinDataFile:
+            def BinRead():
+                Line = BinDataFile.readline().decode('utf-8')
+                return (Line[:2] == '##'), Line[2:].split('->')[0].strip(), Line[2:].split('->')[-1].strip()
+            ProjectFile = None
+            ProjectFileHash = None
+            InputFiles = None
+            RunArgs = None
+            while True:
+                CommentEnd, Key, Value = BinRead()
+                if CommentEnd:
+                    break
+                self._Log(Key)
+                if Key == 'Framework git commit':
+                    if Value != self._GetCommitValue():
+                        self._Log(Value + " (current : {0})".format(self._GetCommitValue()), 1)
+                    else:
+                        self._Log(Value, 3)
+                elif Key == 'Project File':
+                    ProjectFile = Value
+                    ProjectRawDataReferred = pickle.load(open(ProjectFile, 'rb'))
+                    ProjectFileHash = str(hash(json.dumps(ProjectRawDataReferred, sort_keys=True)))
+                    self._Log(Value, 3)
+                elif Key == 'Project Hash':
+                    if not ProjectFileHash is None and Value != ProjectFileHash:
+                        self._Log(Value + " (current : {0})".format(ProjectFileHash), 1)
+                    else:
+                        self._Log(Value, 3)
+                elif Key == 'Input Files':
+                    InputFiles = ast.literal_eval(Value)
+                    self._Log(Value)
+                elif Key == 'Run arguments':
+                    RunArgs = ast.literal_eval(Value)
+                    self._Log(Value)
+
+            if ProjectFile is None:
+                raise Exception("Unable to retreive correct ProjectFile (.json)")
+            self._LoadProject(ProjectFile, onlyRawData = onlyRawData)
+            if InputFiles is None or RunArgs is None:
+                self._Log("No valid input file or Run arguments. Unable to initialize modules", 1)
+            else:
+                self._RunProcess(StreamName = InputFiles, BareInit = True, **RunArgs)
+                self._Log("Initialized Framework", 3)
+            self._Log("Starting data recovery")
+            while True:
+                try:
+                    Identifier, Data = cPickle.load(BinDataFile)
+                    ToolName = Identifier.split('.')[0]
+                    self.Tools[ToolName]._RecoverData(Identifier[len(ToolName)+1:], Data)
+                except EOFError:
+                    break
+            self._Log("Successfully recovered data", 3)
+
+    def _RunProcess(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, BareInit = False, **kwargs):
         if StreamName is None:
             N = 0
             StreamName = "DefaultStream_{0}".format(N)
@@ -171,6 +272,7 @@ class Framework:
                 N += 1
                 StreamName = "DefaultStream_{0}".format(N)
         if not resume:
+            self.RunKwargs = dict(kwargs)
             self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
             if type(StreamName) == str:
                 for ToolName in self.CurrentInputStreams.keys():
@@ -194,7 +296,7 @@ class Framework:
             
             self.StreamHistory += [self.CurrentInputStreams]
             InitializationAnswer = self.Initialize(**kwargs)
-            if not InitializationAnswer:
+            if not InitializationAnswer or BareInit:
                 return None
 
         self.PropagatedEvent = None
@@ -264,9 +366,13 @@ class Framework:
         self.ToolsOrder = {}
         self.ToolsList = []
 
-    def LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
-        self._LogType = 'raw'
+    def _LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
+        self.ProjectFile = ProjectFile
+        self._ProjectRawData = {}
         self._GenerateEmptyProject()
+        if self.ProjectFile is None:
+            return
+        self._LogType = 'raw'
 
         if ProjectFile is None:
             data = self._ProjectRawData
@@ -307,8 +413,7 @@ class Framework:
             while None in self.ToolsList:
                 self.ToolsList.remove(None)
 
-        self._Log("")
-        self._Log("Successfully generated tools order")
+        self._Log("Successfully generated tools order", 3)
         self._Log("")
         
         for tool_name in self.ToolsList:
@@ -317,6 +422,8 @@ class Framework:
 
             if enable_easy_access and tool_name not in self.__dict__.keys():
                 self.__dict__[tool_name] = self.Tools[tool_name]
+        self._Log("Successfully generated Framework", 3)
+        self._Log("")
 
     def _UpdateToolsParameters(self, tool_name):
         for key, value in self._ToolsExternalParameters[tool_name].items():
@@ -330,6 +437,9 @@ class Framework:
         self.Tools[tool_name].__CameraIndexRestriction__ = self._ToolsCamerasRestrictions[tool_name]
 
     def SaveProject(self, ProjectFile):
+        GivenExtention = ProjectFile.split('.')[-1]
+        if GivenExtention:
+            raise Exception("Enter log file with .{0} extension".format(self._PROJECT_FILE_EXTENSION))
         pickle.dump(self._ProjectRawData, open(ProjectFile, 'wb'))
         self.ProjectFile = ProjectFile
         self.Modified = False
@@ -491,7 +601,7 @@ class Framework:
             return None
 
         self._Log("AddTool finished. Reloading project.")
-        self.LoadProject()
+        self._LoadProject()
         self._Log("New project : ")
         self._Log("")
         self.DisplayCurrentProject()
@@ -542,7 +652,7 @@ class Framework:
             if (not self.Running or self.Paused) and AutoSendIfPaused and not self._Initializing:
                 self._SendLog()
         elif self._LogType == 'raw' or Raw:
-            Message = self._LogColors[MessageType] + int(bool(Message))*ModuleName + ': ' + Message
+            Message = self._LogColors[MessageType] + int(bool(Message))*(ModuleName + ': ') + Message
             self._LogOut.write(Message + self._LogColors[0] + "\n")
     def _SendLog(self):
         if self._LogType == 'raw' or not self._HasLogs:
@@ -561,7 +671,6 @@ class Framework:
             self._LogOut.write(CurrentLine + "\n")
         self._HasLogs = 0
         self._LogT = None
-
     def _LogInit(self, Resume = False):
         self._HasLogs = 2
         self._LogT = None
@@ -675,6 +784,15 @@ class Module:
         # Template method for module implications when the framework is resumed after pause
         # Useful especially for threaded modules
         pass
+    def _SaveAdditionalData(self, ExternalDataDict):
+        # Template method to save additional data from module, when Framework 'SaveData' is called.
+        # Data 'History' from automatic monitoring is already saved. 
+        # Insert freely DataDict[Key] = Data as references as much as possible. Each Data chunk is assumed to be easily pickled (reasonable size).
+        pass
+    def _RecoverAdditionalData(self, ExternalDataDict):
+        # Template method to recover additional data from module, when Framework 'RecoverData' is called.
+        # Data 'History' from automatic monitoring is already recovered. 
+        pass
 
     def __OnEventRestricted__(self, event):
         if event.cameraIndex in self.__CameraIndexRestriction__:
@@ -694,7 +812,7 @@ class Module:
         if '@' in VarName:
             Container, Key = VarName.split('@')
             if '.' in Key:
-                Key, Field =  Key.split('.')
+                Key, Field = Key.split('.')
                 SubRetreiveMethod = lambda Instance: getattr(getattr(Instance, Key), Field)
             else:
                 SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
@@ -723,6 +841,77 @@ class Module:
     def _Rewind(self, t):
         pass
 
+    def _SaveData(self, BinDataFile, MaxHistoryChunkSizeB = 16777216):
+        if self._MonitorDt and self._MonitoredVariables:
+            DataDict = {'Dt':self._MonitorDt, 't':self.History['t'], 'vars':self._MonitoredVariables}
+            cPickle.dump(('.'.join([self.__Name__, 'Monitor']), DataDict), BinDataFile)
+
+            for Var, Type in self._MonitoredVariables:
+                NItems = len(self.History[Var])
+                if NItems:
+                    if '@' in Var:
+                        TypeItem = self.History[Var][0][0]
+                        ChunkMultiplier = len(self.History[Var][0])
+                    else:
+                        TypeItem = self.History[Var][0]
+                        ChunkMultiplier = 1
+                    if Type == np.array:
+                        ItemSizeB = TypeItem.nbytes
+                    else:
+                        ItemSizeB = sys.getsizeof(TypeItem)
+                    ItemSizeB *= ChunkMultiplier
+                    NChunks = max(1, int(ItemSizeB * NItems / MaxHistoryChunkSizeB))
+                    ChunkSize = int(NItems / NChunks) + 1
+                    if NChunks > 1:
+                        self.LogWarning("Spliting monitored variable {0} into {1} chunks of data".format(Var, NChunks))
+                    else:
+                        self.Log("Dumping variable {0} in one chunk".format(Var))
+                    for nChunk in range(NChunks):
+                        if NChunks>1 and self.__Framework__._SessionLog is sys.stdout:
+                            sys.stdout.write("{0}%\r".format(int(100*nChunk/NChunks))),
+                        Data = self.History[Var][nChunk * ChunkSize : (nChunk+1) * ChunkSize]
+                        if Data:
+                            cPickle.dump(('.'.join([self.__Name__, 'Monitor', Var, str(nChunk)]), Data), BinDataFile)
+            self.LogSuccess("Saved history data")
+
+        ExternalDataDict = {}
+        self._SaveAdditionalData(ExternalDataDict)
+        if ExternalDataDict:
+            cPickle.dump(('.'.join([self.__Name__, 'External']), ExternalDataDict), BinDataFile)
+    def _RecoverData(self, Identifier, Data):
+        if Identifier == 'External':
+            self._RecoverAdditionalData(Data)
+            self.LogSuccess("Recovered additional data")
+            return
+        if Identifier == 'Monitor':
+            self._MonitorDt = Data['Dt']
+            self.__LastMonitoredTimestamp = Data['t'][-1]
+            self._MonitoredVariables = Data['vars']
+            self.History = {'t':Data['t']}
+            for Var, Type in self._MonitoredVariables:
+                self.History[Var] = []
+            self._ExpectedHistoryVarsChunks = {Var: 0 for Var, Type in self._MonitoredVariables}
+            self.LogSuccess("Recovered Monitor general data")
+        else:
+            Parts = Identifier.split('.')
+            if Parts[0] != 'Monitor':
+                raise Exception("Module {0} received wrong data recovery identifier : {1}".format(self.__Name__, Identifier))
+            nChunk = int(Parts[-1])
+            Var = '.'.join(Parts[1:-1])
+            if self._ExpectedHistoryVarsChunks[Var] != nChunk:
+                raise Exception("Module {0} lost chunk of data on recovery of MonitoredVariable {1}".format(self.__Name__, Var))
+            self.History[Var] += Data
+            if len(self.History[Var]) == len(self.History['t']):
+                del self._ExpectedHistoryVarsChunks[Var]
+                self.LogSuccess("{0}".format(Var))
+                if not self._ExpectedHistoryVarsChunks:
+                    del self.__dict__['_ExpectedHistoryVarsChunks']
+                    self.LogSuccess("Recovered all Monitor data")
+            else:
+                if self.__Framework__._SessionLog is sys.stdout:
+                    sys.stdout.write("{0}%\r".format(int(100*len(self.History[Var])/len(self.History['t'])))),
+                self._ExpectedHistoryVarsChunks[Var] += 1
+
     def Log(self, Message, MessageType = 0):
         '''
         Log system to be used for verbose. for more clear information.
@@ -735,6 +924,8 @@ class Module:
     def LogError(self, Message):
         self.Log(Message, 2)
         self.__Framework__.Paused = self.__Name__
+    def LogSuccess(self, Message):
+        self.Log(Message, 3)
 
 # Listing all the events existing
 

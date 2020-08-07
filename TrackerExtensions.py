@@ -227,13 +227,13 @@ import imutils
 
 class GTMakerClass:
     def __init__(self, TrackerManager, DiameterRatio = 1):
-        self.TM = TrackerManager
-        self.WindowSize = int(self.TM._TrackerDiameter*DiameterRatio)
-        self.WidthHeigth = (int(self.TM._TrackerDiameter*DiameterRatio), int(self.TM._TrackerDiameter*DiameterRatio))
-        self.RadiusOffset = -DiameterRatio * np.array([self.TM._TrackerDiameter, self.TM._TrackerDiameter]) / 2
+        self.TrackerManager = TrackerManager
+        self.WindowSize = int(self.TrackerManager._TrackerDiameter*DiameterRatio)
+        self.WidthHeigth = (int(self.TrackerManager._TrackerDiameter*DiameterRatio), int(self.TrackerManager._TrackerDiameter*DiameterRatio))
+        self.RadiusOffset = -DiameterRatio * np.array([self.TrackerManager._TrackerDiameter, self.TrackerManager._TrackerDiameter]) / 2
 
-        self.DataFolder = None
         self.ImagesLookupTable = None
+        self.GTData = {'DataFolder':None, 'Type':None, 'BinDt':None}
         self.GTTrackersDict = {}
         self.GTPositions = {}
         self.GTImagesIDs = []
@@ -243,12 +243,12 @@ class GTMakerClass:
     def GetGTErrorVectors(self, TrackerID):
         if TrackerID not in self.GTPositions.keys():
             raise Exception("Tracker missing from ground-truth database")
-        ts, xys = self.TM.RetreiveHistoryData('RecordedTrackers@Position', TrackerID)
+        ts, xys = self.TrackerManager.RetreiveHistoryData('RecordedTrackers@Position', TrackerID)
         ts = np.array(ts)
         xys = xys[:,:2]
         tths_xyths = self.GTPositions[TrackerID]
         Errors = []
-        if self.DataFolder: # Assume images are given so GT is not extracted from snapshot. Must interpolate snaps to images
+        if self.GTData['Type'] == 0: # Assume images are given so GT is not extracted from snapshot. Must interpolate snaps to images
             for tth, xth, yth in tths_xyths:
                 SnapsIndexes = (abs(ts - tth)).argsort()[:2]
                 xy = xys[Indexes[0],:] + (tth - ts[Indexes[0]]) * (xys[Indexes[0],:] - xys[Indexes[1],:]) / (ts[Indexes[0]] - ts[Indexes[1]])
@@ -303,19 +303,18 @@ class GTMakerClass:
                     cv2.rectangle(np.ascontiguousarray(frame), (x, y), (x+w, y+h), (0, 255, 0), 1)
                     NTrackersDisplayed += 1
 
-                    ts, xs = self.TM.RetreiveHistoryData('RecordedTrackers@Position', GTID)
+                    ts, xs = self.TrackerManager.RetreiveHistoryData('RecordedTrackers@Position', GTID)
                     xs = xs[:,:2]
                     Indexes = (abs(np.array(ts) - self.t)).argsort()[:2]
                     x = xs[Indexes[0],:] + (self.t - ts[Indexes[0]]) * (xs[Indexes[0],:] - xs[Indexes[1],:]) / (ts[Indexes[0]] - ts[Indexes[1]])
                     x = np.rint(x)
-                    cv2.circle(np.ascontiguousarray(frame), tuple(int(v) for v in x), int(self.TM._TrackerDiameter/2), (0, 0, 255), 1)
+                    cv2.circle(np.ascontiguousarray(frame), tuple(int(v) for v in x), int(self.TrackerManager._TrackerDiameter/2), (0, 0, 255), 1)
 
-        print(NTrackersDisplayed)
         cv2.imshow("Frame", imutils.resize(np.flip(frame, axis = 0), width = 600))
         key = cv2.waitKey(delay)
 
     def GenerateGroundTruth(self, DataFolder = None, tMax = None, DiameterRatio = 1., BinDt = 0.02, trackerType = 'csrt', MaxAssumedDisplacement = 50):
-        self.__init__(self.TM, DiameterRatio) # Re-init all variables
+        self.__init__(self.TrackerManager, DiameterRatio) # Re-init all variables
         self.TrackerCreateFunction = {
             "csrt": cv2.TrackerCSRT_create,
             "kcf": cv2.TrackerKCF_create,
@@ -326,21 +325,21 @@ class GTMakerClass:
             "mosse": cv2.TrackerMOSSE_create
     	}[trackerType]
         if tMax is None:
-            self.tMax = self.TM._LinkedMemory.LastEvent.timestamp
+            self.tMax = self.TrackerManager._LinkedMemory.LastEvent.timestamp
         else:
             self.tMax = tMax
 
         if not DataFolder is None:
+            self.GTData['Type'] = 0
             if DataFolder[-1] != '/':
                 DataFolder = DataFolder + '/'
-            self.DataFolder = DataFolder
-            self._OpenLookupTableFile(self.DataFolder + 'images.txt')
-            self.LoadImage = self.LoadFileImage
+            self.GTData['DataFolder'] = DataFolder
+            self._OpenLookupTableFile(self.GTData['DataFolder'] + 'images.txt')
         else:
-            self.DataFolder = ''
-            self.BinDt = BinDt
+            self.GTData['Type'] = 1
+            self.GTData['DataFolder'] = ''
+            self.GTData['BinDt'] = BinDt
             self._CreateLookupTableSnaps()
-            self.LoadImage = self.LoadSTImage
 
         self.ImageIndex = 0
         self.SnapIndex = 0
@@ -348,8 +347,8 @@ class GTMakerClass:
 
         self.MaxAssumedDisplacement = MaxAssumedDisplacement
 
-        while self.t <= self.tMax and self.ImageIndex+1 < len(self.ImagesLookupTable['t']) and self.SnapIndex+1 < len(self.TM.History['t']): # We will loop over images for GT and Snaps at the same time. Snaps will indicate which trackers to consider, and where to initialize them. When we change the frame, we update all GT trackers.
-            if self.ImagesLookupTable['t'][self.ImageIndex+1] < self.TM.History['t'][self.SnapIndex+1]:
+        while self.t <= self.tMax and self.ImageIndex+1 < len(self.ImagesLookupTable['t']) and self.SnapIndex+1 < len(self.TrackerManager.History['t']): # We will loop over images for GT and Snaps at the same time. Snaps will indicate which trackers to consider, and where to initialize them. When we change the frame, we update all GT trackers.
+            if self.ImagesLookupTable['t'][self.ImageIndex+1] < self.TrackerManager.History['t'][self.SnapIndex+1]:
                 self._NextImage()
             else:
                 self._NextSnap()
@@ -377,7 +376,7 @@ class GTMakerClass:
                     if (np.array(box[2:]) < 0).any():
                         print("Negative box size")
                 else:
-                    print("Failure to match tracker {0} at t = {1:.3f} (ImageIndex = {2}), displacement = {3}.".format(ID, self.t, self.ImageIndex, Displacement))
+                    self.TrackerManager.LogWarning("Failure to match tracker {0} at t = {1:.3f} (ImageIndex = {2}), displacement = {3}.".format(ID, self.t, self.ImageIndex, Displacement))
             else:
                 if (np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any():
                     continue
@@ -386,20 +385,23 @@ class GTMakerClass:
                 self.GTTrackersDict[ID][0].init(self.CurrentImage, box)
                 NSuccess += 1
                 self.GTImagesIDs[-1] += [ID]
-        print("t = {0:.2f}s / {1:.2f}s, {2}/{3} active trackers".format(self.t, self.tMax, NSuccess, len(self.GTTrackersDict)))
+        self.TrackerManager.Log("t = {0:.2f}s / {1:.2f}s, {2}/{3} active trackers".format(self.t, self.tMax, NSuccess, len(self.GTTrackersDict)))
+
+    def LoadImage(self, Key):
+        return [self.LoadFileImage, self.LoadSTImage][self.GTData['Type']](Key)
 
     def LoadFileImage(self, filename):
-        CurrentBinaryImage = imageio.imread(self.DataFolder + filename)
+        CurrentBinaryImage = imageio.imread(self.GTData['DataFolder'] + filename)
         self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
         self.CurrentImage[:,:,0] = CurrentBinaryImage
         self.CurrentImage[:,:,1] = CurrentBinaryImage
         self.CurrentImage[:,:,2] = CurrentBinaryImage
 
     def LoadSTImage(self, ID):
-        Map = self.TM._LinkedMemory.Snapshots[ID][1]
+        Map = self.TrackerManager._LinkedMemory.History['STContext'][ID]
         Map = Map.max(axis = 2)
-        t = self.TM._LinkedMemory.Snapshots[ID][0]
-        CurrentBinaryImage = np.rint(np.e**((Map - t)/self.BinDt) * 255.)
+        t = self.TrackerManager._LinkedMemory.History['t'][ID]
+        CurrentBinaryImage = np.rint(np.e**((Map - t)/self.GTData['BinDt']) * 255.)
         self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
         self.CurrentImage[:,:,0] = CurrentBinaryImage
         self.CurrentImage[:,:,1] = CurrentBinaryImage
@@ -407,12 +409,18 @@ class GTMakerClass:
 
     def _NextSnap(self):
         self.SnapIndex += 1
-        self.t = self.TM.History['t'][self.SnapIndex]
-        for ID, Status in zip(self.TM.History['RecordedTrackers@ID'][self.SnapIndex], self.TM.History['RecordedTrackers@State.Value'][self.SnapIndex]):
+        self.t = self.TrackerManager.History['t'][self.SnapIndex]
+        for ID, Status in zip(self.TrackerManager.History['RecordedTrackers@ID'][self.SnapIndex], self.TrackerManager.History['RecordedTrackers@State.Value'][self.SnapIndex]):
             # Here we manage which tracker appears, which disappear, and so on
-            if Status == (self.TM._StateClass._STATUS_LOCKED, 0) and not ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any()):
-                xy = self.TM.RetreiveHistoryData('RecordedTrackers@Position', ID, Snap = self.SnapIndex)[1][:2]
+            if Status == (self.TrackerManager._StateClass._STATUS_LOCKED, 0):
+                xy = self.TrackerManager.RetreiveHistoryData('RecordedTrackers@Position', ID, Snap = self.SnapIndex)[1][:2]
                 box = self.TrackerToBox(xy)
+                if ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any()):
+                    if ID in self.GTTrackersDict.keys():
+                        del self.GTTrackersDict[ID]
+                    else:
+                        pass
+                    continue
                 if ID in self.GTTrackersDict.keys():
                     self.GTTrackersDict[ID][1] = box
                 else:
@@ -434,15 +442,16 @@ class GTMakerClass:
                 self.ImagesLookupTable['t'] += [float(t)]
                 self.ImagesLookupTable['filename'] += [ImageName]
         self.GTDt = (self.ImagesLookupTable['t'][-1] - self.ImagesLookupTable['t'][0]) / (len(self.ImagesLookupTable['t']) - 1)
-        print("Lookup table loaded from file")
+        self.TrackerManager.LogSuccess("Lookup table loaded from file")
 
     def _CreateLookupTableSnaps(self):
         self.ImagesLookupTable = {'t': [], 'filename': []}
-        for nt, t_STContext in enumerate(self.TM._LinkedMemory.Snapshots):
-            self.ImagesLookupTable['t'] += [t_STContext[0]]
-            self.ImagesLookupTable['filename'] += [nt]
+        
+        self.ImagesLookupTable['t'] = list(self.TrackerManager._LinkedMemory.History['t'])
+        self.ImagesLookupTable['filename'] = list(range(len(self.ImagesLookupTable['t'])))
+
         self.GTDt = (self.ImagesLookupTable['t'][-1] - self.ImagesLookupTable['t'][0]) / (len(self.ImagesLookupTable['t']) - 1)
-        print("Lookup table created from snapshots")
+        self.TrackerManager.LogSuccess("Lookup table created from snapshots")
 
     def TrackerToBox(self, xy):
         return (int(xy[1]-self.WindowSize/2), int(xy[0]-self.WindowSize/2), self.WindowSize, self.WindowSize)
@@ -452,21 +461,34 @@ class GTMakerClass:
     def GetCurrentFrameIndex(self, t):
         self.CurrentFrameIndex = abs(np.array(self.ImagesLookupTable['t']) - t).argmin()
 
+    def _SaveDataToDict(self):
+        DataDict = {}
+        DataDict['GTData'] = self.GTData
+        DataDict['GTPositions'] = self.GTPositions
+        DataDict['GTImagesIDs'] = self.GTImagesIDs
+        DataDict['ImagesLookupTable'] = self.ImagesLookupTable
+        return DataDict
+    def _RecoverDataFromDict(self, DataDict):
+        self.GTData = DataDict['GTData']
+        self.GTPositions = DataDict['GTPositions']
+        self.GTImagesIDs = DataDict['GTImagesIDs']
+        self.ImagesLookupTable = DataDict['ImagesLookupTable']
+
 class PlotterClass:
     _TrackersScalingSize = 20
     def __init__(self, TM):
-        self.TM = TM
+        self.TrackerManager = TM
 
     def Reload(self):
         FileLocation = inspect.getfile(self.__class__)
         FileLoaded = __import__(FileLocation.split('/')[-1].split('.py')[0])
-        for Key, Value in self.TM.__dict__.items():
+        for Key, Value in self.TrackerManager.__dict__.items():
             if Value == self:
-                self.TM.__dict__[Key] = getattr(FileLoaded, self.__class__.__name__)(self.TM)
+                self.TrackerManager.__dict__[Key] = getattr(FileLoaded, self.__class__.__name__)(self.TrackerManager)
                 break
 
     def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2):
-        S = self.TM
+        S = self.TrackerManager
         if TrackerIDs is None:
             TrackerIDs = [ID for ID in S.History['RecordedTrackers@ID'][SnapshotNumber] if ID not in IgnoreTrackerIDs]
         else:
@@ -478,8 +500,8 @@ class PlotterClass:
             f, ax = plt.subplots(1,1)
         else:
             ax = ax_given
-        Map = S._LinkedMemory.Snapshots[SnapshotNumber][1]
-        t = S._LinkedMemory.Snapshots[SnapshotNumber][0]
+        Map = S._LinkedMemory.History['STContext'][SnapshotNumber]
+        t = S._LinkedMemory.History['t'][SnapshotNumber]
         Mask = (Map.max(axis = 2) > t - BinDt) * Map.max(axis = 2)
         FinalMap = (Map[:,:,0] == Mask) - 1 * (Map[:,:,1] == Mask)
         if cmap is None:
@@ -552,7 +574,7 @@ class PlotterClass:
             Center = np.array(S._LinkedMemory.STContext.shape[:2], dtype = float) / 2
             VirtualPoint = [Center + np.array(S.FeatureManager.TranslationHistory[SnapshotNumber]), np.array([0., 0.])]
 
-            if 0 < VirtualPoint[0][0] - VirtualPoint[1][0] and VirtualPoint[0][0] + VirtualPoint[1][0] < self.TM._LinkedMemory.STContext.shape[0] and 0 < VirtualPoint[0][1] - VirtualPoint[1][1] and VirtualPoint[0][1] + VirtualPoint[1][1]< self.TM._LinkedMemory.STContext.shape[1]:
+            if 0 < VirtualPoint[0][0] - VirtualPoint[1][0] and VirtualPoint[0][0] + VirtualPoint[1][0] < self.TrackerManager._LinkedMemory.STContext.shape[0] and 0 < VirtualPoint[0][1] - VirtualPoint[1][1] and VirtualPoint[0][1] + VirtualPoint[1][1]< self.TrackerManager._LinkedMemory.STContext.shape[1]:
                 ax.plot(VirtualPoint[0][0], VirtualPoint[0][1], 'or')
                 #ax.plot([VirtualPoint[0][0], VirtualPoint[0][0]], [VirtualPoint[0][1] - VirtualPoint[1][1], VirtualPoint[0][1] + VirtualPoint[1][1]], 'r')
                 #ax.plot([VirtualPoint[0][0] - VirtualPoint[1][0], VirtualPoint[0][0] + VirtualPoint[1][0]], [VirtualPoint[0][1], VirtualPoint[0][1]], 'r')
@@ -568,31 +590,31 @@ class PlotterClass:
     
     def GenerateTrackingGif(self, TrackerIDs = None, IgnoreTrackerIDs = [], AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None, TrailDt = 0, TrailWidth = 2):
         if BinDt is None:
-            BinDt = self.TM._MonitorDt
+            BinDt = self.TrackerManager._MonitorDt
 
         if AddVirtualPoint:
-            VirtualPoint = [np.array(self.TM._LinkedMemory.STContext.shape[:2], dtype = float) / 2, np.array([0., 0.])]
+            VirtualPoint = [np.array(self.TrackerManager._LinkedMemory.STContext.shape[:2], dtype = float) / 2, np.array([0., 0.])]
             LastVPUpdate = None
             Offset_Start = 0
             NUpdates = 0
         else:
             VirtualPoint = None
     
-        Snaps_IDs = [snap_id for snap_id in range(len(self.TM.History['t'])) if (snap_id % SnapRatio == 0 and tMin <= self.TM.History['t'][snap_id] and self.TM.History['t'][snap_id] <= tMax)]
+        Snaps_IDs = [snap_id for snap_id in range(len(self.TrackerManager.History['t'])) if (snap_id % SnapRatio == 0 and tMin <= self.TrackerManager.History['t'][snap_id] and self.TrackerManager.History['t'][snap_id] <= tMax)]
         if not NoRemoval:
             os.system('rm '+ Folder + '*.png')
-        self.TM.Log("Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(self.TM.History['t'])))
+        self.TrackerManager.Log("Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(self.TrackerManager.History['t'])))
         f = plt.figure(figsize = (16,9), dpi = 100)
         ax = f.add_subplot(1,1,1)
         for nSnap, snap_id in enumerate(Snaps_IDs):
-            self.TM.Log(" > {0}/{1}".format(int(snap_id/SnapRatio + 1), len(Snaps_IDs)))
+            self.TrackerManager.Log(" > {0}/{1}".format(int(snap_id/SnapRatio + 1), len(Snaps_IDs)))
 
             if AddVirtualPoint:
                 if LastVPUpdate is None:
-                    LastVPUpdate = self.TM.History['t'][snap_id]
+                    LastVPUpdate = self.TrackerManager.History['t'][snap_id]
                 else:
-                    Delta = self.TM.History['t'][snap_id] - LastVPUpdate
-                    LastVPUpdate = self.TM.History['t'][snap_id]
+                    Delta = self.TrackerManager.History['t'][snap_id] - LastVPUpdate
+                    LastVPUpdate = self.TrackerManager.History['t'][snap_id]
                     AddOffset, Vx, Vy, SVx, SVy = self._GetSnapSceneSpeed(snap_id, Offset_Start, ['Converged'], ['Locked'])
                     if AddOffset:
                         Offset_Start += AddOffset
@@ -601,20 +623,20 @@ class PlotterClass:
                         VirtualPoint[0] += np.array([Vx, Vy]) * Delta
                         VirtualPoint[1] += np.array([SVx, SVy]) / (2 * np.sqrt(NUpdates)) * Delta
 
-            if self.TM.History['t'][snap_id] > tMax:
+            if self.TrackerManager.History['t'][snap_id] > tMax:
                 break
     
             self.CreateTrackingShot(TrackerIDs, IgnoreTrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT, TrailDt = TrailDt, TrailWidth = TrailWidth)
     
             f.savefig(Folder + 't_{0:05d}.png'.format(nSnap))
             ax.cla()
-        self.TM.Log(" > Done.          ")
+        self.TrackerManager.Log(" > Done.          ")
         plt.close(f.number)
     
         if DoGif:
             File = 'tracking_'+datetime.datetime.now().strftime('%b-%d-%I%M%p-%G')+'.mp4'
-            command = 'ffmpeg -framerate {0} -i {1}t_'.format(int(0.5/(SnapRatio * self.TM._MonitorDt)), Folder)+'0'*(5-int(np.log10(len(Snaps_IDs))+1)) + '%0{0}d.png -c:v libx264 -r 30 '.format(int(np.log10(len(Snaps_IDs))+1)) + Folder + File
-            #command = 'convert -delay {0} -loop 0 '.format(int(100*self.TM._MonitorDt))+Folder+'*.png ' + Folder + File
+            command = 'ffmpeg -framerate {0} -i {1}t_'.format(int(0.5/(SnapRatio * self.TrackerManager._MonitorDt)), Folder)+'0'*(5-int(np.log10(len(Snaps_IDs))+1)) + '%0{0}d.png -c:v libx264 -r 30 '.format(int(np.log10(len(Snaps_IDs))+1)) + Folder + File
+            #command = 'convert -delay {0} -loop 0 '.format(int(100*self.TrackerManager._MonitorDt))+Folder+'*.png ' + Folder + File
             print("Generating gif. (command : " + command + " )")
             os.system(command)
             print("GIF generated : {0}".format(File))
@@ -649,7 +671,7 @@ class PlotterClass:
         axs[0].set_title('Speed Vx')
         axs[1].set_title('Speed Vy')
 
-        S = self.TM
+        S = self.TrackerManager
         Vxs = []
         Vys = []
         Ts = []
@@ -670,7 +692,7 @@ class PlotterClass:
         axs[1].plot(Ts, Vys, '--r')
 
     def _GetSnapSceneSpeed(self, SnapID, Offset_Start = 0, UsedStatuses = ['Converged'], UsedProperties = ['Locked']):
-        S = self.TM
+        S = self.TrackerManager
         N_Considered = 0
         Vx_Sum = 0
         Vx2_Sum = 0
@@ -703,7 +725,7 @@ class PlotterClass:
             return AddOffset, None, None, None, None
 
     def FullAnalysisOfTracker(self, TrackerID, SpeedLogValue = 2):
-        S = self.TM
+        S = self.TrackerManager
         try:
             if not self.TS._FullEventsHistory:
                 raise Exception
@@ -785,8 +807,8 @@ class PlotterClass:
         print("Finished initialization at nEvent = {0}, nSnap = {1}".format(nEvent, nSnap))
         SnapShown = max(0, nSnap-1)
         x, y = int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][0]), int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][1])
-        Map = S._LinkedMemory.Snapshots[SnapShown][1][int(x - Tracker.HalfSize):int(x + Tracker.HalfSize + 1), int(y - Tracker.HalfSize):int(y + Tracker.HalfSize + 1)]
-        t = S._LinkedMemory.Snapshots[SnapShown][0]
+        Map = S._LinkedMemory.History['STContext'][SnapShown][int(x - Tracker.HalfSize):int(x + Tracker.HalfSize + 1), int(y - Tracker.HalfSize):int(y + Tracker.HalfSize + 1)]
+        t = S._LinkedMemory.History['t'][SnapShown]
         FinalMap = np.e**(-(t - Map.max(axis = 2))/(TC * S._EdgeBinRatio)) * (2*Map.argmax(axis = 2) - 1)
 
         Image = ScreenAx.imshow(np.transpose(FinalMap), origin = 'lower', cmap = 'binary', vmin = -1, vmax = 1)
@@ -840,8 +862,8 @@ class PlotterClass:
                     CurrentFeatureOriantationArrow = FeatureOrientationAx.arrow(0., 0., S.TrackersAverageOrientations[SnapShown][Tracker.ID][0], S.TrackersAverageOrientations[SnapShown][Tracker.ID][1], color = 'k')
 
                     x, y = int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][0]), int(S.TrackersPositionsHistory[SnapShown][Tracker.ID][1])
-                    Map = S._LinkedMemory.Snapshots[SnapShown][1][x - Tracker.HalfSize:x + Tracker.HalfSize, y - Tracker.HalfSize:y + Tracker.HalfSize]
-                    t = S._LinkedMemory.Snapshots[SnapShown][0]
+                    Map = S._LinkedMemory.History['STContext'][SnapShown][x - Tracker.HalfSize:x + Tracker.HalfSize, y - Tracker.HalfSize:y + Tracker.HalfSize]
+                    t = S._LinkedMemory.History['t'][SnapShown]
                     FinalMap = np.e**(-(t - Map.max(axis = 2))/(TC * S._EdgeBinRatio)) * (2*Map.argmax(axis = 2) - 1)
     
                     Image.set_data(np.transpose(FinalMap))
@@ -986,63 +1008,10 @@ class PlotterClass:
                 ffValue = ""
         return axs, nEvent, DrawnPoints, SavedPoints
 
-    def _CreateTrackingPicture(ax, snap_id, F, S, SpeedDuos, BoxColors, BinDt, cmap, add_timestamp_title, add_Feature_label_Fontsize = 0, titleSize = 15, lw = 1, BorderMargin = 5, FeatureNumerotation = 'computer', FeatureInitialOriginKept = True, IncludeSpeedError = 0, MinDMValue = 0, PolaritySeparation = True, Trail = 0, TrailWidth = 2, TrailPointList = [], DrawBox = True, AddedInfos = [], CurrentPositionMarker = None):
-        Map = np.array(F.Mem.Snapshots[snap_id][1])
-        Mask = (Map.max(axis = 2) > Map.max()-BinDt) * Map.max(axis = 2)
-        FinalMap = (Map[:,:,0] == Mask) + (1 - 2*int(PolaritySeparation)) * (Map[:,:,1] == Mask)
-        if cmap is None:
-            ax.imshow(np.transpose(FinalMap), origin = 'lower') 
-        else:
-            ax.imshow(np.transpose(FinalMap), origin = 'lower', cmap = plt.get_cmap(cmap))
-    
-        for n_speed, duo in enumerate(SpeedDuos):
-            speed_id, zone_id = duo
-            try:
-                Box = [S.OWAPT[speed_id][0] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][1] + S.DisplacementSnaps[snap_id][speed_id][1], S.OWAPT[speed_id][2] + S.DisplacementSnaps[snap_id][speed_id][0], S.OWAPT[speed_id][3] + S.DisplacementSnaps[snap_id][speed_id][1]]
-            except:
-                continue
-            if (np.array(Box) < BorderMargin).any() or Box[2] >= F.Mem.Snapshots[snap_id][1].shape[0] - BorderMargin or Box[3] >= F.Mem.Snapshots[snap_id][1].shape[1] - BorderMargin:
-                continue
-            color = BoxColors[zone_id]
-            if Trail > 0:
-                while len(TrailPointList[n_speed]) and S.TsSnaps[snap_id] - TrailPointList[n_speed][0][0] > Trail:
-                    TrailPointList[n_speed].pop(0)
-                TrailPointList[n_speed] += [[S.TsSnaps[snap_id], (Box[0] + Box[2])/2, (Box[1] + Box[3])/2]]
-            if IncludeSpeedError:
-                Error = S.SpeedErrorSnaps[snap_id][speed_id]
-                t = S.TsSnaps[snap_id]
-                Speed = np.array([0., 0.])
-                for SpeedChange in S.SpeedsChangesHistory[speed_id]:
-                    if t < SpeedChange[0]:
-                        break
-                    Speed = SpeedChange[1]
-                AlphaValue = max(0., 1. - IncludeSpeedError * np.linalg.norm(Error)/np.linalg.norm(Speed))
-                if S.DMReferences[speed_id] is None:
-                    AlphaValue = min(AlphaValue,  max(0., S.DMSnaps[snap_id][speed_id].sum()/MinDMValue))
-                else:
-                    AlphaValue = min(AlphaValue,  max(0., S.DMSnaps[snap_id][speed_id].sum()/S.DMReferences[speed_id].sum()))
-            else:
-                AlphaValue = 1
-            if DrawBox:
-                ax.plot([Box[0], Box[0]], [Box[1], Box[3]], c = color, lw = lw, alpha = AlphaValue)
-                ax.plot([Box[0], Box[2]], [Box[3], Box[3]], c = color, lw = lw, alpha = AlphaValue)
-                ax.plot([Box[2], Box[2]], [Box[3], Box[1]], c = color, lw = lw, alpha = AlphaValue)
-                ax.plot([Box[2], Box[0]], [Box[1], Box[1]], c = color, lw = lw, alpha = AlphaValue)
-            if not CurrentPositionMarker is None:
-                ax.plot((Box[0] + Box[2])/2, (Box[1] + Box[3])/2, c = color, alpha = AlphaValue, marker = CurrentPositionMarker[0], markersize = CurrentPositionMarker[1])
-            if Trail > 0:
-                TrailPointList[n_speed][-1] += [AlphaValue]
-                for nSegment in range(len(TrailPointList[n_speed])-1):
-                    ax.plot([TrailPointList[n_speed][nSegment][1], TrailPointList[n_speed][nSegment+1][1]], [TrailPointList[n_speed][nSegment][2], TrailPointList[n_speed][nSegment+1][2]], c = color, alpha = TrailPointList[n_speed][nSegment][3], lw = TrailWidth)
-            if add_Feature_label_Fontsize:
-                ax.text(Box[2] + 5, Box[1] + (Box[3] - Box[1])*0.4, ('zone_id' in AddedInfos)*'Feature {0}'.format((FeatureInitialOriginKept * zone_id + (not FeatureInitialOriginKept) * n_speed) + (FeatureNumerotation == 'human')) + ', '*('zone_id' in AddedInfos and 'speed_id' in AddedInfos) + ('speed_id' in AddedInfos)*'ID = {0}'.format(speed_id), color = BoxColors[zone_id], fontsize = add_Feature_label_Fontsize)
-        if add_timestamp_title:
-            ax.set_title("t = {0:.2f}s".format(S.TsSnaps[snap_id]), fontsize = titleSize)
-
 # Shape Analysis section. WIP
     
     def ShapePointsReduction(self, TrackerID, NFinal):
-        Events = list(self.TM.Trackers[TrackerID].LocksSaves[0].Events)
+        Events = list(self.TrackerManager.Trackers[TrackerID].LocksSaves[0].Events)
         for Event in Events:
             Event[0] = 1
         M = 100000 * np.ones((len(Events), len(Events)))
@@ -1075,7 +1044,7 @@ class PlotterClass:
         else:
             axs = ax_given
         axs[0].set_title('Tracker {0}'.format(TrackerID))
-        axs[0].plot(np.array(self.TM.Trackers[TrackerID].LocksSaves[0].Events)[:,1], np.array(self.TM.Trackers[TrackerID].LocksSaves[0].Events)[:,2], 'or')
+        axs[0].plot(np.array(self.TrackerManager.Trackers[TrackerID].LocksSaves[0].Events)[:,1], np.array(self.TrackerManager.Trackers[TrackerID].LocksSaves[0].Events)[:,2], 'or')
         axs[0].plot(np.array(ReducedEvents)[:,1], np.array(ReducedEvents)[:,2], 'ob')
         Angles = CreateCenteredAnglesHistogram(ReducedEvents)
         Distances = CreateRelativeDistancesHistogram(ReducedEvents, M)
@@ -1085,13 +1054,13 @@ class PlotterClass:
 
     def CompareTrackersShapesHistograms(self, ShowBests = (0, 10), IDRange = [0, None], nReducedPoints = 50, nBins = 20, PlotScenes = False, PlotDuos = False, Unique = True):
         if IDRange[1] is None:
-            IDRange[1] = len(self.TM.Trackers)
+            IDRange[1] = len(self.TrackerManager.Trackers)
 
         TrackersAnglesHistDict = {} 
         TrackersDistancesHistDict = {} 
         f, axs = plt.subplots(3,1)
         for TrackerID in range(IDRange[0], IDRange[1]):
-            Tracker = self.TM.Trackers[TrackerID] 
+            Tracker = self.TrackerManager.Trackers[TrackerID] 
             if not len(Tracker.LocksSaves):
                 continue
             AnglesHist, AnglesValues, DistancesHist, DistancesValues, axs = self.AnalyzeTrackerShape(TrackerID, nReducedPoints=nReducedPoints, ax_given=axs)
@@ -1139,9 +1108,9 @@ class PlotterClass:
                 axs[0,2].set_title('Distances variations : {0:.2f}'.format(M_Distances[ListDuos[BestDuoID][0], ListDuos[BestDuoID][1]]))
 
             if PlotScenes:
-                SnapID_i = ((np.array(self.TM.TrackersPositionsHistoryTs) - self.TM.Trackers[i].LocksSaves[0].Time) > 0).tolist().index(True)
+                SnapID_i = ((np.array(self.TrackerManager.TrackersPositionsHistoryTs) - self.TrackerManager.Trackers[i].LocksSaves[0].Time) > 0).tolist().index(True)
                 self.CreateTrackingShot(TrackerIDs = [i], SnapshotNumber = SnapID_i, BinDt = 0.005, ax_given = axs_scenes[0, BestDuoID-ShowBests[0]], cmap = 'binary', addTrackersIDsFontSize = 10, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None)
-                SnapID_j = ((np.array(self.TM.TrackersPositionsHistoryTs) - self.TM.Trackers[j].LocksSaves[0].Time) > 0).tolist().index(True)
+                SnapID_j = ((np.array(self.TrackerManager.TrackersPositionsHistoryTs) - self.TrackerManager.Trackers[j].LocksSaves[0].Time) > 0).tolist().index(True)
                 self.CreateTrackingShot(TrackerIDs = [j], SnapshotNumber = SnapID_j, BinDt = 0.005, ax_given = axs_scenes[1, BestDuoID-ShowBests[0]], cmap = 'binary', addTrackersIDsFontSize = 10, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None)
             BestDuoID += 1
 
@@ -1149,12 +1118,12 @@ class PlotterClass:
 
     def CompareTrackersShapesAngularVariations(self, ShowBestsFrom = 0, nShowed = 5, IDRange = [0, None], nReducedPoints = None, NLinesHoriz = 10, PlotScenes = False, PlotDuos = False, Unique = True, MaxShift = 0, AddLines = False):
         if IDRange[1] is None:
-            IDRange[1] = len(self.TM.Trackers)
+            IDRange[1] = len(self.TrackerManager.Trackers)
         TrackersAngularVariancesDict = {} 
         LinesDict = {}
 
         for TrackerID in range(IDRange[0], IDRange[1]):
-            Tracker = self.TM.Trackers[TrackerID] 
+            Tracker = self.TrackerManager.Trackers[TrackerID] 
             if not len(Tracker.LocksSaves):
                 continue
             Angles, Values, dTheta, dLine, Lines = self.GetAngularRepartition(TrackerID, NLinesHoriz, nReducedPoints)
@@ -1213,7 +1182,7 @@ class PlotterClass:
                 f, axs = plt.subplots(2,2)
                 ReducedEvents, _ = self.ShapePointsReduction(TrackerID_i, nReducedPoints)
                 axs[0,0].set_title('Tracker {0}'.format(TrackerID_i))
-                axs[0,0].plot(np.array(self.TM.Trackers[TrackerID_i].LocksSaves[0].Events)[:,1], np.array(self.TM.Trackers[TrackerID_i].LocksSaves[0].Events)[:,2], 'or')
+                axs[0,0].plot(np.array(self.TrackerManager.Trackers[TrackerID_i].LocksSaves[0].Events)[:,1], np.array(self.TrackerManager.Trackers[TrackerID_i].LocksSaves[0].Events)[:,2], 'or')
                 axs[0,0].plot(np.array(ReducedEvents)[:,1], np.array(ReducedEvents)[:,2], 'ob')
                 try:
                     axs[0,1].set_title('Angles Variations : {0:.2f}'.format(VariancesDistanceMatrix[ListDuos[BestDuoID][0], ListDuos[BestDuoID][1]]))
@@ -1224,18 +1193,18 @@ class PlotterClass:
 
                 ReducedEvents, _ = self.ShapePointsReduction(TrackerID_j, nReducedPoints)
                 axs[1,0].set_title('Tracker {0}'.format(TrackerID_j))
-                axs[1,0].plot(np.array(self.TM.Trackers[TrackerID_j].LocksSaves[0].Events)[:,1], np.array(self.TM.Trackers[TrackerID_j].LocksSaves[0].Events)[:,2], 'or')
+                axs[1,0].plot(np.array(self.TrackerManager.Trackers[TrackerID_j].LocksSaves[0].Events)[:,1], np.array(self.TrackerManager.Trackers[TrackerID_j].LocksSaves[0].Events)[:,2], 'or')
                 axs[1,0].plot(np.array(ReducedEvents)[:,1], np.array(ReducedEvents)[:,2], 'ob')
                 axs[1,1].plot(Angles, TrackersAngularVariancesDict[TrackerID_j])
 
                 if AddLines:
-                    PlotLines(LinesDict[TrackerID_i], self.TM._TrackerDiameter, axs[0,0])
-                    PlotLines(LinesDict[TrackerID_j], self.TM._TrackerDiameter, axs[1,0])
+                    PlotLines(LinesDict[TrackerID_i], self.TrackerManager._TrackerDiameter, axs[0,0])
+                    PlotLines(LinesDict[TrackerID_j], self.TrackerManager._TrackerDiameter, axs[1,0])
 
             if PlotScenes:
-                SnapID_i = ((np.array(self.TM.TrackersPositionsHistoryTs) - self.TM.Trackers[TrackerID_i].LocksSaves[0].Time) > 0).tolist().index(True)
+                SnapID_i = ((np.array(self.TrackerManager.TrackersPositionsHistoryTs) - self.TrackerManager.Trackers[TrackerID_i].LocksSaves[0].Time) > 0).tolist().index(True)
                 self.CreateTrackingShot(TrackerIDs = [TrackerID_i], SnapshotNumber = SnapID_i, BinDt = 0.005, ax_given = axs_scenes[0, nBestFound], cmap = 'binary', addTrackersIDsFontSize = 10, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None)
-                SnapID_j = ((np.array(self.TM.TrackersPositionsHistoryTs) - self.TM.Trackers[TrackerID_j].LocksSaves[0].Time) > 0).tolist().index(True)
+                SnapID_j = ((np.array(self.TrackerManager.TrackersPositionsHistoryTs) - self.TrackerManager.Trackers[TrackerID_j].LocksSaves[0].Time) > 0).tolist().index(True)
                 self.CreateTrackingShot(TrackerIDs = [TrackerID_j], SnapshotNumber = SnapID_j, BinDt = 0.005, ax_given = axs_scenes[1, nBestFound], cmap = 'binary', addTrackersIDsFontSize = 10, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged'], DisplayedProperties = ['Aperture issue', 'Locked', 'None'], RemoveNullSpeedTrackers = 0, VirtualPoint = None)
             nBestFound += 1
 
@@ -1243,19 +1212,19 @@ class PlotterClass:
 
 
     def GetAngularRepartition(self, TrackerID, NLinesHoriz = 10, nReducedPoints = None):
-        dLine = self.TM._TrackerDiameter / float(NLinesHoriz - 1)
+        dLine = self.TrackerManager._TrackerDiameter / float(NLinesHoriz - 1)
         NAngles = int(np.pi / (2 * np.arctan(1. / NLinesHoriz)))
         dTheta = np.pi / NAngles
         Angles = [i*dTheta for i in range(NAngles)]
         Lines = []
-        XF = np.array([self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
+        XF = np.array([self.TrackerManager._TrackerDiameter/2., self.TrackerManager._TrackerDiameter/2.])
         for Angle in Angles:
             if Angle < np.pi/2:
-                X0 = np.array([self.TM._TrackerDiameter/2., -self.TM._TrackerDiameter/2.])
-                XF = np.array([-self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
+                X0 = np.array([self.TrackerManager._TrackerDiameter/2., -self.TrackerManager._TrackerDiameter/2.])
+                XF = np.array([-self.TrackerManager._TrackerDiameter/2., self.TrackerManager._TrackerDiameter/2.])
             else:
-                X0 = np.array([self.TM._TrackerDiameter/2., self.TM._TrackerDiameter/2.])
-                XF = np.array([-self.TM._TrackerDiameter/2., -self.TM._TrackerDiameter/2.])
+                X0 = np.array([self.TrackerManager._TrackerDiameter/2., self.TrackerManager._TrackerDiameter/2.])
+                XF = np.array([-self.TrackerManager._TrackerDiameter/2., -self.TrackerManager._TrackerDiameter/2.])
             X = np.array(X0)
             Lines += [[]]
             n = np.array([-np.sin(Angle), np.cos(Angle)])

@@ -279,7 +279,7 @@ class GTMakerClass:
         ErrorNorms = self.GetGTErrorNorms(TrackerID, RemoveOffset)
         return (ErrorNorms < ValidDistance).sum() * self.GTDt
 
-    def DrawGTImage(self, ImageIndex = None, delay = 1, ID = None):
+    def DrawGTImage(self, ImageIndex = None, delay = 1, ID = None, ImageFile = None, EnabledTrackers = None):
         if not ImageIndex is None:
             self.LoadImage(self.ImagesLookupTable['filename'][ImageIndex])
             self.t = self.ImagesLookupTable['t'][ImageIndex]
@@ -287,10 +287,14 @@ class GTMakerClass:
         else:
             pass
 
+        if EnabledTrackers is None:
+            EnabledTrackers = self.GTImagesIDs[self.ImageIndex]
+        else:
+            EnabledTrackers = [ID for ID in self.GTImagesIDs[self.ImageIndex] if EnabledTrackers[ID]]
         frame = self.CurrentImage.transpose(1,0,2)
         frame = np.ascontiguousarray(frame)
         NTrackersDisplayed = 0
-        for GTID in self.GTImagesIDs[self.ImageIndex]:
+        for GTID in EnabledTrackers:
             txys = self.GTPositions[GTID]
             if not ID is None and ID != GTID:
                 continue
@@ -310,8 +314,12 @@ class GTMakerClass:
                     x = np.rint(x)
                     cv2.circle(np.ascontiguousarray(frame), tuple(int(v) for v in x), int(self.TrackerManager._TrackerDiameter/2), (0, 0, 255), 1)
 
-        cv2.imshow("Frame", imutils.resize(np.flip(frame, axis = 0), width = 600))
+        frame = np.ascontiguousarray(imutils.resize(np.flip(frame, axis = 0), width = 600))
+        cv2.putText(frame, "{0:.3f}s".format(self.t), (5, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 1)
+        cv2.imshow("Frame", frame)
         key = cv2.waitKey(delay)
+        if not ImageFile is None:
+            cv2.imwrite(ImageFile, frame)
 
     def GenerateGroundTruth(self, DataFolder = None, tMax = None, DiameterRatio = 1., BinDt = 0.02, trackerType = 'csrt', MaxAssumedDisplacement = 50):
         self.__init__(self.TrackerManager, DiameterRatio) # Re-init all variables
@@ -392,6 +400,7 @@ class GTMakerClass:
 
     def LoadFileImage(self, filename):
         CurrentBinaryImage = imageio.imread(self.GTData['DataFolder'] + filename)
+        CurrentBinaryImage = np.flip(CurrentBinaryImage.transpose(), axis = 1)
         self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
         self.CurrentImage[:,:,0] = CurrentBinaryImage
         self.CurrentImage[:,:,1] = CurrentBinaryImage
@@ -415,7 +424,7 @@ class GTMakerClass:
             if Status == (self.TrackerManager._StateClass._STATUS_LOCKED, 0):
                 xy = self.TrackerManager.RetreiveHistoryData('RecordedTrackers@Position', ID, Snap = self.SnapIndex)[1][:2]
                 box = self.TrackerToBox(xy)
-                if ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.CurrentImage.shape[:2]))).any()):
+                if ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.TrackerManager._LinkedMemory.STContext.shape[:2]))).any()):
                     if ID in self.GTTrackersDict.keys():
                         del self.GTTrackersDict[ID]
                     else:

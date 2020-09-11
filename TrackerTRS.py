@@ -64,6 +64,8 @@ class TrackerTRS(Module):
         self._OutOfBondsDistance = 0.                                               # Float. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
         self._DynamicsEstimatorTMRatio = 0.5                                        # Float. Factor for DynamicsEstimator time constant. Modifies inertia for correction.
 
+        self._ShapeMaxOccupancy = 0.3                                               # Float. Maximum occupancy of the tracker ROI
+        self._TrackerMaxEventsBuffer = np.pi*(self._TrackerDiameter/2)**2 * self._EdgeBinRatio * self._ShapeMaxOccupancy
         self._TrackerAccelerationFactor = 2.                                        # Float. Acceleration factor for speed correction. Default : 1.
         self._TrackerDisplacementFactor = 2.                                        # Float. Displacement factor for position correction with the relative flow. Default : 1.
         self._TrackerUnlockedSpeedModActivityPower = 1.0                                     # Float. Exponent of the activity dividing the speed correction in unlocked mode. May allow to lower inertia in highly textured scenes. Default : 1.
@@ -87,12 +89,13 @@ class TrackerTRS(Module):
         self._TrackerConvergenceHysteresis = {'CF':0.05, 'PD':0.1}[self._ConvergenceEstimatorType]                  
         # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.05
 
-        self._LocalEdgeRadius = self._ClosestEventProximity * 1.5
+        self._LocalEdgeRadius = self._ClosestEventProximity * 1.1
         self._LocalEdgeNumberOfEvents = int(2*self._LocalEdgeRadius)
-        self._TrackerApertureIssueThreshold = 0.55                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
+        self._TrackerApertureIssueThreshold = 0.45                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
         self._TrackerApertureIssueHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueThreshold. Default : 0.05
 
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
+        self._LockupMaximumSpread = 0.7                                             # Float. Maximum occupancy of the shape defined by the  projected events at lockup. This protects against highly textured ROIs and stabilization failures. >=1 disables this filter. Default : 0.8
         self._TrackerLockingMaxRecoveryBuffer = 100                                 # Int. Size of the buffer storing events while locked, used in case of feature loss. Greater values increase computationnal cost. Default : 100
         self._TrackerLockMaxRelativeActivity = np.inf                               # Float. Maximum activity allowing for a lock, divided by _TrackerDiameter. Can forbid locking on highly textured parts of the scene. np.inf inhibits this feature. Default : np.inf
         self._TrackerLockedRelativeCorrectionsFailures = 0.7                        # Float. Minimum correction activity relative to tracker activity for a lock to remain. Assesses for shape loss. Default : 0.6
@@ -105,6 +108,7 @@ class TrackerTRS(Module):
         self._AllowDisengage = True                                                 # Save process when a tracker is locked but has too low activity. Typically used when sudden deceleration appears
         self._TrackerDisengageActivityThreshold = 0.5
         self._TrackerDisengageActivityHysteresis = 0.1
+        self._TrackerUnlockedSurvives = False                                       # Bool. Behaviour of unlocked trackers. If True, the trackers goes as converged, if False it is killed and restarted somewhere else.
 
         self._MeanPositionDampeningFactor = 0.
 
@@ -253,10 +257,10 @@ class TrackerTRS(Module):
     def AddLocksSubscriber(self, ListenerMethod):
         self.LocksSubscribers += [ListenerMethod]
 
-    def _KillTracker(self, Tracker, event, Reason=''):
+    def _KillTracker(self, Tracker, t, Reason=''):
         self.Log("Tracker {0} died".format(Tracker.ID) + int(bool(Reason)) * (" ("+Reason+")"))
         Tracker.State.SetStatus(Tracker.State._STATUS_DEAD)
-        self.DeathTimes[Tracker.ID] = event.timestamp
+        self.DeathTimes[Tracker.ID] = t
         self.AliveTrackers.remove(Tracker)
         self.JustDeadTrackers += [Tracker]
 
@@ -750,6 +754,7 @@ class TrackerClass:
         
         self.ProjectedEvents = []
         self.AssociatedFlows = []
+        self.AssociatedOffsets = []
 
         self.LastUpdate = 0.
         self.LastValidFlow = 0.
@@ -794,7 +799,7 @@ class TrackerClass:
         if not self.State.Disengaged and ((self.Position[:2] - self.TM._OutOfBondsDistance < 0).any() or (self.Position[:2] + self.TM._OutOfBondsDistance >= np.array(self.TM._LinkedMemory.STContext.shape[:2])).any()): # out of bounds, cannot happen if disengaged
             if self.Lock:
                 self.Unlock('out of bounds')
-            self.TM._KillTracker(self, event, Reason = "out of bounds")
+            self.TM._KillTracker(self, event.timestamp, Reason = "out of bounds")
             return False
         if self.State.Locked:
             if not self.State.Disengaged and self.TM._AllowDisengage and self.TrackerActivity < self.TM._TrackerDiameter * (self.TM._TrackerDisengageActivityThreshold - self.TM._TrackerDisengageActivityHysteresis):
@@ -803,7 +808,7 @@ class TrackerClass:
         if self.TrackerActivity < self.TM._TrackerDiameter * self.TM._TrackerMinDeathActivity: # Activity remaining too low
             if self.Lock:
                 self.Unlock('low activity')
-            self.TM._KillTracker(self, event, "low activity")
+            self.TM._KillTracker(self, event.timestamp, "low activity")
             return False
 
         return True
@@ -837,6 +842,11 @@ class TrackerClass:
         if self.State.Idle:
             self.ProjectedEvents += [SavedProjectedEvent]
             self.AssociatedFlows += [np.array([0., 0.])]
+            self.AssociatedOffsets += [np.array([0., 0.])]
+            if len(self.ProjectedEvents) > self.TM._TrackerMaxEventsBuffer:
+                self.ProjectedEvents.pop(0)
+                self.AssociatedFlows.pop(0)
+                self.AssociatedOffsets.pop(0)
             if self.TrackerActivity > self.TM._DetectorMinActivityForStart: # This StatusUpdate is put here, since it would be costly in computation to have it somewhere else and always be checked 
                 self.State.SetStatus(self.State._STATUS_STABILIZING)
                 self.TM.StartTimes[self.ID] = event.timestamp
@@ -847,9 +857,10 @@ class TrackerClass:
             UsedEventsList = self.Lock.Events
             self.ProjectedEvents = self.ProjectedEvents[-(self.TM._TrackerLockingMaxRecoveryBuffer-1):] + [SavedProjectedEvent]
         else:
-            while len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.EdgeBinTC: # We look for the first event recent enough. We remove for events older than N Tau, meaning a participation of 5%
+            while len(self.ProjectedEvents) > self.TM._TrackerMaxEventsBuffer or (len(self.ProjectedEvents) > 0 and self.LastUpdate - self.ProjectedEvents[0][0] >= self.EdgeBinTC): # We look for the first event recent enough. We remove for events older than N Tau, meaning a participation of 5%
                 self.ProjectedEvents.pop(0)
                 self.AssociatedFlows.pop(0)
+                self.AssociatedOffsets.pop(0)
             UsedEventsList = self.ProjectedEvents
             self.ProjectedEvents += [SavedProjectedEvent]
 
@@ -858,8 +869,10 @@ class TrackerClass:
         #The translation speed is the one to be corrected
         if self.Lock:
             self.AssociatedFlows = self.AssociatedFlows[:len(self.ProjectedEvents)-1] + [FlowError]
+            self.AssociatedOffsets = self.AssociatedFlows[:len(self.ProjectedEvents)-1] + [ProjectionError]
         else:
             self.AssociatedFlows += [FlowError]
+            self.AssociatedOffsets += [ProjectionError]
         if not FlowSuccess: # Computation could not be performed, due to not enough events
             return True
 
@@ -903,8 +916,7 @@ class TrackerClass:
 
         self._UpdateTC()
 
-        self.ComputeCurrentStatus(event.timestamp)
-        return True
+        return self.ComputeCurrentStatus(event.timestamp)
 
     def ComputeCurrentStatus(self, t): # Cannot be called when DEAD or IDLE. Thus, we first check evolutions for aperture issue and lock properties, then update the status
         self.State.OffCentered = (not self.State.Locked) and (np.linalg.norm(self.DynamicsEstimator.X) > self.TM._TrackerOffCenterThreshold * self.Radius)
@@ -935,31 +947,45 @@ class TrackerClass:
 
         if self.State.Locked and not CanBeLocked:
             self.Unlock(Reason)
-            return None
+            if not self.TM._TrackerUnlockedSurvives:
+                self.TM._KillTracker(self, t, Reason = Reason)
+                return False
+            return True
 
         if self.State.Converged or self.State.Locked:
             if self.SpeedConvergenceEstimator.Value[0] > (self.TM._TrackerConvergenceThreshold + self.TM._TrackerConvergenceHysteresis): # Part where we downgrade to stabilizing, when the corrections are too great
                 if self.State.Locked:
                     if not self.TM._TrackerLockedCanHardCorrect:
-                        self.Unlock("excessive correction")
+                        Reason = "excessive correction"
+                        self.Unlock(Reason)
+                        if not self.TM._TrackerUnlockedSurvives:
+                            self.TM._KillTracker(self, t, Reason = Reason)
+                            return False
                         self.State.SetStatus(self.State._STATUS_STABILIZING)
                 else:
                     self.State.SetStatus(self.State._STATUS_STABILIZING)
-                return None
+                return True
             if not self.State.Locked and CanBeLocked and self.TM._TrackerAllowShapeLock:
-                self.State.SetStatus(self.State._STATUS_LOCKED)
-                self.Lock = LockClass(t, self.TrackerActivity, self.FlowActivity, list(self.ProjectedEvents + [np.array([0., 0., 0.])])) # Added event at the end allows for simplicity in neighbours search
-                self.LocksSaves += [LockClass(t, self.TrackerActivity, self.FlowActivity, list(self.ProjectedEvents))]
-                
-                self.TM._OnTrackerLock(self)
-
-                self.TM.Log("Tracker {0} has locked".format(self.ID), 3)
-                return None # We assume we have checked everything here
+                Reprojection, Spread = self.ProjectionSpread()
+                if Reprojection < self.TM._LockupMaximumSpread:
+                    if Spread > self.TM._LockupMaximumSpread:
+                        self.TM._KillTracker(self, t, 'excessive spread')
+                        return False
+                    
+                    self.State.SetStatus(self.State._STATUS_LOCKED)
+                    self.Lock = LockClass(t, self.TrackerActivity, self.FlowActivity, list(self.ProjectedEvents + [np.array([0., 0., 0.])])) # Added event at the end allows for simplicity in neighbours search
+                    self.LocksSaves += [LockClass(t, self.TrackerActivity, self.FlowActivity, list(self.ProjectedEvents))]
+                    
+                    self.TM._OnTrackerLock(self)
+                    
+                    self.TM.Log("Tracker {0} has locked".format(self.ID), 3)
         elif self.State.Stabilizing:
             if self.SpeedConvergenceEstimator.Value[0] < (self.TM._TrackerConvergenceThreshold - self.TM._TrackerConvergenceHysteresis):
                 if self.FlowActivity >= (self.TM._TrackerLockedRelativeCorrectionsFailures + self.TM._TrackerLockedRelativeCorrectionsHysteresis) * self.TrackerActivity:
                     self.State.SetStatus(self.State._STATUS_CONVERGED)
-                    return None
+        else:
+            self.TM.LogWarning("Unexpected status, ref. 001")
+        return True
 
     def Unlock(self, Reason):
         self.LocksSaves[-1].ReleaseTime = self.LastUpdate
@@ -972,6 +998,12 @@ class TrackerClass:
         self.TM.FeatureManager.RemoveLock(self)
         self.TM.LogWarning("Tracker {0} was released ({1})".format(self.ID, Reason))
         self.State.SetStatus(self.State._STATUS_CONVERGED)
+
+    def ProjectionSpread(self):
+        Support = np.zeros((int(2*self.Radius+1), int(2*self.Radius+1)), dtype = int)
+        for Event in self.ProjectedEvents:
+            Support[int(round((Event[1] + self.Radius))), int(round((Event[2] + self.Radius)))] += 1
+        return ((Support==1).sum()/len(self.ProjectedEvents), (Support>0).sum() / (np.pi * self.Radius**2))
 
     def Disengage(self, t):
         self.State.Disengaged = True
@@ -1120,6 +1152,8 @@ class TrackerClass:
         ax.set_ylim(-self.Radius, self.Radius)
         Zone = plt.Circle((0, 0), self.Radius, color='k', fill=False)
         EventZone = plt.Circle((-100, -100), self.TM._ClosestEventProximity, color='k', fill=False, linestyle = '--')
+        OffsetUsed = plt.plot(-100, -100, 'vg', zorder = 10)[0]
+        FlowUsed = plt.plot([-100, -101], [-100, -101], 'r')[0]
         ax.add_artist(Zone)
         ax.add_artist(EventZone)
         title = "Tracker {0}, Current time : t = {1:.3f}".format(self.ID, self.LastUpdate)
@@ -1135,12 +1169,8 @@ class TrackerClass:
         ax.set_title(title)
         MaxFlow = np.linalg.norm(self.AssociatedFlows, axis = 1).max()
         PlottedList = list(self.ProjectedEvents)
-        for E, Flow in zip(self.ProjectedEvents, self.AssociatedFlows):
+        for E in self.ProjectedEvents:
             ax.plot(E[1], E[2], 'ob', alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant))
-            N = np.linalg.norm(Flow)
-            if N != 0:
-                Flow = Flow * 5 / N
-                ax.plot([E[1], E[1]+Flow[0]], [E[2], E[2]+Flow[1]], 'r', alpha = N/MaxFlow)
         if Lock:
             PlottedList += Lock.Events[:-1]
             for E in Lock.Events[:-1]:
@@ -1148,6 +1178,21 @@ class TrackerClass:
         PlottedList = np.array(PlottedList)
         def onclick(event):
             EventConsidered = np.linalg.norm(PlottedList[:,1:] - np.array([event.xdata, event.ydata]), axis = 1).argmin()
+            if EventConsidered < len(self.ProjectedEvents):
+                E = PlottedList[EventConsidered]
+                Flow = self.AssociatedFlows[EventConsidered]
+                Offset = self.AssociatedOffsets[EventConsidered]
+                N = np.linalg.norm(Flow)
+                if N != 0:
+                    Flow = Flow * 5 / N
+                    FlowUsed.set_data([E[1], E[1]+Flow[0]], [E[2], E[2]+Flow[1]])
+                    FlowUsed.set_alpha(N/MaxFlow)
+                else:
+                    FlowUsed.set_data([-100, -101], [-100, -101])
+                OffsetUsed.set_data(E[1] - Offset[0], E[2] - Offset[1])
+            else:
+                OffsetUsed.set_data(-100, -100)
+                FlowUsed.set_data([-100, -101], [-100, -101])
             if np.linalg.norm(PlottedList[EventConsidered,1:]-np.array([event.xdata, event.ydata])) < 1:
                 ax.set_title(title.format(PlottedList[EventConsidered,0]))
                 EventZone.set_center(tuple(PlottedList[EventConsidered,1:]))
@@ -1157,3 +1202,4 @@ class TrackerClass:
             plt.show()
 
         cid = f.canvas.mpl_connect('button_press_event', onclick)
+        return f, ax

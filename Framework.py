@@ -12,7 +12,6 @@ import json
 from datetime import datetime as dtClass
 import ast
 
-from Plotting_methods import *
 from pydoc import locate
 
 class Framework:
@@ -48,7 +47,7 @@ class Framework:
             -> FlowComputer : Computes the optical flow of a stream of events
 
     '''
-    def __init__(self, File = None, onlyRawData = False, FullSessionLogFile = None):
+    def __init__(self, File1 = None, File2 = None, onlyRawData = False, FullSessionLogFile = None):
         self.__Type__ = 'Framework'
         self._LogType = 'raw'
         if FullSessionLogFile is None:
@@ -67,10 +66,7 @@ class Framework:
         self._Initializing = False
         self.Paused = ''
 
-        if not File is None and File.split('.')[-1] == self._DATA_FILE_EXTENSION:
-            self._LoadFromDataFile(File, onlyRawData = onlyRawData)
-        else:
-            self._LoadProject(File, onlyRawData = onlyRawData)
+        self._LoadFiles(File1, File2, onlyRawData)
 
         atexit.register(self._OnClosing)
 
@@ -208,15 +204,31 @@ class Framework:
 
             for ToolName in self.ToolsList:
                 self.Tools[ToolName]._SaveData(BinDataFile)
+    
+    def _LoadFiles(self, File1, File2, onlyRawData):
+        if File1 is None:
+            File1, File2 = File2, File1
+        if (File1 is None and File2 is None) or (not File2 is None and File1.split('.')[-1] == File2.split('.')[-1]): # If they are both None (no input file) or both with the same extension
+            print("Input error. Input files can be :")
+            print("One project file (.{0}), to launch streams".format(self._PROJECT_FILE_EXTENSION))
+            print("One data file (.{0}), to recover data".format(self._DATA_FILE_EXTENSION))
+            print("One project file and one data file, to recover data into a specified framework. Specific case")
+            raise Exception("")
+        if File1.split('.')[-1] == self._DATA_FILE_EXTENSION:
+            self._LoadFromDataFile(DataFile = File1, ProjectFile = File2, onlyRawData = onlyRawData)
+        elif (not File2 is None) and File2.split('.')[-1] == self._DATA_FILE_EXTENSION:
+            self._LoadFromDataFile(DataFile = File2, ProjectFile = File1, onlyRawData = onlyRawData)
+        else:
+            self._LoadProject(File1, onlyRawData = onlyRawData)
 
-    def _LoadFromDataFile(self, DataFile, onlyRawData = False):
+    def _LoadFromDataFile(self, DataFile, ProjectFile = None, onlyRawData = False):
         self._Log('Loading data from saved file')
         with open(DataFile, 'rb') as BinDataFile:
             def BinRead():
                 Line = BinDataFile.readline().decode('utf-8')
                 return (Line[:2] == '##'), Line[2:].split('->')[0].strip(), Line[2:].split('->')[-1].strip()
-            ProjectFile = None
             ProjectFileHash = None
+            ProjectFileRecovered = None
             InputFiles = None
             RunArgs = None
             while True:
@@ -230,7 +242,11 @@ class Framework:
                     else:
                         self._Log(Value, 3)
                 elif Key == 'Project File':
-                    ProjectFile = Value
+                    ProjectFileRecovered = Value
+                    if ProjectFile is None:
+                        ProjectFile = ProjectFileRecovered
+                    else:
+                        self._Log("Overwrote with {0}".format(ProjectFile), 3)
                     ProjectRawDataReferred = pickle.load(open(ProjectFile, 'rb'))
                     ProjectFileHash = str(hash(json.dumps(ProjectRawDataReferred, sort_keys=True)))
                     self._Log(Value, 3)
@@ -324,6 +340,7 @@ class Framework:
                     self.Tools[tool_name]._Pause(self.Paused)
 
     def Resume(self, stop_at = np.inf):
+        self._LogType = 'columns'
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
     def NextEvent(self, start_at, AtEventMethod = None):

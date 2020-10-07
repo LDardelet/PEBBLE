@@ -321,7 +321,7 @@ class GTMakerClass:
         if not ImageFile is None:
             cv2.imwrite(ImageFile, frame)
 
-    def GenerateGroundTruth(self, DataFolder = None, tMax = None, DiameterRatio = 1., BinDt = 0.02, trackerType = 'csrt', MaxAssumedDisplacement = 50):
+    def GenerateGroundTruth(self, DataFolder = None, tMax = None, DiameterRatio = 1., BinDt = 0.02, trackerType = 'csrt', MaxAssumedDisplacement = 50, AdvertiseOutOfBonds = True, STImageExposure = 0.012):
         self.__init__(self.TrackerManager, DiameterRatio) # Re-init all variables
         self.TrackerCreateFunction = {
             "csrt": cv2.TrackerCSRT_create,
@@ -347,6 +347,7 @@ class GTMakerClass:
             self.GTData['Type'] = 1
             self.GTData['DataFolder'] = ''
             self.GTData['BinDt'] = BinDt
+            self.GTData['Exposure'] = STImageExposure
             self._CreateLookupTableSnaps()
 
         self.ImageIndex = 0
@@ -359,7 +360,7 @@ class GTMakerClass:
             if self.ImagesLookupTable['t'][self.ImageIndex+1] < self.TrackerManager.History['t'][self.SnapIndex+1]:
                 self._NextImage()
             else:
-                self._NextSnap()
+                self._NextSnap(AdvertiseOutOfBonds)
 
     def _NextImage(self):
         self.ImageIndex += 1
@@ -410,13 +411,13 @@ class GTMakerClass:
         Map = self.TrackerManager._LinkedMemory.History['STContext'][ID]
         Map = Map.max(axis = 2)
         t = self.TrackerManager._LinkedMemory.History['t'][ID]
-        CurrentBinaryImage = np.rint(np.e**((Map - t)/self.GTData['BinDt']) * 255.)
+        CurrentBinaryImage = np.rint(np.e**((Map - t)/self.GTData['Exposure']) * 255.)
         self.CurrentImage = np.zeros(CurrentBinaryImage.shape + (3,), dtype = np.uint8)
         self.CurrentImage[:,:,0] = CurrentBinaryImage
         self.CurrentImage[:,:,1] = CurrentBinaryImage
         self.CurrentImage[:,:,2] = CurrentBinaryImage
 
-    def _NextSnap(self):
+    def _NextSnap(self, AdvertiseOutOfBonds = True):
         self.SnapIndex += 1
         self.t = self.TrackerManager.History['t'][self.SnapIndex]
         for ID, Status in zip(self.TrackerManager.History['RecordedTrackers@ID'][self.SnapIndex], self.TrackerManager.History['RecordedTrackers@State.Value'][self.SnapIndex]):
@@ -426,7 +427,8 @@ class GTMakerClass:
                 box = self.TrackerToBox(xy)
                 if ((np.array(box[:2]) < 0).any() or (np.array(box[:2]) + np.array(box[2:]) >= np.flip(np.array(self.TrackerManager._LinkedMemory.STContext.shape[:2]))).any()):
                     if ID in self.GTTrackersDict.keys():
-                        del self.GTTrackersDict[ID]
+                        if AdvertiseOutOfBonds:
+                            del self.GTTrackersDict[ID]
                     else:
                         pass
                     continue
@@ -496,7 +498,7 @@ class PlotterClass:
                 self.TrackerManager.__dict__[Key] = getattr(FileLoaded, self.__class__.__name__)(self.TrackerManager)
                 break
 
-    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2):
+    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2, ShowOrientation = False, MarkerSize = 4):
         S = self.TrackerManager
         if TrackerIDs is None:
             TrackerIDs = [ID for ID in S.History['RecordedTrackers@ID'][SnapshotNumber] if ID not in IgnoreTrackerIDs]
@@ -518,19 +520,24 @@ class PlotterClass:
         else:
             ax.imshow(np.transpose(FinalMap), origin = 'lower', cmap = plt.get_cmap(cmap))
     
+        def StateValidityColor(StatusValue, PropertyValue):
+            if S._StateClass._StatusesNames[StatusValue] not in DisplayedStatuses:
+                return ''
+            else:
+                TrackerColor = S._StateClass._COLORS[StatusValue]
+            for Property, PropertyName in S._StateClass._PropertiesNames.items():
+                if Property and (not PropertyName in DisplayedProperties) and (Property & PropertyValue):# First condition removes 'None' property. Second checks that we dont want to show this property. Third checks that tracker has this property.
+                    return ''
+            return TrackerColor
         def TrackerValidityCheck(TrackerID, SnapshotNumber):
             NullAnswer = (None, None)
             try:
                 StatusValue, PropertyValue = S.RetreiveHistoryData('RecordedTrackers@State.Value', TrackerID, SnapshotNumber)[1]
             except TypeError:
                 return NullAnswer
-            if S._StateClass._StatusesNames[StatusValue] not in DisplayedStatuses:
+            TrackerColor = StateValidityColor(StatusValue, PropertyValue)
+            if not TrackerColor:
                 return NullAnswer
-            else:
-                TrackerColor = S._StateClass._COLORS[StatusValue]
-            for Property, PropertyName in S._StateClass._PropertiesNames.items():
-                if Property and (not PropertyName in DisplayedProperties) and (Property & PropertyValue):# First condition removes 'None' property. Second checks that we dont want to show this property. Third checks that tracker has this property.
-                    return NullAnswer
             TrackerMarker = S._StateClass._MARKERS[PropertyValue]
             if RemoveNullSpeedTrackers:
                 t, Speed = S.RetreiveHistoryData('RecordedTrackers@Speed', TrackerID, SnapshotNumber)
@@ -544,38 +551,68 @@ class PlotterClass:
             TrackerColor, TrackerMarker = TrackerValidityCheck(TrackerID, SnapshotNumber)
             if not TrackerColor is None:
                 x, y, theta, s = S.RetreiveHistoryData('RecordedTrackers@Position', TrackerID, SnapshotNumber)[1]
-                dx, dy = self._TrackersScalingSize * s * np.cos(theta), self._TrackersScalingSize * s * np.sin(theta)
-                ax.plot(x, y, color = TrackerColor, marker = TrackerMarker)
-                ax.plot([x, x+dx], [y, y+dy], color = TrackerColor)
+                ax.plot(x, y, color = TrackerColor, marker = TrackerMarker, markersize = MarkerSize)
+                if ShowOrientation:
+                    dx, dy = self._TrackersScalingSize * s * np.cos(theta), self._TrackersScalingSize * s * np.sin(theta)
+                    ax.plot([x, x+dx], [y, y+dy], color = TrackerColor)
 
                 if addTrackersIDsFontSize:
                     ax.text(x + 5, y + 2, str(TrackerID), color = TrackerColor, fontsize = addTrackersIDsFontSize)
 
             if TrailDt > 0:
-                nSnap = SnapshotNumber 
-                CurrentTrackerLineProps = (None, None)
-                TrackerLocationsPerStyle = {CurrentTrackerLineProps: [[]]}
-                for nSnap in range(0, SnapshotNumber + 1):
-                    if S.TrackersPositionsHistoryTs[SnapshotNumber] - S.TrackersPositionsHistoryTs[nSnap] > TrailDt:
+                Ts, Xs = S.RetreiveHistoryData('RecordedTrackers@Position', TrackerID)
+                Ts = np.array(Ts)
+                UsedIndexes, = np.where(np.logical_and(Ts > t - TrailDt, Ts < t))
+                if not UsedIndexes.size:
+                    continue
+                Ts = Ts[UsedIndexes]
+                Xs = Xs[UsedIndexes,:2]
+                _, Statuses = S.RetreiveHistoryData('RecordedTrackers@State.Value', TrackerID)
+                Statuses = Statuses[UsedIndexes,:]
+                Segments = [[None, []]]
+                for Index, (Status, Prop) in enumerate(Statuses.tolist()):
+                    Color = StateValidityColor(Status, Prop)
+                    if Color:
+                        if Segments[-1][0] is None:
+                            Segments[-1][0] = Color
+                            Segments[-1][1] += [Index]
+                        else:
+                            if Color == Segments[-1][0]:
+                                Segments[-1][1] += [Index]
+                            else:
+                                Segments += [[Color, [Index]]]
+                    else:
+                        Segments += [[None, []]]
+                for Segment in Segments:
+                    if not Segment[1]:
                         continue
-                    TrackerColor, TrackerLineStyle, Box = TrackerValidityCheck(TrackerID, nSnap)
-                    TrackerLineProps = TrackerColor, TrackerLineStyle
-                    if TrackerLineProps != CurrentTrackerLineProps:
-                        if TrackerLineProps not in TrackerLocationsPerStyle.keys():
-                            TrackerLocationsPerStyle[TrackerLineProps] = []
-                        TrackerLocationsPerStyle[TrackerLineProps] += [[]]
-                        if TrackerLocationsPerStyle[CurrentTrackerLineProps][-1]:
-                            TrackerLocationsPerStyle[TrackerLineProps][-1] += [TrackerLocationsPerStyle[CurrentTrackerLineProps][-1][-1]]
-                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
-                        CurrentTrackerLineProps = TrackerLineProps
-                    elif not TrackerColor is None:
-                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
-                for LineProps, Data in TrackerLocationsPerStyle.items():
-                    TrackerColor, TrackerLineStyle = LineProps
-                    if TrackerColor is None:
-                        continue
-                    for DataSerie in Data:
-                        ax.plot(np.array(DataSerie)[:,0], np.array(DataSerie)[:,1], TrackerColor, ls = TrackerLineStyle, lw = TrailWidth)
+                    Indexes = np.array(Segment[1])
+                    ax.plot(Xs[Indexes,0], Xs[Indexes,1], color = Segment[0], lw = TrailWidth)
+
+#                nSnap = SnapshotNumber 
+#                CurrentTrackerLineProps = (None, None)
+#                TrackerLocationsPerStyle = {CurrentTrackerLineProps: [[]]}
+#                for nSnap in range(0, SnapshotNumber + 1):
+#                    if S.TrackersPositionsHistoryTs[SnapshotNumber] - S.TrackersPositionsHistoryTs[nSnap] > TrailDt:
+#                        continue
+#                    TrackerColor, TrackerLineStyle, Box = TrackerValidityCheck(TrackerID, nSnap)
+#                    TrackerLineProps = TrackerColor, TrackerLineStyle
+#                    if TrackerLineProps != CurrentTrackerLineProps:
+#                        if TrackerLineProps not in TrackerLocationsPerStyle.keys():
+#                            TrackerLocationsPerStyle[TrackerLineProps] = []
+#                        TrackerLocationsPerStyle[TrackerLineProps] += [[]]
+#                        if TrackerLocationsPerStyle[CurrentTrackerLineProps][-1]:
+#                            TrackerLocationsPerStyle[TrackerLineProps][-1] += [TrackerLocationsPerStyle[CurrentTrackerLineProps][-1][-1]]
+#                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
+#                        CurrentTrackerLineProps = TrackerLineProps
+#                    elif not TrackerColor is None:
+#                        TrackerLocationsPerStyle[TrackerLineProps][-1] += [np.array(S.TrackersPositionsHistory[nSnap][TrackerID])]
+#                for LineProps, Data in TrackerLocationsPerStyle.items():
+#                    TrackerColor, TrackerLineStyle = LineProps
+#                    if TrackerColor is None:
+#                        continue
+#                    for DataSerie in Data:
+#                        ax.plot(np.array(DataSerie)[:,0], np.array(DataSerie)[:,1], TrackerColor, ls = TrackerLineStyle, lw = TrailWidth)
 
 
         if not VirtualPoint is None:
@@ -597,7 +634,7 @@ class PlotterClass:
         if ax_given is None:
             return f, ax
     
-    def GenerateTrackingGif(self, TrackerIDs = None, IgnoreTrackerIDs = [], AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None, TrailDt = 0, TrailWidth = 2):
+    def GenerateTrackingGif(self, TrackerIDs = None, IgnoreTrackerIDs = [], AddVirtualPoint = False, SnapRatio = 1, tMin = 0., tMax = np.inf, Folder = '/home/dardelet/Pictures/GIFs/AutoGeneratedTracking/', BinDt = 0.005, add_ts = True, cmap = None, DoGif = True, addTrackersIDsFontSize = 0, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered'], RemoveNullSpeedTrackers = 0, NoRemoval = False, GT = None, TrailDt = 0, TrailWidth = 2, ShowOrientation = False, MarkerSize = 4, FilePatern = 't_'):
         if BinDt is None:
             BinDt = self.TrackerManager._MonitorDt
 
@@ -611,7 +648,7 @@ class PlotterClass:
     
         Snaps_IDs = [snap_id for snap_id in range(len(self.TrackerManager.History['t'])) if (snap_id % SnapRatio == 0 and tMin <= self.TrackerManager.History['t'][snap_id] and self.TrackerManager.History['t'][snap_id] <= tMax)]
         if not NoRemoval:
-            os.system('rm '+ Folder + '*.png')
+            os.system('rm '+ Folder + FilePatern+'*.png')
         self.TrackerManager.Log("Generating {0} png frames on {1} possible ones.".format(len(Snaps_IDs), len(self.TrackerManager.History['t'])))
         f = plt.figure(figsize = (16,9), dpi = 100)
         ax = f.add_subplot(1,1,1)
@@ -635,9 +672,9 @@ class PlotterClass:
             if self.TrackerManager.History['t'][snap_id] > tMax:
                 break
     
-            self.CreateTrackingShot(TrackerIDs, IgnoreTrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT, TrailDt = TrailDt, TrailWidth = TrailWidth)
+            self.CreateTrackingShot(TrackerIDs, IgnoreTrackerIDs, snap_id, BinDt, ax, cmap, addTrackersIDsFontSize, True, add_ts, DisplayedStatuses = DisplayedStatuses, DisplayedProperties = DisplayedProperties, RemoveNullSpeedTrackers = RemoveNullSpeedTrackers, VirtualPoint = VirtualPoint, GT = GT, TrailDt = TrailDt, TrailWidth = TrailWidth, ShowOrientation = ShowOrientation, MarkerSize = MarkerSize)
     
-            f.savefig(Folder + 't_{0:05d}.png'.format(nSnap))
+            f.savefig(Folder + FilePatern + '{0:05d}.png'.format(nSnap))
             ax.cla()
         self.TrackerManager.Log(" > Done.          ")
         plt.close(f.number)

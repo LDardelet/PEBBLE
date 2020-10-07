@@ -36,3 +36,11 @@ class Memory(Module):
 
     def GetPatch(self, x, y, Rx, Ry):
         return self.STContext[max(0,x-Rx):x+Rx,max(0,y-Ry):y+Ry,:]
+
+    def GetTs(self, Tau, xy = None, R = None):
+        if not xy is None:
+            x, y = xy
+            Map = self.GetPatch(x, y, R, R)
+        else:
+            Map = self.STContext
+        return np.e**((Map.max(axis = 2) - self.LastEvent.timestamp)/Tau)

@@ -90,8 +90,8 @@ class TrackerTRS(Module):
         # Float. Hysteresis value of _TrackerConvergenceThreshold. Default : 0.05
 
         self._LocalEdgeRadius = self._ClosestEventProximity * 1.1
-        self._LocalEdgeNumberOfEvents = int(2*self._LocalEdgeRadius)
-        self._TrackerApertureIssueThreshold = 0.45                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
+        self._LocalEdgeNumberOfEvents = int(4*self._LocalEdgeRadius)
+        self._TrackerApertureIssueThreshold = 0.55                           # Float. Amount of aperture scalar value by speed relative to correction activity. Default : 0.25
         self._TrackerApertureIssueHysteresis = 0.05                          # Float. Hysteresis value of _TrackerApertureIssueThreshold. Default : 0.05
 
         self._TrackerAllowShapeLock = True                                          # Bool. Shape locking feature. Should never be disabled. Default : True
@@ -121,6 +121,7 @@ class TrackerTRS(Module):
                                     ('RecordedTrackers@Position', np.array),
                                      ('RecordedTrackers@Speed', np.array),
                                      ('RecordedTrackers@State.Value', tuple),
+                                     ('RecordedTrackers@ProjectedEvents', np.array),
                                      #('RecordedTrackers@TimeConstant', float),
                                      #('RecordedTrackers@DynamicsEstimator.W', float),
                                      #('RecordedTrackers@DynamicsEstimator.MDet', float),
@@ -235,6 +236,7 @@ class TrackerTRS(Module):
     def _OnEventModule(self, event):
         self.NewTrackersAsked = 0
         Associated = False
+        self.LastEvent = event
         for Tracker in self.AliveTrackers:
             TrackerID = Tracker.ID
             Associated = Tracker.RunEvent(event)
@@ -260,6 +262,7 @@ class TrackerTRS(Module):
     def _KillTracker(self, Tracker, t, Reason=''):
         self.Log("Tracker {0} died".format(Tracker.ID) + int(bool(Reason)) * (" ("+Reason+")"))
         Tracker.State.SetStatus(Tracker.State._STATUS_DEAD)
+        self.LastEvent.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = TrackerID, TrackerAngle = Tracker.Position[2], TrackerScaling = 0, TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
         self.DeathTimes[Tracker.ID] = t
         self.AliveTrackers.remove(Tracker)
         self.JustDeadTrackers += [Tracker]
@@ -343,6 +346,9 @@ class StateClass:
     @property
     def Locked(self):
         return self.Status == self._STATUS_LOCKED
+    @property
+    def Dead(self):
+        return self.Status == self._STATUS_DEAD
 
     def GetMarker(self):
         return self._MARKERS[self.Properties]

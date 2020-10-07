@@ -66,7 +66,13 @@ class Framework:
         self._Initializing = False
         self.Paused = ''
 
-        self._LoadFiles(File1, File2, onlyRawData)
+        if File1 is None and File2 is None:
+            self._ProjectRawData = {}
+            self.ProjectFile = None
+            self._GenerateEmptyProject()
+        else:        
+            self._LoadFiles(File1, File2, onlyRawData)
+
 
         atexit.register(self._OnClosing)
 
@@ -100,41 +106,31 @@ class Framework:
             if ans != '':
                 self.SaveProject(ans)
 
+    def _GetParentModule(self, Tool):
+        ToolEventsRestriction = Tool.__CameraInputRestriction__
+        for InputToolName in reversed(self.ToolsList[:Tool.__ToolIndex__]):
+            InputTool = self.Tools[InputToolName]
+            if not ToolEventsRestriction:
+                return InputTool
+            if not InputTool.__CameraOutputRestriction__:
+                return InputTool
+            for CameraIndex in InputTool.__CameraOutputRestriction__:
+                if CameraIndex in ToolEventsRestriction:
+                    return InputTool
+        self._Log("{0} was unable to find its parent module".format(Tool.__Name__), 1)
+
     def _GetStreamGeometry(self, Tool):
         '''
         Method to retreive the geometry of the events handled by a tool
         '''
-        ToolEventsRestriction = Tool.__CameraIndexRestriction__
-        Geometry = np.array([0, 0, 0])
-        for InputToolName in self.ToolsList:
-            InputTool = self.Tools[InputToolName]
-            if InputTool.__Type__ == 'Input':
-                if InputTool.__Initialized__:
-                    if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
-                        Geometry = np.maximum(Geometry, InputTool.Geometry)
-                else:
-                    self._Log("Unable to retreive geometry from input tool {0}, possibly due to wrong tool order.".format(InputToolName), 1)
-        return Geometry
+        return self._GetParentModule(Tool).Geometry
 
     def _GetStreamFormattedName(self, Tool):
         '''
         Method to retreive a formatted name depending on the files providing events to this tool.
         Specifically useful for an Input type tool to get the file it has to process.
         '''
-        if Tool.__Type__ == 'Input':
-            return self.CurrentInputStreams[Tool.__Name__]
-
-        ToolEventsRestriction = Tool.__CameraIndexRestriction__
-        StreamsNames = []
-        for InputToolName in self.ToolsList:
-            InputTool = self.Tools[InputToolName]
-            if InputTool.__Type__ == 'Input':
-                if InputTool.__Initialized__:
-                    if not ToolEventsRestriction or InputTool.__CameraIndexRestriction__[0] in ToolEventsRestriction:
-                        StreamsNames += [InputTool.StreamName]
-                else:
-                    self._Log("Unable to retreive stream name from input tool {0}, possibly due to wrong tool order.".format(InputToolName), 1)
-        return '\n'.join(StreamsNames)
+        return self._GetParentModule(Tool).StreamName
 
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
@@ -208,7 +204,7 @@ class Framework:
     def _LoadFiles(self, File1, File2, onlyRawData):
         if File1 is None:
             File1, File2 = File2, File1
-        if (File1 is None and File2 is None) or (not File2 is None and File1.split('.')[-1] == File2.split('.')[-1]): # If they are both None (no input file) or both with the same extension
+        if (not File2 is None and File1.split('.')[-1] == File2.split('.')[-1]): # If they are both None (no input file) or both with the same extension
             print("Input error. Input files can be :")
             print("One project file (.{0}), to launch streams".format(self._PROJECT_FILE_EXTENSION))
             print("One data file (.{0}), to recover data".format(self._DATA_FILE_EXTENSION))
@@ -288,6 +284,7 @@ class Framework:
                 N += 1
                 StreamName = "DefaultStream_{0}".format(N)
         if not resume:
+            self.LastStartWarning = 0
             self.RunKwargs = dict(kwargs)
             self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
             if type(StreamName) == str:
@@ -354,6 +351,9 @@ class Framework:
                 if t is None:
                     t = self.PropagatedEvent.timestamp
                 if t < start_at:
+                    if t > self.LastStartWarning + 1.:
+                        self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at), ModuleName = self.ToolsList[0])
+                        self.LastStartWarning = t
                     break
             if not self.PropagatedEvent is None and not AtEventMethod is None:
                 AtEventMethod(self.PropagatedEvent)
@@ -384,35 +384,29 @@ class Framework:
         self.ToolsList = []
 
     def _LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
-        self.ProjectFile = ProjectFile
-        self._ProjectRawData = {}
-        self._GenerateEmptyProject()
-        if self.ProjectFile is None:
-            return
         self._LogType = 'raw'
+        self._GenerateEmptyProject()
 
-        if ProjectFile is None:
-            data = self._ProjectRawData
-        else:
-            data = pickle.load(open(ProjectFile, 'rb'))
-            self._ProjectRawData = data
+        if not ProjectFile is None:
+            self.ProjectFile = ProjectFile
+            self._ProjectRawData = pickle.load(open(self.ProjectFile, 'rb'))
 
         if onlyRawData:
             return None
 
-        for tool_name in data.keys():
-            fileLoaded = __import__(data[tool_name]['File'])
-            self._ToolsClasses[tool_name] = getattr(fileLoaded, data[tool_name]['Class'])
+        for tool_name in self._ProjectRawData.keys():
+            fileLoaded = __import__(self._ProjectRawData[tool_name]['File'])
+            self._ToolsClasses[tool_name] = getattr(fileLoaded, self._ProjectRawData[tool_name]['Class'])
 
-            self._ToolsCreationReferences[tool_name] = data[tool_name]['CreationReferences']
-            self._ToolsExternalParameters[tool_name] = data[tool_name]['ExternalParameters']
-            if 'CamerasHandled' in data[tool_name].keys(): # For previous version support
-                self._ToolsCamerasRestrictions[tool_name] = data[tool_name]['CamerasHandled']
+            self._ToolsCreationReferences[tool_name] = self._ProjectRawData[tool_name]['CreationReferences']
+            self._ToolsExternalParameters[tool_name] = self._ProjectRawData[tool_name]['ExternalParameters']
+            if 'CamerasHandled' in self._ProjectRawData[tool_name].keys(): # For previous version support
+                self._ToolsCamerasRestrictions[tool_name] = self._ProjectRawData[tool_name]['CamerasHandled']
             else:
                 self._ToolsCamerasRestrictions[tool_name] = []
 
-            self.ToolsOrder[tool_name] = data[tool_name]['Order']
-            self._Log("Imported tool {1} from file {0}.".format(data[tool_name]['File'], data[tool_name]['Class']))
+            self.ToolsOrder[tool_name] = self._ProjectRawData[tool_name]['Order']
+            self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[tool_name]['File'], self._ProjectRawData[tool_name]['Class']))
 
         if len(self.ToolsOrder.keys()) != 0:
             MaxOrder = max(self.ToolsOrder.values()) + 1
@@ -451,15 +445,16 @@ class Framework:
                     self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, tool_name, type(self.Tools[tool_name].__dict__[key]), value), 1)
             else:
                 self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name), 1)
-        self.Tools[tool_name].__CameraIndexRestriction__ = self._ToolsCamerasRestrictions[tool_name]
+        self.Tools[tool_name].__CameraInputRestriction__ = self._ToolsCamerasRestrictions[tool_name]
 
     def SaveProject(self, ProjectFile):
         GivenExtention = ProjectFile.split('.')[-1]
-        if GivenExtention:
+        if GivenExtention != self._PROJECT_FILE_EXTENSION:
             raise Exception("Enter log file with .{0} extension".format(self._PROJECT_FILE_EXTENSION))
         pickle.dump(self._ProjectRawData, open(ProjectFile, 'wb'))
         self.ProjectFile = ProjectFile
         self.Modified = False
+        self._Log("Project saved.", 3)
 
     def AddTool(self):
         self._Log("Current project :")
@@ -633,10 +628,15 @@ class Framework:
             filename = inspect.getfile(self.Tools[tool_name].__class__)
             self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1][:-2], filename), 3)
             self._Log("     Type : {0}".format(self.Tools[tool_name].__Type__))
-            if self.Tools[tool_name].__CameraIndexRestriction__:
-                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraIndexRestriction__]))
+            if self.Tools[tool_name].__CameraInputRestriction__:
+                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraInputRestriction__]))
             else:
                 self._Log("     Uses all cameras inputs.")
+            self.Tools[tool_name]._SetOutputCameraIndexes()
+            if self.Tools[tool_name].__CameraOutputRestriction__  and not self.Tools[tool_name].__CameraOutputRestriction__ == self.Tools[tool_name].__CameraInputRestriction__:
+                self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraOutputRestriction__]))
+            else:
+                self._Log("     Outputs the same camera indexes.")
             if self._ToolsCreationReferences[tool_name]:
                 self._Log("     Creation References:")
                 for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
@@ -718,7 +718,8 @@ class Module:
         self.__Initialized__ = False
         self.__RewindForbidden__ = False
         self.__SavedValues__ = {}
-        self.__CameraIndexRestriction__ = []
+        self.__CameraInputRestriction__ = []
+        self.__CameraOutputRestriction__ = []
         
         self._MonitoredVariables = []
         self._MonitorDt = 0
@@ -728,6 +729,35 @@ class Module:
             self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
         except:
             None
+
+    @property
+    def StreamName(self):
+        '''
+        Method to recover the name of the stream fed to this module.
+        Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
+        '''
+        if self.__Type__ == 'Input':
+            return self.__Framework__.CurrentInputStreams[self.__Name__]
+        else:
+            return self.__Framework__._GetStreamFormattedName(self)
+    @property
+    def Geometry(self):
+        '''
+        Method to recover the geometry of the stream fed to this module.
+        Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
+        '''
+        if self.__Type__ == 'Input':
+            return self.__Framework__.CurrentInputStreams[self.__Name__]
+        else:
+            return self.__Framework__._GetStreamGeometry(self)
+
+    def _SetOutputCameraIndexes(self):
+        '''
+        Method that sets the output camera Indexes by that module.
+        By default, the output camera indexes are the same as the input camera indexes.
+        Override this method for specific cases
+        '''
+        self.__CameraOutputRestriction__ = list(self.__CameraInputRestriction__)
 
     def __Initialize__(self, **kwargs):
         # First restore all prevous values
@@ -751,8 +781,10 @@ class Module:
         if not self._InitializeModule(**kwargs):
             return False
 
+        self._SetOutputCameraIndexes()
+
         # Finalize Module initialization
-        if self.__CameraIndexRestriction__ and self.__Type__ != 'Input':
+        if self.__CameraInputRestriction__ and self.__Type__ != 'Input':
             OnEventMethodUsed = self.__OnEventRestricted__
         else:
             OnEventMethodUsed = self._OnEventModule
@@ -812,7 +844,7 @@ class Module:
         pass
 
     def __OnEventRestricted__(self, event):
-        if event.cameraIndex in self.__CameraIndexRestriction__:
+        if event.cameraIndex in self.__CameraInputRestriction__:
             return self._OnEventModule(event)
         else:
             return event
@@ -1044,6 +1076,7 @@ class TrackerEvent(_EventExtension):
     _Key = 2
     _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
     _Defaults = {'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
+    _AutoPublic = True
 
 class EventOld:
     def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):

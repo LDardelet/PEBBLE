@@ -25,8 +25,9 @@ class Reader(Module):
         '''
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Input'
-        self.__CameraIndexRestriction__ = [0]
 
+        self._CameraIndex = 0
+        self._DatVersion = 2
         self._RemoveNegativeTimeDifferences = True
         self._SaveStream = False
         self._BatchEventSize = 1000
@@ -42,14 +43,19 @@ class Reader(Module):
         self._Rewinded = False
         self.CurrentFile = None
 
-    def _InitializeModule(self, **kwargs):
-        self._CloseFile()
-        self.StreamName = self.__Framework__._GetStreamFormattedName(self)
+    @property
+    def Geometry(self):
+        return self._Geometry
+    @Geometry.setter
+    def Geometry(self, value):
+        self._Geometry = value
 
-        if self.__CameraIndexRestriction__:
-            self._CameraIndex = self.__CameraIndexRestriction__[0]
-        else:
-            self._CameraIndex = 0
+    def _SetOutputCameraIndexes(self):
+        self.__CameraOutputRestriction__ = [self._CameraIndex]
+
+    def _InitializeModule(self, **kwargs):
+
+        self._CloseFile()
 
         if self._SaveStream:
             self.CurrentStream = []
@@ -328,19 +334,22 @@ class Reader(Module):
         atexit.register(self._CloseFile)
 
         self.tMask = 0x00000000FFFFFFFF
-        self.pMask = 0x1000000000000000
-        self.xMask = 0x00003FFF00000000
-        self.yMask = 0x0FFFC00000000000
-        self.pPadding = 60
-        self.yPadding = 46
-        self.xPadding = 32
+
+        if self._DatVersion == 2:
+            self.pMask = 0x1000000000000000
+            self.xMask = 0x00003FFF00000000
+            self.yMask = 0x0FFFC00000000000
+            self.pPadding = 60
+            self.yPadding = 46
+            self.xPadding = 32
         
-        #self.pMask = 0x0002000000000000
-        #self.xMask = 0x000001FF00000000
-        #self.yMask = 0x0001FE0000000000
-        #self.pPadding = 49
-        #self.yPadding = 41
-        #self.xPadding = 32
+        else:
+            self.pMask = 0x0002000000000000
+            self.xMask = 0x000001FF00000000
+            self.yMask = 0x0001FE0000000000
+            self.pPadding = 49
+            self.yPadding = 41
+            self.xPadding = 32
 
         # Analyzing file size
         start = self.CurrentFile.tell()

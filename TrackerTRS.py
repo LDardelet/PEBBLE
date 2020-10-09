@@ -262,7 +262,7 @@ class TrackerTRS(Module):
     def _KillTracker(self, Tracker, t, Reason=''):
         self.Log("Tracker {0} died".format(Tracker.ID) + int(bool(Reason)) * (" ("+Reason+")"))
         Tracker.State.SetStatus(Tracker.State._STATUS_DEAD)
-        self.LastEvent.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = TrackerID, TrackerAngle = Tracker.Position[2], TrackerScaling = 0, TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
+        self.LastEvent.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = Tracker.ID, TrackerAngle = Tracker.Position[2], TrackerScaling = 0, TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
         self.DeathTimes[Tracker.ID] = t
         self.AliveTrackers.remove(Tracker)
         self.JustDeadTrackers += [Tracker]

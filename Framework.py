@@ -885,7 +885,14 @@ class Module:
         else:
             if UsedType is None:
                 UsedType = type(self.__dict__[VarName])
-            return lambda event: UsedType(self.__dict__[VarName])
+            Key = VarName
+            if '.' in Key:
+                Key, Field = Key.split('.')
+                SubRetreiveMethod = lambda Instance: getattr(getattr(Instance, Key), Field)
+            else:
+                SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
+
+            return lambda event: UsedType(SubRetreiveMethod(self))
 
     def _Rewind(self, t):
         pass

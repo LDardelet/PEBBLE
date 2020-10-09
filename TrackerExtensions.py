@@ -222,8 +222,11 @@ class FeatureClass:
         self.CenterRelativePosition = np.array(InitialCenterRelativePosition)
         self.Trackers = [(InitialTracker, len(InitialTracker.LocksSaves)-1)]
 
-import cv2
-import imutils
+try:
+    import cv2
+    import imutils
+except ImportError:
+    print("Unable to import some python modules for TrackerExtensions") 
 
 class GTMakerClass:
     def __init__(self, TrackerManager, DiameterRatio = 1):

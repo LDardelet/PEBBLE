@@ -14,7 +14,9 @@ class Mapper(Module):
 
         self.__ReferencesAsked__ = []
         self._MonitorDt = 0.001 # By default, a module does not stode any date over time.
-        self._MonitoredVariables = [('CentralPoint.Pose', np.array)]
+        self._MonitoredVariables = [('CentralPoint.Pose', np.array),
+                                    ('AverageError', float),
+                                    ('SigmaError', float)]
 
     def _InitializeModule(self, **kwargs):
         self.Trackers = {}
@@ -23,6 +25,8 @@ class Mapper(Module):
         self.IsComputing = False
         self.Maps = []
         self.CurrentMap = None
+        self.AverageError = 0.
+        self.SigmaError = 0.
         return True
 
     def _OnEventModule(self, event):
@@ -52,7 +56,7 @@ class Mapper(Module):
         return event
 
     def AttachCentralPointPose(self, event):
-        event.Attach(TrackerEvent, TrackerLocation = np.array(self.CentralPoint.Location), TrackerID = 'C', TrackerAngle = self.CentralPoint.Angle, TrackerScaling = self.CentralPoint.Scaling, TrackerColor = 'g', TrackerMarker = 'X')
+        event.Attach(TrackerEvent, TrackerLocation = np.array(self.CentralPoint.Location), TrackerID = 'C', TrackerAngle = self.CentralPoint.Angle, TrackerScaling = self.CentralPoint.Scaling, TrackerColor = 'g', TrackerMarker = 'o')
 
     def StartMap(self, event):
         self.LogSuccess("Starting central point tracking")
@@ -99,11 +103,20 @@ class Mapper(Module):
         CosValue = (XOffsetsUnit * DeltaOffsetsUnit).sum(axis = 1).mean()
         Angle = np.arccos(CosValue)
         SinValue = (DeltaOffsetsUnit[:,0] * XOffsetsUnit[:,1] - DeltaOffsetsUnit[:,1] * XOffsetsUnit[:,0]).mean()
-        if SinValue <= 0:
+        if SinValue >= 0:
             Angle *= -1
         self.CentralPoint.SetRS(Angle, Scaling)
 
         self.CentralPoint.Location = AverageX - self.CentralPoint.WToCamMatrix.dot(AverageDelta)
+
+        self.ComputeAverageReprojectionError()
+
+    def ComputeAverageReprojectionError(self):
+        Errors = np.empty(len(self.ActiveTrackers))
+        for nTracker, TrackerID in enumerate(self.ActiveTrackers):
+            Errors[nTracker] = self.Trackers[TrackerID].ReprojectionError
+        self.AverageError = Errors.mean()
+        self.SigmaError = np.sqrt(((Errors - self.AverageError)**2).mean())
 
 import matplotlib.animation as animation
 
@@ -196,3 +209,8 @@ class ControlPointClass:
 
     def Update(self, TrackerLocation):
         self.CurrentLocation = np.array(TrackerLocation)
+
+    @property
+    def ReprojectionError(self):
+        Reprojection = self.CentralPoint.Location + self.CentralPoint.WToCamMatrix.dot(self.DeltaCenter)
+        return np.linalg.norm(Reprojection - self.CurrentLocation)

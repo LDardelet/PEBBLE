@@ -15,7 +15,7 @@ import ast
 from pydoc import locate
 
 class Framework:
-    _Terminal_Width = 250
+    _Terminal_Width = 300
     _Default_Color = '\033[0m'
     _LogColors = {0:'\033[0m', 1: "\033[1;33;40m", 2: "\033[1;31;40m", 3: "\033[1;32;40m"}
     _LOG_FILE_EXTENSION = 'log'
@@ -343,6 +343,7 @@ class Framework:
     def NextEvent(self, start_at, AtEventMethod = None):
         self.PropagatedEvent = None
         t = None
+        print("Next")
         for tool_name in self._RunToolsTuple:
             self.PropagatedEvent = self.Tools[tool_name].__OnEvent__(self.PropagatedEvent)
             if self.PropagatedEvent is None:
@@ -357,6 +358,7 @@ class Framework:
                     break
             if not self.PropagatedEvent is None and not AtEventMethod is None:
                 AtEventMethod(self.PropagatedEvent)
+            print(self.PropagatedEvent.timestamp)
         self._SendLog()
         return t
 

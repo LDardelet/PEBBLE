@@ -11,7 +11,7 @@ class Memory(Module):
         self.__Type__ = 'Memory'
 
         self._MonitorDt = 0. # By default, the memory module does NOT take any shapshot, to ensure memory doesn't get filled.
-        self._MonitoredVariables = [('STContext', np.array)]
+        self._MonitoredVariables = []
 
     def _InitializeModule(self, **kwargs):
 

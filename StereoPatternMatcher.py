@@ -13,6 +13,7 @@ class StereoPatternMatcher(Module):
         self._ActivityRadius = 6
         self._CleanupEvery = 0.1
         self._MetricMatch = 0.8
+        self._TCRatio = 1. / 3
         self._EpipolarMatrix = [[0., 0., 0.], [0., 0., 1.], [0., -1., 0.]]
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._MonitoredVariables = []
@@ -45,10 +46,8 @@ class StereoPatternMatcher(Module):
                     if not Tracker.ID in self.TrackersMatchers.keys():
                         self.TrackersMatchers[Tracker.ID] = TrackerMatcherClass(Tracker, self)
                         self.Log("Added matcher for tracker {0}".format(Tracker.ID))
-                    else:
-                        self.TrackersMatchers[Tracker.ID].UpdateTracker()
         for TrackerMatcher in self.TrackersMatchers.values():
-            TrackerMatcher.RunTrackerEvent(event.location)
+            TrackerMatcher.RunTrackerEvent(event.timestamp, event.location)
         if event.timestamp - self.LastCleanup > self._CleanupEvery:
             self.CleanupDeadTrackers()
             self.LastCleanup = event.timestamp
@@ -66,13 +65,16 @@ class TrackerMatcherClass:
     def __init__(self, Tracker, StereoModule):
         self.StereoModule = StereoModule
         self.Tracker = Tracker
-        self.LastUpdate = self.Tracker.LastUpdate
         self.StatedAt = self.Tracker.LastUpdate
 
         self.TrackerActivity = np.zeros(int(2*self.StereoModule._ActivityRadius+1))
         self.EpipolarActivity = np.zeros(self.StereoModule.UsedGeometry[0])
         self.TrackerDistance = np.zeros(int(2*self.StereoModule._ActivityRadius+1))
         self.EpipolarDistance = np.zeros(self.StereoModule.UsedGeometry[0])
+        self.TrackerSigma = np.zeros(int(2*self.StereoModule._ActivityRadius+1))
+        self.EpipolarSigma = np.zeros(self.StereoModule.UsedGeometry[0])
+        self.TrackerLastUpdate = -np.inf * np.ones(int(2*self.StereoModule._ActivityRadius+1))
+        self.EpipolarLastUpdate = -np.inf * np.ones(self.StereoModule.UsedGeometry[0])
         self.EpipolarEquation = self.StereoModule._EpipolarMatrix.dot(np.array([self.Tracker.Position[0], self.Tracker.Position[1], 1]))
         self.EpipolarEquation /= np.linalg.norm(self.EpipolarEquation[:2])
 
@@ -80,25 +82,49 @@ class TrackerMatcherClass:
         self.BestMatchValue = 0
         self.BestMatchError = None
 
-    def UpdateTracker(self):
+    def UpdateTracker(self, t, X_Proj):
         self.EpipolarEquation = self.StereoModule._EpipolarMatrix.dot(np.array([self.Tracker.Position[0], self.Tracker.Position[1], 1]))
         self.EpipolarEquation /= np.linalg.norm(self.EpipolarEquation[:2])
 
-        Delta = self.LastUpdate - self.Tracker.LastUpdate
-        Decay = np.e**(Delta / (self.Tracker.TimeConstant / 3))
-        self.TrackerActivity *= Decay
-        self.EpipolarActivity *= Decay
-        self.TrackerDistance *= Decay
-        self.EpipolarDistance*= Decay
+        DeltaTracker = self.TrackerLastUpdate[X_Proj] - t
+        DecayTracker = np.e**(DeltaTracker / (self.Tracker.TimeConstant * self.StereoModule._TCRatio))
+        self.TrackerActivity[X_Proj] *= DecayTracker
+        self.TrackerDistance[X_Proj] *= DecayTracker
+        self.TrackerSigma[X_Proj] *= DecayTracker
+        self.TrackerLastUpdate[X_Proj] = t
 
-        self.LastUpdate = self.Tracker.LastUpdate
+    def DecayTracker(self, t):
+        DeltaTracker = self.TrackerLastUpdate - t
+        DecayTracker = np.e**(DeltaTracker / (self.Tracker.TimeConstant * self.StereoModule._TCRatio))
+        self.TrackerActivity *= DecayTracker
+        self.TrackerDistance *= DecayTracker
+        self.TrackerSigma *= DecayTracker
+        self.TrackerLastUpdate[:] = t
 
-    def RunTrackerEvent(self, Location):
+    def UpdateEpipolar(self, t, X_Proj):
+        DeltaX_Proj = self.EpipolarLastUpdate[X_Proj] - t
+        DecayX_Proj = np.e**(DeltaX_Proj / (self.Tracker.TimeConstant * self.StereoModule._TCRatio))
+        self.EpipolarActivity[X_Proj] *= DecayX_Proj
+        self.EpipolarDistance[X_Proj] *= DecayX_Proj
+        self.EpipolarSigma[X_Proj] *= DecayX_Proj
+        self.EpipolarLastUpdate[X_Proj] = t
+
+    def DecayEpipolarPatch(self, t, X_Proj):
+        DeltaPatch = self.EpipolarLastUpdate[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1] - t
+        DecayPatch = np.e**(DeltaPatch / (self.Tracker.TimeConstant * self.StereoModule._TCRatio))
+        self.EpipolarActivity[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1] *= DecayPatch
+        self.EpipolarDistance[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1] *= DecayPatch
+        self.EpipolarSigma[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1] *= DecayPatch
+        self.EpipolarLastUpdate[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1] = t
+
+    def RunTrackerEvent(self, t, Location):
         VecDiff = Location - self.Tracker.Position[:2]
         if (abs(VecDiff)).max() <= self.StereoModule._ActivityRadius:
             X_Proj = int(VecDiff[0] + self.StereoModule._ActivityRadius)
+            self.UpdateTracker(t, X_Proj)
             self.TrackerActivity[X_Proj] += 1
-            self.TrackerDistance[X_Proj] += abs(VecDiff[1])
+            self.TrackerDistance[X_Proj] += VecDiff[1]
+            self.TrackerSigma[X_Proj] += (VecDiff[1] - self.TrackerDistance[X_Proj] / self.TrackerActivity[X_Proj]) ** 2
 
     def GetActivityMetric(self, X_Proj):
         LocalActivities = self.EpipolarActivity[X_Proj - self.StereoModule._ActivityRadius:X_Proj + self.StereoModule._ActivityRadius+1]
@@ -118,16 +144,20 @@ class TrackerMatcherClass:
         Distance = np.array([Location[0], Location[1], 1]).dot(self.EpipolarEquation)
         if abs(Distance) <= self.StereoModule._ActivityRadius:
             X_Proj = int(Location[0] + Distance * self.EpipolarEquation[0])
+            self.UpdateEpipolar(event.timestamp, X_Proj)
             if X_Proj >=0 and X_Proj < self.EpipolarActivity.shape[0]:
                 self.EpipolarActivity[X_Proj] += 1
-                self.EpipolarDistance[X_Proj] += abs(Distance)
+                self.EpipolarDistance[X_Proj] += Distance
+                self.EpipolarSigma[X_Proj] += (Distance - self.EpipolarDistance[X_Proj] / self.EpipolarActivity[X_Proj]) ** 2
         else:
             return
         
-        if self.LastUpdate - self.StatedAt < self.Tracker.TimeConstant:
+        if event.timestamp - self.StatedAt < self.Tracker.TimeConstant:
             return
 
         if X_Proj >= self.StereoModule._ActivityRadius and X_Proj < self.EpipolarActivity.shape[0] - self.StereoModule._ActivityRadius:
+            self.DecayEpipolarPatch(event.timestamp, X_Proj)
+            self.DecayTracker(event.timestamp)
             ActivityMetric = self.GetActivityMetric(X_Proj)
             DistanceMetric = self.GetDistanceMetric(X_Proj)
             MatchValue = ActivityMetric*DistanceMetric

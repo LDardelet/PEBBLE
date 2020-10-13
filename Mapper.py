@@ -1,6 +1,7 @@
 from Framework import Module, TrackerEvent
 import numpy as np
 import matplotlib.pyplot as plt
+import cv2
 
 class Mapper(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -11,22 +12,39 @@ class Mapper(Module):
         self.__Type__ = 'Computation'
 
         self._MinActiveTrackers = 8
+        self._MaxErrorAllowed = 4.
+        self._MaxMapValue = 10
 
         self.__ReferencesAsked__ = []
         self._MonitorDt = 0.001 # By default, a module does not stode any date over time.
-        self._MonitoredVariables = [('CentralPoint.Pose', np.array),
-                                    ('AverageError', float),
-                                    ('SigmaError', float)]
+        self._MonitoredVariables = [('Pose.Pose', np.array),
+                                    ('CamToWH', np.array),
+                                    ('AverageErrorVector', np.array),
+                                    ('SigmaErrorVector', np.array),
+                                    ('AverageErrorNorm', float),
+                                    ('SigmaErrorNorm', float),
+                                    ('TrustedAverageErrorNorm', float),
+                                    ('TrustedSigmaErrorNorm', float)]
 
     def _InitializeModule(self, **kwargs):
         self.Trackers = {}
         self.ActiveTrackers = set()
-        self.CentralPoint = CentralPointClass(self.Geometry[:2])
+        self.Pose = PoseClass(np.array(self.Geometry)[:2], self)
         self.IsComputing = False
         self.Maps = []
         self.CurrentMap = None
-        self.AverageError = 0.
-        self.SigmaError = 0.
+        self.AverageErrorVector = np.array([0., 0.])
+        self.SigmaErrorVector = np.array([0., 0.])
+        self.AverageErrorNorm = 0.
+        self.SigmaErrorNorm = 0.
+        self.TrustedAverageErrorNorm = 0.
+        self.TrustedSigmaErrorNorm = 0.
+
+        self.TrustedTrackers = set()
+
+        self.WToCamH = np.identity(3)
+        self.CamToWH = np.identity(3)
+
         return True
 
     def _OnEventModule(self, event):
@@ -35,20 +53,18 @@ class Mapper(Module):
                 if event.TrackerColor == 'g' and event.TrackerMarker == 'o':
                     if event.TrackerID in self.ActiveTrackers:
                         self.Trackers[event.TrackerID].Update(event.TrackerLocation)
-                        if self.IsComputing:
+                        if self.IsComputing and self.Trackers[event.TrackerID].TrustWorthy:
                             self.ComputeNewPose()
                             self.AttachCentralPointPose(event)
                     else:
-                        self.Trackers[event.TrackerID] = ControlPointClass(event.TrackerLocation, self.CentralPoint)
-                        self.ActiveTrackers.add(event.TrackerID)
-                        if not self.IsComputing and len(self.ActiveTrackers) >= self._MinActiveTrackers:
+                        self.Trackers[event.TrackerID] = ControlPointClass(event.TrackerLocation, event.TrackerID, self)
+                        if not self.IsComputing and len(self.TrustedTrackers) >= self._MinActiveTrackers:
                             self.StartMap(event)
                         elif self.IsComputing:
                             self.Trackers[event.TrackerID].Activate()
                 elif event.TrackerColor == 'k' and event.TrackerID in self.ActiveTrackers:
-                    self.ActiveTrackers.remove(event.TrackerID)
-                    self.Trackers[event.TrackerID].Enabled = False
-                    if self.IsComputing and len(self.ActiveTrackers) < self._MinActiveTrackers:
+                    self.Trackers[event.TrackerID].Disable()
+                    if self.IsComputing and len(self.TrustedTrackers) < self._MinActiveTrackers:
                         self.StopMap(event)
 
         if self.IsComputing:
@@ -56,13 +72,14 @@ class Mapper(Module):
         return event
 
     def AttachCentralPointPose(self, event):
-        event.Attach(TrackerEvent, TrackerLocation = np.array(self.CentralPoint.Location), TrackerID = 'C', TrackerAngle = self.CentralPoint.Angle, TrackerScaling = self.CentralPoint.Scaling, TrackerColor = 'g', TrackerMarker = 'o')
+        Pose = np.array(self.Pose.Pose)
+        event.Attach(TrackerEvent, TrackerLocation = Pose[:2], TrackerID = 'C', TrackerAngle = Pose[2], TrackerScaling = Pose[3], TrackerColor = 'g', TrackerMarker = 'o')
 
     def StartMap(self, event):
         self.LogSuccess("Starting central point tracking")
         self.AttachCentralPointPose(event)
         self.IsComputing = True
-        for TrackerID in self.ActiveTrackers:
+        for TrackerID in self.TrustedTrackers:
             self.Trackers[TrackerID].Activate()
         self.CurrentMap = MapClass(self, np.array(self.Geometry[:2]), event.timestamp)
         self.Maps += [self.CurrentMap]
@@ -74,49 +91,57 @@ class Mapper(Module):
         self.CurrentMap = None
 
     def ComputeNewPose(self):
-        Xs, Deltas = np.empty((len(self.ActiveTrackers), 2)), np.empty((len(self.ActiveTrackers), 2))
-        for nTracker, TrackerID in enumerate(self.ActiveTrackers):
+        XsIni, XsNow = np.empty((len(self.TrustedTrackers), 2)), np.empty((len(self.TrustedTrackers), 2))
+        for nTracker, TrackerID in enumerate(self.TrustedTrackers):
             ControlPoint = self.Trackers[TrackerID]
-            Xs[nTracker, :] = ControlPoint.CurrentLocation
-            Deltas[nTracker,:] = ControlPoint.DeltaCenter
-        AverageX = Xs.mean(axis = 0)
-        AverageDelta = Deltas.mean(axis = 0)
+            XsIni[nTracker, :] = ControlPoint.WLocation
+            XsNow[nTracker,:] = ControlPoint.CurrentLocation
+        
+        self.WToCamH = cv2.findHomography(XsIni, XsNow)[0]
+        self.CamToWH = np.linalg.inv(self.WToCamH)
 
-        XOffsets = np.empty(Xs.shape)
-        DeltaOffsets = np.empty(Deltas.shape)
-        XOffsets[:,0] = Xs[:,0] - AverageX[0]
-        XOffsets[:,1] = Xs[:,1] - AverageX[1]
-        DeltaOffsets[:,0] = Deltas[:,0] - AverageDelta[0]
-        DeltaOffsets[:,1] = Deltas[:,1] - AverageDelta[1]
-
-        Scaling = np.sqrt((XOffsets**2).sum() / (DeltaOffsets**2).sum())
-
-        XOffsetsNorms = np.linalg.norm(XOffsets, axis = 1)
-        DeltaOffsetsNorms = np.linalg.norm(DeltaOffsets, axis = 1)
-        XOffsetsUnit = np.empty(Xs.shape)
-        DeltaOffsetsUnit = np.empty(Deltas.shape)
-        XOffsetsUnit[:,0] = XOffsets[:,0] / XOffsetsNorms
-        XOffsetsUnit[:,1] = XOffsets[:,1] / XOffsetsNorms
-        DeltaOffsetsUnit[:,0] = DeltaOffsets[:,0] / DeltaOffsetsNorms
-        DeltaOffsetsUnit[:,1] = DeltaOffsets[:,1] / DeltaOffsetsNorms
-
-        CosValue = (XOffsetsUnit * DeltaOffsetsUnit).sum(axis = 1).mean()
-        Angle = np.arccos(CosValue)
-        SinValue = (DeltaOffsetsUnit[:,0] * XOffsetsUnit[:,1] - DeltaOffsetsUnit[:,1] * XOffsetsUnit[:,0]).mean()
-        if SinValue >= 0:
-            Angle *= -1
-        self.CentralPoint.SetRS(Angle, Scaling)
-
-        self.CentralPoint.Location = AverageX - self.CentralPoint.WToCamMatrix.dot(AverageDelta)
+        #N = np.zeros((len(self.TrustedTrackers)*2,5))
+        #for nTracker, TrackerID in enumerate(self.TrustedTrackers):
+        #    ControlPoint = self.Trackers[TrackerID]
+        #    N[2*nTracker,0] = ControlPoint.WLocation[1]
+        #    N[2*nTracker+1,0] = ControlPoint.WLocation[0]
+        #    N[2*nTracker,1] = ControlPoint.WLocation[0]
+        #    N[2*nTracker+1,1] = -ControlPoint.WLocation[1]
+        #    N[2*nTracker,3] = 1
+        #    N[2*nTracker+1,2] = 1
+        #    N[2*nTracker,4] = -ControlPoint.CurrentLocation[1]
+        #    N[2*nTracker+1,4] = -ControlPoint.CurrentLocation[0]
+        #U, S, V = np.linalg.svd(N)
+        #V = V[-1,:] / V[-1,-1]
+        #self.WToCamH = np.array([[V[0], -V[1], V[2]], [V[1], V[0], V[3]], [0, 0, 1]])
+        #self.CamToWH = np.linalg.inv(self.WToCamH) # Should be done in smarter way
 
         self.ComputeAverageReprojectionError()
 
     def ComputeAverageReprojectionError(self):
-        Errors = np.empty(len(self.ActiveTrackers))
+        Errors = np.empty((len(self.ActiveTrackers),2))
+        TrustedBools = np.empty(len(self.ActiveTrackers), dtype = int)
         for nTracker, TrackerID in enumerate(self.ActiveTrackers):
-            Errors[nTracker] = self.Trackers[TrackerID].ReprojectionError
-        self.AverageError = Errors.mean()
-        self.SigmaError = np.sqrt(((Errors - self.AverageError)**2).mean())
+            Errors[nTracker,:] = self.Trackers[TrackerID].ReprojectionError
+            TrustedBools[nTracker] = int(self.Trackers[TrackerID].TrustWorthy)
+        self.AverageErrorVector = Errors.mean(axis = 0)
+        DeltaVectors = np.array(Errors)
+        DeltaVectors[:,0] -= self.AverageErrorVector[0]
+        DeltaVectors[:,1] -= self.AverageErrorVector[1]
+        self.SigmaErrorVector = (DeltaVectors**2).mean(axis = 0)
+        ErrorsNorms = np.linalg.norm(Errors, axis = 1)
+        self.AverageErrorNorm = ErrorsNorms.mean()
+        self.SigmaErrorNorm = np.sqrt(((ErrorsNorms - self.AverageErrorNorm)**2).mean())
+        TrustedErrors = (ErrorsNorms * TrustedBools)
+        self.TrustedAverageErrorNorm = TrustedErrors.sum() / TrustedBools.sum()
+        self.TrustedSigmaErrorNorm = np.sqrt(((TrustedBools * (TrustedErrors - self.TrustedAverageErrorNorm))**2).sum() / TrustedBools.sum())
+
+    def ToW(self, Location):
+        PLocation = self.CamToWH.dot(np.array([Location[0], Location[1], 1]))
+        return PLocation[:2] / PLocation[-1]
+    def ToCam(self, Location):
+        PLocation = self.WToCamH.dot(np.array([Location[0], Location[1], 1]))
+        return PLocation[:2] / PLocation[-1]
 
 import matplotlib.animation as animation
 
@@ -125,92 +150,153 @@ class MapClass:
         self.StartTs = t
         self.EndTs = None
         self.Mapper = Mapper
-        self.CP = Mapper.CentralPoint
         self.Geometry = Geometry
         self.SubMaps = {}
 
     def OnEvent(self, location):
-        WLocation = (self.CP.CamToWMatrix.dot(location - self.CP.Location)).astype(int)
+        WLocation = self.Mapper.ToW(location).astype(int)
         SubMapArray = (WLocation // self.Geometry)
         SubMapTuple = tuple(SubMapArray)
         if not SubMapTuple in self.SubMaps.keys():
-            self.SubMaps[SubMapTuple] = np.zeros(self.Geometry, dtype = int)
+            self.SubMaps[SubMapTuple] = np.zeros(self.Geometry)
             self.Mapper.Log("Created submap {0}".format(SubMapTuple))
         SubMapOffset = self.Geometry * SubMapArray
         SubMapEventLocation = WLocation - SubMapOffset
-        self.SubMaps[SubMapTuple][SubMapEventLocation[0], SubMapEventLocation[1]] += 1
+        x = self.SubMaps[SubMapTuple][SubMapEventLocation[0], SubMapEventLocation[1]]
+        if x < self.Mapper._MaxMapValue:
+            self.SubMaps[SubMapTuple][SubMapEventLocation[0], SubMapEventLocation[1]] = min( x + np.e**(-self.Mapper.AverageErrorNorm), self.Mapper._MaxMapValue)
 
-    def ShowMeWhatYouGot(self, Animate = True):
+    @property
+    def XMin(self):
         SubMapIndexes = np.array(list(self.SubMaps.keys()))
-        XMin, YMin = SubMapIndexes.min(axis = 0)
-        XMax, YMax = SubMapIndexes.max(axis = 0)
-        FullMap = np.empty(self.Geometry * np.array([XMax - XMin + 1, YMax - YMin + 1]), dtype = int)
+        return SubMapIndexes[:,0].min()
+    @property
+    def YMin(self):
+        SubMapIndexes = np.array(list(self.SubMaps.keys()))
+        return SubMapIndexes[:,1].min()
+    @property
+    def XMax(self):
+        SubMapIndexes = np.array(list(self.SubMaps.keys()))
+        return SubMapIndexes[:,0].max()
+    @property
+    def YMax(self):
+        SubMapIndexes = np.array(list(self.SubMaps.keys()))
+        return SubMapIndexes[:,1].max()
+    @property
+    def FullMap(self):
+        FullMap = np.zeros(self.Geometry * np.array([self.XMax - self.XMin + 1, self.YMax - self.YMin + 1]))
         for Indexes, SubMap in self.SubMaps.items():
-            FullMap[(Indexes[0] - XMin)*self.Geometry[0]:(Indexes[0] - XMin + 1)*self.Geometry[0], (Indexes[1] - YMin)*self.Geometry[1]:(Indexes[1] - YMin + 1)*self.Geometry[1]] = SubMap
-        f, ax = plt.subplots(1,1)
-        ax.imshow(np.transpose(FullMap), origin = 'lower', cmap = 'binary', extent = (XMin * self.Geometry[0], (XMax+1) * self.Geometry[0], YMin * self.Geometry[1], (YMax+1) * self.Geometry[1]))
+            FullMap[(Indexes[0] - self.XMin)*self.Geometry[0]:(Indexes[0] - self.XMin + 1)*self.Geometry[0], (Indexes[1] - self.YMin)*self.Geometry[1]:(Indexes[1] - self.YMin + 1)*self.Geometry[1]] = SubMap
+        return FullMap
 
-        StaticCorners = [np.array([0, 0]), np.array([0, self.Geometry[1]]), np.array([self.Geometry[0], self.Geometry[1]]), np.array([self.Geometry[0], 0])]
-        
+    def ShowMeWhatYouGot(self, tMin = 0., AddReprojection = True, MapTransformationFunction = None):
+        f, ax = plt.subplots(1,1)
+        XMin, YMin, XMax, YMax = self.XMin, self.YMin, self.XMax, self.YMax
+        if not MapTransformationFunction is None:
+            FM = MapTransformationFunction(self.FullMap)
+        else:
+            FM = self.FullMap
+        ax.imshow(np.transpose(FM), origin = 'lower', cmap = 'binary', extent = (XMin * self.Geometry[0], (XMax+1) * self.Geometry[0], YMin * self.Geometry[1], (YMax+1) * self.Geometry[1]))
+
         for nX in range(XMin, XMax):
             ax.plot([(nX+1)*self.Geometry[0], (nX+1)*self.Geometry[0]], [YMin * self.Geometry[1], (YMax+1) * self.Geometry[1]], '--k')
         for nY in range(YMin, YMax):
             ax.plot([XMin * self.Geometry[0], (XMax+1) * self.Geometry[0]], [(nY+1)*self.Geometry[1], (nY+1)*self.Geometry[1]], '--k')
 
-        CornersLines = []
-        for nCornerr in range(4):
-            CornersLines += ax.plot([0, 0], [0, 0], 'g')
-        self._Animate = Animate
-        def handle_close(event):
-            self._Animate = False
-        f.canvas.mpl_connect('close_event', handle_close)
-        while self._Animate:
-            for t, CPPose in zip(self.Mapper.History['t'], self.Mapper.History['CentralPoint.Pose']):
-                Angle, Scaling = CPPose[2:]
-                c, s = np.cos(Angle), np.sin(Angle)
-                CamToWMatrix = np.array([[c, s], [-s, c]]) / Scaling
-                Corners = [CamToWMatrix.dot(Corner) - CPPose[:2] for Corner in StaticCorners]
-                for nCorner, Corner in enumerate(Corners):
-                    CornersLines[nCorner].set_data([Corner[0], Corners[(nCorner+1)%4][0]], [Corner[1], Corners[(nCorner+1)%4][1]])
-                ax.set_title("t = {0:.3f}".format(t))
-                plt.pause(0.001)
+        ax.plot(self.Mapper.Pose.InitialLocation[0], self.Mapper.Pose.InitialLocation[1], 'ob', markersize = 10)
+        for TrackerID, Tracker in self.Mapper.Trackers.items():
+            if not Tracker.Enabled:
+                continue
+            if Tracker.TrustWorthy:
+                color = 'g'
+            else:
+                color = 'r'
+            ax.plot(Tracker.WLocation[0], Tracker.WLocation[1], marker = 'o', color = color, markersize = 6)
+            ax.text(Tracker.WLocation[0]+3, Tracker.WLocation[1]+3, str(TrackerID), color=color, fontsize = 10)
+            if AddReprojection:
+                RP = np.array(Tracker.WorldReprojection)
+                ax.plot([Tracker.WLocation[0], RP[0]], [Tracker.WLocation[1], RP[1]], color)
 
-
-
-class CentralPointClass:
-    def __init__(self, ScreenGeometry):
-        self.InitialLocation = np.array(ScreenGeometry) / 2
-
-        self.Location = np.array(self.InitialLocation)
-        self.SetRS(0., 1.)
-
-    def SetRS(self, Angle, Scaling):
-        self.Angle = Angle
-        self.Scaling = Scaling
-
-        c, s = np.cos(self.Angle), np.sin(self.Angle)
-        self.WToCamMatrix = np.array([[c, -s], [s, c]]) * self.Scaling
-        self.CamToWMatrix = np.array([[c, s], [-s, c]]) / self.Scaling
-
-    def __repr__(self):
-        return self.Pose
-    @property
-    def Pose(self):
-        return np.array([self.Location[0], self.Location[1], self.Angle, self.Scaling])
+        Corners = list(self.Mapper.Pose.Corners)
+        for C1, C2 in zip(Corners, [Corners[-1]] + Corners[:-1]):
+            ax.plot([C1[0], C2[0]], [C1[1], C2[1]], 'g')
 
 class ControlPointClass:
-    def __init__(self, InitialObservation, CentralPoint):
-        self.Enabled = True
+    def __init__(self, InitialObservation, ID, Mapper):
+        self.Enabled = False
+        self.TrustWorthy = True
+        self.ID = ID
         self.CurrentLocation = np.array(InitialObservation)
-        self.CentralPoint = CentralPoint
+        self.Mapper = Mapper
+        self.Mapper.TrustedTrackers.add(self.ID)
 
     def Activate(self):
-        self.DeltaCenter = self.CentralPoint.CamToWMatrix.dot(self.CurrentLocation - self.CentralPoint.Location)
+        self.WLocation = self.Mapper.ToW(self.CurrentLocation)
+        self.Enabled = True
+        self.Mapper.ActiveTrackers.add(self.ID)
+    def Disable(self):
+        self.Mapper.ActiveTrackers.remove(self.ID)
+        self.Enabled = False
+        if self.TrustWorthy:
+            self.Mapper.TrustedTrackers.remove(self.ID)
+            self.TrustWorthy = False
 
     def Update(self, TrackerLocation):
         self.CurrentLocation = np.array(TrackerLocation)
 
     @property
+    def CameraReprojection(self):
+        return self.Mapper.ToCam(self.WLocation)
+    @property
     def ReprojectionError(self):
-        Reprojection = self.CentralPoint.Location + self.CentralPoint.WToCamMatrix.dot(self.DeltaCenter)
-        return np.linalg.norm(Reprojection - self.CurrentLocation)
+        Error = self.CameraReprojection - self.CurrentLocation
+        ErrorNorm = np.linalg.norm(Error)
+        if self.TrustWorthy and ErrorNorm > self.Mapper._MaxErrorAllowed:
+            self.Mapper.TrustedTrackers.remove(self.ID)
+            self.TrustWorthy = False
+            self.Mapper.LogWarning("CP {0} can't be trusted any more".format(self.ID))
+        elif not self.TrustWorthy and ErrorNorm <= self.Mapper._MaxErrorAllowed:
+            self.Mapper.TrustedTrackers.add(self.ID)
+            self.TrustWorthy = True
+        return Error
+    @property
+    def WorldReprojection(self):
+        return self.Mapper.ToW(self.CurrentLocation)
+
+class PoseClass:
+    def __init__(self, Geometry, Mapper):
+        self.InitialLocation = Geometry / 2
+        self.OffsetNorm = 100
+        self.ControlPoint = self.InitialLocation + np.array([1, 0]) * self.OffsetNorm
+        self.Mapper = Mapper
+
+        self.StaticCorners = [np.array([0, 0]), np.array([0, Geometry[1]]), np.array([Geometry[0], Geometry[1]]), np.array([Geometry[0], 0])]
+    def __repr__(self):
+        return self.Pose, self.Vector
+
+    @property
+    def Center(self):
+        return self.Mapper.ToCam(self.InitialLocation)
+    @property
+    def Vector(self):
+        return self.Mapper.ToCam(self.ControlPoint)
+    @property
+    def Pose(self):
+        Pose = np.empty(4)
+        Pose[:2] = self.Center
+        ControlVector = (self.Vector - Pose[:2])
+        Pose[3] = np.linalg.norm(ControlVector) / self.OffsetNorm
+        if ControlVector[0] == 0:
+            if ControlVector[1] > 0:
+                Pose[2] = np.pi/2
+            else:
+                Pose[2] = -np.pi/2
+        else:
+            Pose[2] = np.arctan(ControlVector[1]/ControlVector[0])
+            if ControlVector[0] < 0:
+                Pose[2] += np.pi
+        return Pose
+
+    @property
+    def Corners(self):
+        return [self.Mapper.ToW(Corner) for Corner in self.StaticCorners]

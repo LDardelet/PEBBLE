@@ -10,6 +10,7 @@ class ModuleTemplate(Module):
 
         self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
+        self._NeedsLogColumn = False
         self._MonitoredVariables = []
 
     def _InitializeModule(self, **kwargs):

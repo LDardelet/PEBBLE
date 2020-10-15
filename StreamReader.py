@@ -41,6 +41,7 @@ class Reader(Module):
         self._TxtPosNegPolarities = False
 
         self._Rewinded = False
+        self._NeedsLogColumn = False
         self.CurrentFile = None
 
     @property
@@ -51,6 +52,11 @@ class Reader(Module):
         self._Geometry = value
 
     def _SetOutputCameraIndexes(self):
+        if self.__CameraInputRestriction__:
+            if len(self.__CameraInputRestriction__) == 1:
+                self._CameraIndex = self.__CameraInputRestriction__[0]
+            else:
+                self.LogWarning("Unvalid cameras index for this module")
         self.__CameraOutputRestriction__ = [self._CameraIndex]
 
     def _InitializeModule(self, **kwargs):
@@ -64,9 +70,6 @@ class Reader(Module):
             self._StorageFunction = self._DoNothing
             self.__RewindForbidden__ = True
         self.TsOffset = None
-
-        self.NextOwnEvent = None
-        self.PreviousCamsEventsBuffer = []
 
         if '.dat' in self.StreamName:
             self._NextEvent = self._NextEventDat
@@ -87,39 +90,24 @@ class Reader(Module):
     def _OnEventModule(self, event):
         self.nEvent += 1
 
-        if self.NextOwnEvent is None:
-            if not self._Rewinded:
-                self.NextOwnEvent = self._NextEvent()
+        if not self._Rewinded:
+            self.NextOwnEvent = self._NextEvent()
+        else:
+            if self.nEvent < len(self.CurrentStream):
+                self.NextOwnEvent = self.CurrentStream[self.nEvent]
             else:
-                if self.nEvent < len(self.CurrentStream):
-                    self.NextOwnEvent = self.CurrentStream[self.nEvent]
-                else:
-                    self._Rewinded = False
-                    self.NextOwnEvent = self._NextEvent()
-            if not self.NextOwnEvent is None:
-                self.NextOwnEvent.cameraIndex = self._CameraIndex
-            if not self._Rewinded:
-                # Possibly save the event
-                self._StorageFunction(self.NextOwnEvent)
+                self._Rewinded = False
+                self.NextOwnEvent = self._NextEvent()
+        if not self.NextOwnEvent is None:
+            self.NextOwnEvent.cameraIndex = self._CameraIndex
+        if not self._Rewinded:
+            # Possibly save the event
+            self._StorageFunction(self.NextOwnEvent)
         
         if self.__Framework__.Running:
-            
-            # Incase several cameras input are set, one previous reader may have sent an event.
-            if event is None:
-                SentEvent = self.NextOwnEvent
-                self.NextOwnEvent = None
-            elif self.NextOwnEvent is None:
-                SentEvent = event
-            else:
-                self.PreviousCamsEventsBuffer += [event]
-                if self.NextOwnEvent.timestamp > self.PreviousCamsEventsBuffer[0].timestamp:
-                    SentEvent = self.PreviousCamsEventsBuffer.pop(0)
-                else:
-                    SentEvent = self.NextOwnEvent
-                    self.NextOwnEvent = None
+            return self.NextOwnEvent
         else:
-            SentEvent = None
-        return SentEvent
+            return None
 
     def FastForward(self, t):
         try:

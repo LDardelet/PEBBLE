@@ -80,18 +80,25 @@ class Framework:
     def Initialize(self, **ArgsDict):
         self._Initializing = True
         self.PropagatedEvent = None
+        self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
+        if len(self.InputEvents) == 1:
+            self._NextInputEvent = self._SingleInputModuleNextInputEvent
+            del self.__dict__['InputEvents']
+        else:
+            self._NextInputEvent = self._MultipleInputModulesNextInputEvent
+
         self._LogType = 'columns'
         self._LogInit()
-        for tool_name in self.ToolsList:
+        for ToolName in self.ToolsList:
             ToolArgsDict = {}
             for key, value in ArgsDict.items():
-                if tool_name in key or key[0] == '_':
+                if ToolName in key or key[0] == '_':
                     ToolArgsDict['_'+'_'.join(key.split('_')[1:])] = value
-            InitializationAnswer = Module.__Initialize__(self.Tools[tool_name], **ToolArgsDict)
+            InitializationAnswer = Module.__Initialize__(self.Tools[ToolName], **ToolArgsDict)
             if not InitializationAnswer:
-                self._Log("Tool {0} failed to initialize. Aborting.".format(tool_name), 2)
+                self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
                 return False
-        self._RunToolsTuple = tuple(self.ToolsList) # Faster way to access tools in the right order
+        self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ != 'Input']) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
         self._SendLog()
@@ -151,10 +158,7 @@ class Framework:
                 self._LogOut = open(LogFile, 'w')
             self._LastLogOut = self._LogOut
         if self._LogType == 'columns':
-            if len(self.ToolsList) > 6:
-                self._LogType = 'raw'
-            else:
-                self._LogInit(resume)
+            self._LogInit(resume)
         self._RunProcess(StreamName = StreamName, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod, **kwargs)
         if not self._LogOut is self._SessionLog:
             self._LogOut.close()
@@ -316,11 +320,12 @@ class Framework:
         self.Running = True
         self.Paused = ''
         if resume:
-            for tool_name in self._RunToolsTuple:
+            for tool_name in self.ToolsList:
                 self.Tools[tool_name]._Resume()
 
         while self.Running and not self.Paused:
             t = self.NextEvent(start_at, AtEventMethod)
+            self._SendLog()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
@@ -333,7 +338,7 @@ class Framework:
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1)
-                for tool_name in self._RunToolsTuple:
+                for tool_name in self.ToolsList:
                     self.Tools[tool_name]._Pause(self.Paused)
 
     def Resume(self, stop_at = np.inf):
@@ -341,26 +346,45 @@ class Framework:
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
     def NextEvent(self, start_at, AtEventMethod = None):
-        self.PropagatedEvent = None
-        t = None
-        print("Next")
-        for tool_name in self._RunToolsTuple:
-            self.PropagatedEvent = self.Tools[tool_name].__OnEvent__(self.PropagatedEvent)
+        self.PropagatedEvent = self._NextInputEvent()
+        if self.PropagatedEvent is None:
+            return None
+        t = self.PropagatedEvent.timestamp
+        if t < start_at:
+            if t > self.LastStartWarning + 1.:
+                self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at), ModuleName = self.ToolsList[0])
+                self.LastStartWarning = t
+            return t
+        for RunMethod in self._RunToolsMethodTuple:
+            self.PropagatedEvent = RunMethod(self.PropagatedEvent)
             if self.PropagatedEvent is None:
                 break
-            else:
-                if t is None:
-                    t = self.PropagatedEvent.timestamp
-                if t < start_at:
-                    if t > self.LastStartWarning + 1.:
-                        self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at), ModuleName = self.ToolsList[0])
-                        self.LastStartWarning = t
-                    break
             if not self.PropagatedEvent is None and not AtEventMethod is None:
                 AtEventMethod(self.PropagatedEvent)
-            print(self.PropagatedEvent.timestamp)
-        self._SendLog()
         return t
+
+    def _SingleInputModuleNextInputEventMethod(self):
+        return self.ToolsList[0].__OnEvent__(None)
+
+    def _MultipleInputModulesNextInputEvent(self):
+        OldestEvent, ModuleSelected = None, None
+        for InputName, EventAwaiting in self.InputEvents.items():
+            if EventAwaiting is None:
+                EventAwaiting = self.Tools[InputName].__OnEvent__(None)
+            else:
+                self.InputEvents[InputName] = None
+            if not EventAwaiting is None:
+                if OldestEvent is None:
+                    OldestEvent = EventAwaiting
+                    ModuleSelected = InputName
+                else:
+                    if EventAwaiting < OldestEvent:
+                        self.InputEvents[ModuleSelected] = OldestEvent
+                        ModuleSelected = InputName
+                        OldestEvent = EventAwaiting
+                    else:
+                        self.InputEvents[InputName] = EventAwaiting
+        return OldestEvent
 
     def Rewind(self, t):
         ForbiddingModules = []
@@ -655,8 +679,15 @@ class Framework:
             
             nOrder += 1
 
-    def _Log(self, Message, MessageType = 0, ModuleName = 'Framework', Raw = False, AutoSendIfPaused = True):
+    def _Log(self, Message, MessageType = 0, Module = None, Raw = False, AutoSendIfPaused = True):
         if self._LogType == 'columns' and not Raw:
+            if Module is None:
+                ModuleName = 'Framework'
+            elif not Module._NeedsLogColumn:
+                ModuleName = 'Framework'
+                Message = Module.__Name__ + ": " + Message
+            else:
+                ModuleName = Module.__Name__
             if self._LogT is None:
                 if not self.PropagatedEvent is None:
                     self._LogT = self.PropagatedEvent.timestamp
@@ -671,6 +702,10 @@ class Framework:
             if (not self.Running or self.Paused) and AutoSendIfPaused and not self._Initializing:
                 self._SendLog()
         elif self._LogType == 'raw' or Raw:
+            if Module is None:
+                ModuleName = 'Framework'
+            else:
+                ModuleName = Module.__Name__
             Message = self._LogColors[MessageType] + int(bool(Message))*(ModuleName + ': ') + Message
             self._LogOut.write(Message + self._LogColors[0] + "\n")
     def _SendLog(self):
@@ -682,7 +717,7 @@ class Framework:
                 CurrentLine += self._EventLogs['Framework'].pop(0)
             else:
                 CurrentLine += self._MaxColumnWith*' '
-            for ToolName in self.ToolsList:
+            for ToolName in self._LogsColumns[1:]:
                 if self._EventLogs[ToolName]:
                     CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ToolName].pop(0)
                 else:
@@ -693,12 +728,13 @@ class Framework:
     def _LogInit(self, Resume = False):
         self._HasLogs = 2
         self._LogT = None
-        self._MaxColumnWith = int((self._Terminal_Width - len(self.ToolsList)*3 ) / (len(self.ToolsList) + 1))
+        self._LogsColumns = [ToolName for ToolName in ['Framework'] + self.ToolsList if (ToolName == 'Framework' or self.Tools[ToolName]._NeedsLogColumn)]
+        self._MaxColumnWith = int((self._Terminal_Width - len(self._LogsColumns)*3 ) / len(self._LogsColumns))
         if not Resume:
-            self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in ['Framework'] + self.ToolsList}
+            self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in self._LogsColumns}
             self._SendLog()
         else:
-            self._EventLogs = {ToolName:[] for ToolName in ['Framework'] + self.ToolsList}
+            self._EventLogs = {ToolName:[] for ToolName in self._LogsColumns}
     def _LogReset(self):
         self._EventLogs = {ToolName:[] for ToolName in self._EventLogs.keys()}
         self._HasLogs = 0
@@ -725,6 +761,7 @@ class Module:
         
         self._MonitoredVariables = []
         self._MonitorDt = 0
+        self._NeedsLogColumn = True
         self.__LastMonitoredTimestamp = -np.inf
         
         try:
@@ -976,7 +1013,7 @@ class Module:
         Message :  str, message specific to the module
         MessageType : int. 0 for simple information, 1 for warning, 2 for error, stopping the stream, 3 for green highlight
         '''
-        self.__Framework__._Log(Message, MessageType, self.__Name__)
+        self.__Framework__._Log(Message, MessageType, self)
     def LogWarning(self, Message):
         self.Log(Message, 1)
     def LogError(self, Message):
@@ -1046,6 +1083,20 @@ class BareEvent:
             self._RunningExtensions = None
             raise StopIteration
 
+    def __eq__(self, rhs):
+        return self.timestamp == rhs.timestamp
+    def __lt__(self, rhs):
+        return self.timestamp < rhs.timestamp
+    def __le__(self, rhs):
+        return self.timestamp <= rhs.timestamp
+    def __gt__(self, rhs):
+        return self.timestamp > rhs.timestamp
+    def __ge__(self, rhs):
+        return self.timestamp >= rhs.timestamp
+    def __repr__(self):
+        return "{0:.3f}s".format(self.timestamp)
+
+
     def Copy(self):
         SelfDict = {Key: getattr(self, Key) for Key in self._Fields}
         NewInstance = self.__class__(**SelfDict)
@@ -1085,6 +1136,11 @@ class TrackerEvent(_EventExtension):
     _Key = 2
     _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
     _Defaults = {'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
+    _AutoPublic = True
+
+class DisparityEvent(_EventExtension):
+    _Key = 3
+    _Fields = ['Disparity']
     _AutoPublic = True
 
 class EventOld:

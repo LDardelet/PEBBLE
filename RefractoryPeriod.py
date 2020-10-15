@@ -13,6 +13,8 @@ class Refractory(Module):
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Filter'
 
+        self._NeedsLogColumn = False
+
         self._Period = 0.03 # Given is seconds
         self._Active = True
 

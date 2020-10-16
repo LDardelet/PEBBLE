@@ -32,6 +32,7 @@ class DenseStereo(Module):
 
         self.Maps = [AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau)]
         self.ComparisonPoints = [[],[]]
+        self.DisparitiesFound = []
 
         return True
 
@@ -59,13 +60,16 @@ class DenseStereo(Module):
             Distance = np.array([event.location[0], event.location[1], 1]).dot(CP[2]) # Compute distance from this point to the compared point epipolar line
             if abs(Distance) <= self._ComparisonRadius:
                 ProjectedEvent = (event.location - Distance * CP[2][:2]).astype(int) # Recover the location of point on the epipolar line that corresponds to this event
+                if ProjectedEvent[0] == CP[0][0]: # We just want to avoid infinite disparity values
+                    continue
 
                 EventSignatures = self.Maps[event.cameraIndex].GetSignatures(ProjectedEvent, event.timestamp) # Recover specific signatures of the map on that epipolar line for that CP on the other camera
                 CPSignatures = self.Maps[1-event.cameraIndex].GetSignatures(CP[0], event.timestamp)
 
                 if self.Match(EventSignatures, CPSignatures):
-                    self.LogSuccess("Matched y = {0}, x[0] = {{{1}}} & x[1] = {{{2}}}".format(ProjectedEvent[1], 1-event.cameraIndex, event.cameraIndex).format(CP[0][0], event.location[0]))
-                    event.Attach(DisparityEvent, Disparity = 1./abs(event.location[0] - ProjectedEvent[0]))
+                    event.Attach(DisparityEvent, disparity = 1./abs(event.location[0] - CP[0][0]))
+                    self.LogSuccess("Matched y = {0}, x[0] = {{{1}}} & x[1] = {{{2}}}, d = {3:.3f}".format(ProjectedEvent[1], 1-event.cameraIndex, event.cameraIndex, event.disparity).format(CP[0][0], event.location[0]))
+                    self.DisparitiesFound += [(event.timestamp, np.array(event.location), event.disparity)]
                     Matched += [nCP]
         for nCP in reversed(Matched):
             self.ComparisonPoints[1-event.cameraIndex].pop(nCP)
@@ -114,8 +118,9 @@ class AnalysisMapClass:
 
     def GetSignatures(self, location, t):
         XMin, XMax = max(0, location[0] - self.Radius), min(self.UsableGeometry[0], location[0] + self.Radius+1)
-        DeltaRow = self.LastUpdateMap[XMin:XMax,location[1]] - t
+        YUsed = location[1] - self.Radius
+        DeltaRow = self.LastUpdateMap[XMin:XMax,YUsed] - t
         DecayRow = np.e**(DeltaRow / self.Tau)
         
-        return self.ActivityMap[XMin:XMax,location[1]] * DecayRow, self.DistanceMap[XMin:XMax,location[1]] / np.maximum(0.001, self.ActivityMap[XMin:XMax,location[1]]), self.SigmaMap[XMin:XMax,location[1]] / np.maximum(0.001, self.ActivityMap[XMin:XMax,location[1]])
+        return self.ActivityMap[XMin:XMax,YUsed] * DecayRow, self.DistanceMap[XMin:XMax,YUsed] / np.maximum(0.001, self.ActivityMap[XMin:XMax,YUsed]), self.SigmaMap[XMin:XMax,YUsed] / np.maximum(0.001, self.ActivityMap[XMin:XMax,YUsed])
 

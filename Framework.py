@@ -15,7 +15,6 @@ import ast
 from pydoc import locate
 
 class Framework:
-    _Terminal_Width = 300
     _Default_Color = '\033[0m'
     _LogColors = {0:'\033[0m', 1: "\033[1;33;40m", 2: "\033[1;31;40m", 3: "\033[1;32;40m"}
     _LOG_FILE_EXTENSION = 'log'
@@ -57,6 +56,7 @@ class Framework:
             atexit.register(self._SessionLog.close)
         self._LogOut = self._SessionLog
         self._LastLogOut = self._SessionLog
+        self._Terminal_Width = int(os.popen('stty size', 'r').read().split()[1])
         
         self.Modified = False
         self.StreamHistory = []
@@ -1140,7 +1140,7 @@ class TrackerEvent(_EventExtension):
 
 class DisparityEvent(_EventExtension):
     _Key = 3
-    _Fields = ['Disparity']
+    _Fields = ['disparity']
     _AutoPublic = True
 
 class EventOld:

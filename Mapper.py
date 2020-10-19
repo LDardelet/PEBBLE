@@ -1,4 +1,4 @@
-from Framework import Module, TrackerEvent
+from Framework import Module, TrackerEvent, CameraPoseEvent
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
@@ -74,6 +74,7 @@ class Mapper(Module):
     def AttachCentralPointPose(self, event):
         Pose = np.array(self.Pose.Pose)
         event.Attach(TrackerEvent, TrackerLocation = Pose[:2], TrackerID = 'C', TrackerAngle = Pose[2], TrackerScaling = Pose[3], TrackerColor = 'g', TrackerMarker = 'o')
+        event.Attach(CameraPoseEvent, poseHomography = self.WToCamH, reprojectionError = self.TrustedAverageErrorNorm)
 
     def StartMap(self, event):
         self.LogSuccess("Starting central point tracking")

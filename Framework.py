@@ -1143,6 +1143,12 @@ class DisparityEvent(_EventExtension):
     _Fields = ['disparity']
     _AutoPublic = True
 
+class CameraPoseEvent(_EventExtension):
+    _Key = 4
+    _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
+    _Defaults = {'worldHomography': 0} # As one homograĥy can be recovered from the other, we allow for a non defined value
+    _AutoPublic = True
+
 class EventOld:
     def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):
         if original == None:

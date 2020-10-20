@@ -23,6 +23,8 @@ class DenseStereo(Module):
         self._MaxDistanceCluster = 1
         self._MaxMatches = 2
 
+        self._NDisparitiesStored = 200
+
         self._EpipolarMatrix = [[0., 0., 0.], [0., 0., 1.], [0., -1., 0.]]
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._MonitoredVariables = []
@@ -35,15 +37,38 @@ class DenseStereo(Module):
         self.CleanupDt = self._Tau * self._CleanupTauRatio
         self.LastCleanup = [0,0]
 
-        self.Maps = [AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau)]
-        self.ComparisonPoints = [[],[]]
-        self.DisparitiesFound = []
+        self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau))
+        self.ComparisonPoints = ([],[])
+        self.DisparitiesStored = ([],[])
+        self.DisparityMaps = (np.zeros(tuple(self.UsedGeometry) + (2,)), np.zeros(tuple(self.UsedGeometry) + (2,))) # 0 default value seems legit as it pushes all points to infinity
 
         return True
 
     def _OnEventModule(self, event):
         self.Maps[event.cameraIndex].OnEvent(event)
-        if len(self.ComparisonPoints[event.cameraIndex]) < self._MaxSimultaneousComparisonPoints and ((event.location >= self._ComparisonRadius).all() and (event.location < self.UsedGeometry - self._ComparisonRadius).all()):
+        if (event.location < self._ComparisonRadius).any() or (event.location >= self.UsedGeometry - self._ComparisonRadius).any(): # This event cannot be set as CP, nor can it be matched to anything as its outside the borders
+            return event
+
+        self.ConsiderAddingCP(event)
+        
+        self.TryMatchingEventToStereoCPs(event)
+
+        if event.timestamp - self.LastCleanup[event.cameraIndex] > self.CleanupDt:
+            for nCP, CP in enumerate(reversed(self.ComparisonPoints[event.cameraIndex])):
+                if not self.KeepCP(event.timestamp, CP):
+                    self.ComparisonPoints[event.cameraIndex].pop(-(1+nCP))
+            self.LastCleanup[event.cameraIndex] = event.timestamp
+        return event
+
+    def KeepCP(self, t, CP):
+        if t - CP[1] > self.CPLifespan:
+            self.LogWarning("Removed CP at {0} as its still unmatched".format(CP[0]))
+            return False
+        else:
+            return True
+
+    def ConsiderAddingCP(self, event):
+        if len(self.ComparisonPoints[event.cameraIndex]) < self._MaxSimultaneousComparisonPoints:
             AverageActivity = self.Maps[event.cameraIndex].GetAverageActivity(event.location, event.timestamp)
             if AverageActivity >= self._MinCPAverageActivity:
                 Add = True
@@ -52,14 +77,20 @@ class DenseStereo(Module):
                         Add = False
                         break
                 if Add:
-                    EpipolarEquation = self._EpipolarMatrix.dot(np.array([event.location[0], event.location[1], 1]))
-                    EpipolarEquation /= np.linalg.norm(EpipolarEquation[:2])
-                    self.ComparisonPoints[event.cameraIndex] += [(np.array(event.location), event.timestamp, EpipolarEquation, [])]
+                    for DS in self.DisparitiesStored[event.cameraIndex]:
+                        if abs(event.location - DS[0]).max() <= self._ComparisonRadius:
+                            Add = False
+                            break
+                if Add:
+                    self.AddCP(event)
                     self.Log("Added CP for camera {0} at {1}, average activity is {2:.1f}".format(event.cameraIndex, event.location, AverageActivity))
-        
-        if event.location[0] < self._ComparisonRadius or event.location[0] >= self.UsedGeometry[0] - self._ComparisonRadius: # This event cannot match at it is too close from screen border
-            return event
 
+    def AddCP(self, event):
+        EpipolarEquation = self._EpipolarMatrix.dot(np.array([event.location[0], event.location[1], 1]))
+        EpipolarEquation /= np.linalg.norm(EpipolarEquation[:2])
+        self.ComparisonPoints[event.cameraIndex].append((np.array(event.location), event.timestamp, EpipolarEquation, []))
+
+    def TryMatchingEventToStereoCPs(self, event):
         Matched = []
         for nCP, CP in enumerate(self.ComparisonPoints[1-event.cameraIndex]):
             if event.timestamp - CP[1] < self.Maps[1-event.cameraIndex].Tau: # No match can be trusted under 1 Tau
@@ -76,24 +107,18 @@ class DenseStereo(Module):
                 if self.Match(EventSignatures, CPSignatures):
                     GlobalMatch, Location = self.AddLocalMatch(event.location[0], CP)
                     if GlobalMatch:
-                        event.Attach(DisparityEvent, disparity = 1./abs(Location - CP[0][0]))
+                        Offset = Location - CP[0][0]
+                        event.Attach(DisparityEvent, disparity = 1./abs(Offset))
                         self.LogSuccess("Matched y = {0}, x[0] = {{{1}}} & x[1] = {{{2}}}, d = {3:.3f}".format(ProjectedEvent[1], 1-event.cameraIndex, str(event.cameraIndex)+":.1f", event.disparity).format(CP[0][0], Location))
-                        self.DisparitiesFound += [(event.timestamp, np.array(event.location), event.disparity)]
+                        if len(self.DisparitiesStored[event.cameraIndex]) == self._NDisparitiesStored:
+                            self.DisparitiesStored[event.cameraIndex].pop(0)
+                        self.DisparitiesStored[event.cameraIndex].append((np.array(event.location), event.timestamp, event.disparity))
+                        self.DisparityMaps[1-event.cameraIndex][tuple(CP[0]) +(0,)] = Offset
+                        self.DisparityMaps[1-event.cameraIndex][tuple(CP[0]) +(1,)] = event.timestamp
                         Matched += [nCP]
         for nCP in reversed(Matched):
             self.ComparisonPoints[1-event.cameraIndex].pop(nCP)
 
-        if event.timestamp - self.LastCleanup[event.cameraIndex] > self.CleanupDt:
-            self.ComparisonPoints[event.cameraIndex] = [CP for CP in self.ComparisonPoints[event.cameraIndex] if self.KeepCP(event.timestamp, CP)]
-            self.LastCleanup[event.cameraIndex] = event.timestamp
-        return event
-
-    def KeepCP(self, t, CP):
-        if t - CP[1] > self.CPLifespan:
-            self.LogWarning("Removed CP at {0} as its still unmatched".format(CP[0]))
-            return False
-        else:
-            return True
 
     def AddLocalMatch(self, X, CP):
         for PossibleLocation in CP[3]:
@@ -142,6 +167,13 @@ class AnalysisMapClass:
         self.ActivityMap[event.location[0],YMin:YMax] = self.ActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
         self.DistanceMap[event.location[0],YMin:YMax] = self.DistanceMap[event.location[0],YMin:YMax] * DecayColumn + Offset
         self.SigmaMap[event.location[0],YMin:YMax] = self.SigmaMap[event.location[0],YMin:YMax] * DecayColumn + (Offset - self.DistanceMap[event.location[0],YMin:YMax] / self.ActivityMap[event.location[0],YMin:YMax])**2
+
+    def GetLineSignatures(self, Y, t):
+        YUsed = Y - self.Radius
+        DeltaRow = self.LastUpdateMap[:,YUsed] - t
+        DecayRow = np.e**(DeltaRow / self.Tau)
+        
+        return self.ActivityMap[:,YUsed] * DecayRow, self.DistanceMap[:,YUsed] / np.maximum(0.001, self.ActivityMap[:,YUsed]), self.SigmaMap[:,YUsed] / np.maximum(0.001, self.ActivityMap[:,YUsed])
 
     def GetAverageActivity(self, location, t):
         XMin, XMax = max(0, location[0] - self.Radius), min(self.UsableGeometry[0], location[0] + self.Radius+1)

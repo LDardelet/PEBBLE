@@ -241,12 +241,18 @@ class MovementSimulatorClass(Module):
         self.Translation = TranslationClass
         self.Rotation = RotationClass
 
+    @property
+    def Geometry(self):
+        return self._Geometry
+    @Geometry.setter
+    def Geometry(self, value):
+        self._Geometry = value
+
     def _InitializeModule(self, **kwargs):
 
         self.BiCameraSystem = BiCameraClass(self, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
         self.BaseMap = Map2DClass(self._MapType, self.BiCameraSystem)
 
-        self.StreamName = self.__Framework__._GetStreamFormattedName(self)
         self.Geometry = BiCameraClass.Definition.tolist() + [2]
 
         self.nEvent = 0

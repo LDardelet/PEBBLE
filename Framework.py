@@ -82,10 +82,10 @@ class Framework:
         self.PropagatedEvent = None
         self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
         if len(self.InputEvents) == 1:
-            self._NextInputEvent = self._SingleInputModuleNextInputEvent
+            self._NextInputEvent = self._SingleInputModuleNextInputEventMethod
             del self.__dict__['InputEvents']
         else:
-            self._NextInputEvent = self._MultipleInputModulesNextInputEvent
+            self._NextInputEvent = self._MultipleInputModulesNextInputEventMethod
 
         self._LogType = 'columns'
         self._LogInit()
@@ -314,6 +314,7 @@ class Framework:
             self.StreamHistory += [self.CurrentInputStreams]
             InitializationAnswer = self.Initialize(**kwargs)
             if not InitializationAnswer or BareInit:
+                self._SendLog()
                 return None
 
         self.PropagatedEvent = None
@@ -364,9 +365,9 @@ class Framework:
         return t
 
     def _SingleInputModuleNextInputEventMethod(self):
-        return self.ToolsList[0].__OnEvent__(None)
+        return self.Tools[self.ToolsList[0]].__OnEvent__(None)
 
-    def _MultipleInputModulesNextInputEvent(self):
+    def _MultipleInputModulesNextInputEventMethod(self):
         OldestEvent, ModuleSelected = None, None
         for InputName, EventAwaiting in self.InputEvents.items():
             if EventAwaiting is None:

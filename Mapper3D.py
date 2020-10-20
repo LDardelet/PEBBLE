@@ -26,7 +26,7 @@ class Mapper3D(Module):
             self.BorderPoints.add(PointID)
             if len(self.KeyPoints) == 3:
                 ConnectedPointsIDs = (0,1,2)
-                self.MapsTriangles += [ConnectedPointsIDs + (self.TriangleMeanLocation(ConnectedPointsIDs),)]
+                self.MapsTriangles += [TriangleClass(ConnectedPointsIDs, self.TriangleMeanLocation(ConnectedPointsIDs))]
                 for KeyPoint in self.KeyPoints:
                     KeyPoint.ConnectToIDs(ConnectedPointsIDs)
             return
@@ -46,8 +46,6 @@ class KeyPointClass:
         self.Connexions = set()
 
     def ConnectToID(self, ID):
-        if len(self.Connexions) == 3:
-            raise Exception("Maximum connexion number reached for point {0}".format(self.ID))
         if ID == self.ID:
             return
         self.Connexions.add(ID)
@@ -58,3 +56,8 @@ class KeyPointClass:
     @property
     def IsBorder(self):
         return len(self.Connexions) < 3
+
+class TriangleClass:
+    def __init__(self, CornersIDs, X):
+        self.CornersIDs = CornersIDs
+        self.X = X

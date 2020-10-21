@@ -2,6 +2,7 @@ import numpy as np
 from struct import unpack
 from sys import stdout
 import atexit
+import h5py
 
 from Framework import Module, Event
 
@@ -71,18 +72,22 @@ class Reader(Module):
             self.__RewindForbidden__ = True
         self.TsOffset = None
 
-        if '.dat' in self.StreamName:
+        Extension = self.StreamName.split('.')[-1]
+        if Extension == 'dat':
             self._NextEvent = self._NextEventDat
             return self._InitializeDat()
-        elif '.es' in self.StreamName:
+        elif Extension == 'es':
             self._NextEvent = self._NextEventEs
             return self._InitializeEs()
-        elif '.txt' in self.StreamName:
+        elif Extension == 'txt':
             self._NextEvent = self._NextEventTxt
             return self._InitializeTxt()
-        elif '.aedat' in self.StreamName:
+        elif Extension == 'aedat':
             self._NextEvent = self._NextEventAedat
             return self._InitializeAedat()
+        elif Extension == 'hdf5':
+            self._NextEvent = self._NextEventH5
+            return self._InitializeH5()
         else:
             self.LogWarning("Invalid filename.")
             return False
@@ -135,6 +140,38 @@ class Reader(Module):
             if Event.timestamp < tNew:
                 break
 
+# .h5 Files methods
+
+    def _InitializeH5(self):
+        StreamName = str(self.StreamName)
+        if "@" not in StreamName:
+            self.LogError("No path specified into h5 file. Use KEYS.TO.EVENTS@FileName as stream input")
+            return False
+        Path, FileName = StreamName.split("@")
+        self.CurrentFile = h5py.File(FileName, mode = 'r')
+        atexit.register(self._CloseFile)
+        Keys = Path.split('.')
+        self.Data = self.CurrentFile[Keys.pop(0)]
+        while Keys:
+            self.Data = self.Data[Keys.pop(0)]
+        #self.Geometry = np.array([self.Data[:,0].max() + 1, self.Data[:,1].max() + 1, 2], dtype = int)
+        self.Geometry = np.array([346,260,2])
+        self.NEvents = self.Data.shape[0]
+        self.nEvent = 0
+        self.tOffset = self.Data[0,2]
+
+        return True
+
+    def _NextEventH5(self):
+        if self.nEvent == self.NEvents:
+            self.__Framework__.Running = False
+            return None
+        Line = self.Data[self.nEvent,:]
+        self.nEvent += 1
+        return Event(timestamp = (Line[2] - self.tOffset), location = np.array([int(Line[0]), self.Geometry[1] - int(Line[1])-1]), polarity = int(Line[3] == 1))
+
+# .AEDAT Files methods
+
     def _InitializeAedat(self):
         self.CurrentFile = open(self.StreamName,'rb')
         atexit.register(self._CloseFile)
@@ -179,6 +216,8 @@ class Reader(Module):
             t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
 
             return Event(timestamp = t / 1e6, location = np.array([x, y]), polarity = p)
+
+# .ES Files methods
 
     def _InitializeEs(self):
         self.CurrentFile = open(self.StreamName,'rb')

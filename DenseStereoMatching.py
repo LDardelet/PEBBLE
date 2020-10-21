@@ -12,7 +12,7 @@ class DenseStereo(Module):
         self.__ReferencesAsked__ = []
 
         self._ComparisonRadius = 6
-        self._Tau = 0.01
+        self._Tau = 0.05
         self._MaxSimultaneousComparisonPoints = 20
         self._MaxPriorityCPs = 20
 

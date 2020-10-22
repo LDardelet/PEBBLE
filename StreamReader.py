@@ -189,6 +189,8 @@ class Reader(Module):
         self.CurrentByteBatch = self.CurrentFile.readline()
         while self.CurrentByteBatch[0] == 35:
             self.CurrentByteBatch = self.CurrentFile.readline()
+        self.Offset = 0
+        self.Offset = self._NextEventAedat().timestamp
 
         return True
 
@@ -215,7 +217,7 @@ class Reader(Module):
             p = (Bytes[2] >> 3) & 0B1
             t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
 
-            return Event(timestamp = t / 1e6, location = np.array([x, y]), polarity = p)
+            return Event(timestamp = t / 1e6 - self.Offset, location = np.array([x, y]), polarity = p)
 
 # .ES Files methods
 

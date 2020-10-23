@@ -101,6 +101,7 @@ class DenseStereo(Module):
             Map = np.e**(self.DisparityMap[:,:,1,i] - self.DisparityMap[:,:,1,i].max())
             axs[1,i].imshow(np.transpose(Map), origin = 'lower', cmap = 'binary')
         f.colorbar(I, ax = axs[0,1])
+        return f, axs
 
     def ConsiderAddingCP(self, event, CPType):
         if self.ComparedPoints[event.cameraIndex, CPType] < self._MaxSimultaneousPointsPerType[CPType]:

@@ -100,11 +100,12 @@ class CalibrationSystem:
             Map = np.e**(-(ST.max() - ST) / Tau)
             self.IniAxs[i].imshow(np.transpose(Map), origin = 'lower', cmap='binary')
             self.RectImages[i] = self.axs[1,i].imshow(np.transpose(Map), origin = 'lower', cmap='binary')
-            self.f.canvas.mpl_connect('button_press_event', self.OnClick)
-            self.f.canvas.mpl_connect('close_event', self.OnClosing)
             xs, ys = np.where(Map > 0)
             vs = Map[xs, ys]
             self.PlottedPoints += [np.array([xs, ys, np.ones(xs.shape[0]), vs])]
+        self.f.canvas.mpl_connect('button_press_event', self.OnClick)
+        self.f.canvas.mpl_connect('close_event', self.OnClosing)
+        self.f.canvas.mpl_connect('resize_event', self.OnResize)
     def OnClick(self, event):
         if event.inaxes is None:
             return
@@ -134,6 +135,9 @@ class CalibrationSystem:
         self.Module.CalibrationMatrix = [np.array(self.RectificationMatrices[0]), np.array(self.RectificationMatrices[1])]
         self.Module.FundamentalMatrix = np.array(self.FundamentalMatrix)
         self.Module.Calibrating = False
+
+    def OnResize(self, event):
+        self.f.tight_layout()
 
     def Rectify(self):
         LXs, RXs = np.array(self.StoredPoints[0])[:,:2], np.array(self.StoredPoints[1])[:,:2]

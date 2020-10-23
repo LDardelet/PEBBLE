@@ -324,8 +324,19 @@ class Framework:
             for tool_name in self.ToolsList:
                 self.Tools[tool_name]._Resume()
 
+        t = 0.
         while self.Running and not self.Paused:
-            t = self.NextEvent(start_at, AtEventMethod)
+            t = self._NextInputEvent().timestamp
+            if t is None or t > stop_at:
+                self.Paused = 'Framework'
+            if t > self.LastStartWarning + 1.:
+                self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at))
+                self.LastStartWarning = t
+            if t >= start_at:
+                break
+
+        while self.Running and not self.Paused:
+            t = self.NextEvent(AtEventMethod)
             self._SendLog()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
@@ -346,16 +357,11 @@ class Framework:
         self._LogType = 'columns'
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
-    def NextEvent(self, start_at, AtEventMethod = None):
+    def NextEvent(self, AtEventMethod = None):
         self.PropagatedEvent = self._NextInputEvent()
         if self.PropagatedEvent is None:
             return None
         t = self.PropagatedEvent.timestamp
-        if t < start_at:
-            if t > self.LastStartWarning + 1.:
-                self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at), ModuleName = self.ToolsList[0])
-                self.LastStartWarning = t
-            return t
         for RunMethod in self._RunToolsMethodTuple:
             self.PropagatedEvent = RunMethod(self.PropagatedEvent)
             if self.PropagatedEvent is None:
@@ -1136,7 +1142,7 @@ class Event(_EventExtension):
 class TrackerEvent(_EventExtension):
     _Key = 2
     _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
-    _Defaults = {'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
+    _Defaults = {'TrackerID':'', 'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
     _AutoPublic = True
 
 class DisparityEvent(_EventExtension):

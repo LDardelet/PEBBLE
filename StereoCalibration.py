@@ -28,6 +28,7 @@ class StereoCalibration(Module):
                 self.CalibrationData = pickle.load(open(self._CalibrationInput, 'rb'))
                 self.CalibrationMatrix[0] = self.CalibrationData['M0']
                 self.CalibrationMatrix[1] = self.CalibrationData['M1']
+                self.FundamentalMatrix = self.CalibrationData['F']
                 self.Calibrated = True
             else:
                 self.STContext = -np.inf*np.ones(tuple(self.UsedGeometry) + (2,))
@@ -36,18 +37,17 @@ class StereoCalibration(Module):
                 self.MinEventsForCalibration = self.UsedGeometry[:2].prod() * self._TriggerCalibrationAfterRatio
                 return True
         else:
-             self.CalibrationMatrix = list(self._CalibrationInput)
+             self.CalibrationMatrix = list(self._CalibrationInput[0])
+             self.FundamentalMatrix = np.array(self._CalibrationInput[1])
              self.Calibrated = True
         return True
 
     def _OnEventModule(self, event):
         if self.Calibrated:
             XProj = self.CalibrationMatrix[event.cameraIndex].dot(np.array([event.location[0], event.location[1], 1]))
-            self.Log(str(event.location))
-            event.location = (XProj[:2] / XProj[-1]).astype(int)
+            event.location[:] = (XProj[:2] / XProj[-1]).astype(int)
             if (event.location < 0).any() or (event.location >= self.UsedGeometry).any():
                 return None
-            self.Log(str(event.location))
             return event
         else:
             self.LastEvent = event.Copy()
@@ -89,6 +89,7 @@ class CalibrationSystem:
                 self.axs[nrow, ncol].set_aspect('equal')
         self.RectImages = [None, None]
         
+        self.FundamentalMatrix = np.identity(3)
         self.RectificationMatrices = [np.identity(3), np.identity(3)]
         
         self.PlottedPoints = []
@@ -131,11 +132,13 @@ class CalibrationSystem:
                 self.Rectify()
     def OnClosing(self, event):
         self.Module.CalibrationMatrix = [np.array(self.RectificationMatrices[0]), np.array(self.RectificationMatrices[1])]
+        self.Module.FundamentalMatrix = np.array(self.FundamentalMatrix)
         self.Module.Calibrating = False
 
     def Rectify(self):
         LXs, RXs = np.array(self.StoredPoints[0])[:,:2], np.array(self.StoredPoints[1])[:,:2]
-        self.RectificationMatrices = cv2.stereoRectifyUncalibrated(LXs, RXs, cv2.findFundamentalMat(LXs, RXs)[0], tuple(self.Module.UsedGeometry))[1:]
+        self.FundamentalMatrix = cv2.findFundamentalMat(LXs, RXs)[0]
+        self.RectificationMatrices = cv2.stereoRectifyUncalibrated(LXs, RXs, self.FundamentalMatrix, tuple(self.Module.UsedGeometry))[1:]
         self.UpdateRectifiedImages()
         
     def UpdateRectifiedImages(self):

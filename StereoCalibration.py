@@ -3,6 +3,7 @@ import cv2
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import imageio
 
 class StereoCalibration(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -36,16 +37,22 @@ class StereoCalibration(Module):
                 self.EventsReceived = np.array([0,0])
                 self.MinEventsForCalibration = self.UsedGeometry[:2].prod() * self._TriggerCalibrationAfterRatio
                 return True
-        else:
-             self.CalibrationMatrix = list(self._CalibrationInput[0])
-             self.FundamentalMatrix = np.array(self._CalibrationInput[1])
-             self.Calibrated = True
+        elif type(self._CalibrationInput) == tuple:
+            if type(self._CalibrationInput[0]) == str:
+                Data = np.zeros(tuple(self.UsedGeometry) + (2,))
+                Data[:,:,0] = 1-np.flip(np.transpose(imageio.imread(self._CalibrationInput[0])[:,:,0]), axis = 1)/255
+                Data[:,:,1] = 1-np.flip(np.transpose(imageio.imread(self._CalibrationInput[1])[:,:,0]), axis = 1)/255
+                self.Calibrate(Data, False)
+            else:
+                self.CalibrationMatrix = list(self._CalibrationInput[0])
+                self.FundamentalMatrix = np.array(self._CalibrationInput[1])
+                self.Calibrated = True
         return True
 
     def _OnEventModule(self, event):
         if self.Calibrated:
             XProj = self.CalibrationMatrix[event.cameraIndex].dot(np.array([event.location[0], event.location[1], 1]))
-            event.location[:] = (XProj[:2] / XProj[-1]).astype(int)
+            event.location[:] = np.rint(XProj[:2] / XProj[-1]).astype(int)
             if (event.location < 0).any() or (event.location >= self.UsedGeometry).any():
                 return None
             return event
@@ -56,29 +63,32 @@ class StereoCalibration(Module):
             self.STContext[position] = event.timestamp
             self.EventsReceived[event.cameraIndex] += 1
             if (self.EventsReceived >= self.MinEventsForCalibration).all():
-                self.Calibrate()
+                self.Calibrate(self.STContext, True)
+                delattr(self, 'LastEvent')
+                delattr(self, 'STContext')
+                delattr(self, 'EventsReceived')
                 
             if self._SendUncalibratedEvents:
                 return event
             else:
                 return None
 
-    def Calibrate(self):
+    def Calibrate(self, Data, AutoEnhance):
         self.Calibrating = True
-        C = CalibrationSystem(self, self.LastEvent.timestamp)
+        C = CalibrationSystem(self, Data, AutoEnhance)
         while(self.Calibrating):
             plt.pause(0.01)
         delattr(self, 'Calibrating')
-        delattr(self, 'LastEvent')
-        delattr(self, 'STContext')
-        delattr(self, 'EventsReceived')
         self.Calibrated = True
 
 class CalibrationSystem:
-    def __init__(self, Module, Tau = 0.015):
+    def __init__(self, Module, Data, AutoEnhancePictures):
+        self.Data = Data
+        self.AutoEnhancePictures = AutoEnhancePictures
         self.Module = Module
         self.StoredPoints = [[],[]]
         self.CurrentPoints = [None, None]
+        self.Zoomed = [False, False]
         plt.close('all')
         self.f, self.axs = plt.subplots(2,2)
         self.IniAxs = list(self.axs[0,:])
@@ -95,10 +105,13 @@ class CalibrationSystem:
         self.PlottedPoints = []
         self.PlottedRectifiedPoints = [[],[]]
         self.PlottedRectifiedEpipolarLines = [[],[]]
+        self.STContexts = []
+
+        self.Tau = self.Data.max()/2
         for i in range(2):
-            ST = self.Module.STContext[:,:,i]
-            Map = np.e**(-(ST.max() - ST) / Tau)
-            self.IniAxs[i].imshow(np.transpose(Map), origin = 'lower', cmap='binary')
+            ST = self.Data[:,:,i]
+            Map = np.e**(-(ST.max() - ST) / self.Tau)
+            self.STContexts += [self.IniAxs[i].imshow(np.transpose(Map), origin = 'lower', cmap='binary')]
             self.RectImages[i] = self.axs[1,i].imshow(np.transpose(Map), origin = 'lower', cmap='binary')
             xs, ys = np.where(Map > 0)
             vs = Map[xs, ys]
@@ -107,6 +120,9 @@ class CalibrationSystem:
         self.f.canvas.mpl_connect('close_event', self.OnClosing)
         self.f.canvas.mpl_connect('resize_event', self.OnResize)
     def OnClick(self, event):
+        if event.button == 3:
+            self.Zoom()
+            return
         if event.inaxes is None:
             return
         try:
@@ -114,6 +130,9 @@ class CalibrationSystem:
         except:
             return
         print("Axes {0}, x = {1}, y = {2}".format(nax, event.xdata, event.ydata))
+        if not self.Zoomed[nax]:
+            self.Zoom((event.xdata, event.ydata), nax)
+            return
         if not self.CurrentPoints[nax] is None:
             self.CurrentPoints[nax].set_xdata([event.xdata])
             self.CurrentPoints[nax].set_ydata([event.ydata])
@@ -121,7 +140,6 @@ class CalibrationSystem:
         self.CurrentPoints[nax] = self.IniAxs[nax].plot(event.xdata, event.ydata, 'or')[0]
         
         if not None in self.CurrentPoints:
-            StoredPoints = []
             for nax, dot in enumerate(self.CurrentPoints):
                 x, y = dot.get_xdata()[0], dot.get_ydata()[0]
                 self.StoredPoints[nax] += [np.array([x, y, 1])]
@@ -129,12 +147,46 @@ class CalibrationSystem:
                 self.PlottedRectifiedPoints[nax] += [self.axs[1,nax].plot(x, y, 'og')[0]]
                 self.PlottedRectifiedEpipolarLines[nax] += [self.axs[1,1-nax].plot([0, self.Module.UsedGeometry[0]], [y, y], '--g')[0]]
             self.CurrentPoints = [None, None]
+            self.Zoom()
             if len(self.StoredPoints[0]) >= 8:
                 self.Rectify()
     def OnClosing(self, event):
         self.Module.CalibrationMatrix = [np.array(self.RectificationMatrices[0]), np.array(self.RectificationMatrices[1])]
         self.Module.FundamentalMatrix = np.array(self.FundamentalMatrix)
         self.Module.Calibrating = False
+
+    def EnhanceView(self, Center = None, nax = None, Radius = 10):
+        if not self.AutoEnhancePictures:
+            return
+        if Center is None:
+            for nax in range(2):
+                ST = self.Data[:,:,nax]
+                Map = np.e**(-(ST.max() - ST) / self.Tau)
+                self.STContexts[nax].set_data(np.transpose(Map))
+            return
+        else:
+            ST = self.Data[int(max(0,Center[0]-Radius)):int(Center[0]+Radius) + 1,int(max(0,Center[1]-Radius)):int(Center[1]+Radius) + 1,nax]
+            timestamps = ST[np.where(ST >= 0)]
+            NActivePixels = int(0.1 * (2*Radius+1)**2)
+            if NActivePixels > timestamps.shape[0]:
+                tMin = self.Tau * 2
+            else:
+                tMin = np.sort(timestamps)[-NActivePixels]
+            print("Setting tMin = {0:.3f}".format(tMin))
+            Data = np.e**((self.Data[:,:,nax] - timestamps.max()) / tMin)
+            self.STContexts[nax].set_data(np.transpose(Data))
+
+    def Zoom(self, Center = None, nax = None, Radius = 20):
+        self.EnhanceView(Center, nax, Radius)
+        if Center is None:
+            for ncol in range(2):
+                self.axs[0, ncol].set_xlim(0, self.Module.UsedGeometry[0])
+                self.axs[0, ncol].set_ylim(0, self.Module.UsedGeometry[1])
+                self.Zoomed[ncol] = False
+        else:
+            self.axs[0, nax].set_xlim(Center[0] - Radius, Center[0] + Radius)
+            self.axs[0, nax].set_ylim(Center[1] - Radius, Center[1] + Radius)
+            self.Zoomed[nax] = True
 
     def OnResize(self, event):
         self.f.tight_layout()

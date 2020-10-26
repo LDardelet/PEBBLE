@@ -180,6 +180,7 @@ class Reader(Module):
 
         self.PreviousEventTs = 0
         self.Geometry = np.array([346, 260, 2])
+        self.xMax = self.Geometry[0]-1
         self._Version = self.CurrentFile.readline().split(b'AER-DAT')[1].split(b'\r')
 
         self.Event_Size = 8
@@ -217,7 +218,7 @@ class Reader(Module):
             p = (Bytes[2] >> 3) & 0B1
             t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
 
-            return Event(timestamp = t / 1e6 - self.Offset, location = np.array([x, y]), polarity = p)
+            return Event(timestamp = t / 1e6 - self.Offset, location = np.array([self.xMax - x, y]), polarity = p)
 
 # .ES Files methods
 

@@ -130,7 +130,7 @@ class Framework:
         '''
         Method to retreive the geometry of the events handled by a tool
         '''
-        return self._GetParentModule(Tool).Geometry
+        return self._GetParentModule(Tool).OutputGeometry
 
     def _GetStreamFormattedName(self, Tool):
         '''
@@ -796,6 +796,9 @@ class Module:
             return self.__Framework__.CurrentInputStreams[self.__Name__]
         else:
             return self.__Framework__._GetStreamGeometry(self)
+    @property
+    def OutputGeometry(self):
+        return self.Geometry
 
     def _SetOutputCameraIndexes(self):
         '''

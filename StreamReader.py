@@ -73,20 +73,25 @@ class Reader(Module):
         self.TsOffset = None
 
         Extension = self.StreamName.split('.')[-1]
-        if Extension == 'dat':
+        if 'dat' == Extension:
             self._NextEvent = self._NextEventDat
+            self.Log("Using dat extension")
             return self._InitializeDat()
-        elif Extension == 'es':
+        elif 'es' == Extension:
             self._NextEvent = self._NextEventEs
+            self.Log("Using es extension")
             return self._InitializeEs()
-        elif Extension == 'txt':
+        elif 'txt' == Extension:
             self._NextEvent = self._NextEventTxt
+            self.Log("Using txt extension")
             return self._InitializeTxt()
-        elif Extension == 'aedat':
+        elif 'aedat' == Extension:
             self._NextEvent = self._NextEventAedat
+            self.Log("Using aedat extension")
             return self._InitializeAedat()
-        elif Extension == 'hdf5':
+        elif 'hdf5' == Extension:
             self._NextEvent = self._NextEventH5
+            self.Log("Using hdf5 extension")
             return self._InitializeH5()
         else:
             self.LogWarning("Invalid filename.")

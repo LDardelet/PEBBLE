@@ -13,22 +13,33 @@ class ROI(Module):
         self.__ReferencesAsked__ = []
         self.__Type__ = 'Filter'
 
-        self._Xlim = [200,400]
-        self._Ylim = [150,250]
+        self._xMinOffset = 0
+        self._xMaxOffset = None # Leave None for symetrical value
+        self._yMinOffset = 0
+        self._yMaxOffset = None # Leave None for symetrical value
 
     def _InitializeModule(self, **kwargs):
-
+        if self._xMaxOffset is None:
+            self._xMaxOffset = self._xMinOffset
+        if self._yMaxOffset is None:
+            self._yMaxOffset = self._yMinOffset
         # self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
+        self.MinX = np.array([self._xMinOffset, self._yMinOffset])
+        self.MaxX = self.Geometry[:2] - np.array([self._xMaxOffset, self._yMaxOffset])
 
         return True
+    
+    @property
+    def OutputGeometry(self):
+        return np.array([self.Geometry[0] - (self._xMinOffset + self._xMaxOffset), self.Geometry[1] - (self._yMinOffset + self._yMaxOffset), 2])
 
     def _OnEventModule(self, event):
-        if (event.location[0] > self._Xlim[0]) and (event.location[0] < self._Xlim[1]) and (event.location[1] > self._Ylim[0]) and (event.location[1] < self._Ylim[1]):
-            #print(event.location)
-            self.AllowedEvents += 1
-            return event
-        else:
+        if (event.location < self.MinX).any() or (event.location >= self.MaxX).any():
             self.FilteredEvents += 1
             return None
+        else:
+            self.AllowedEvents += 1
+            event.location[:] -= self.MinX
+            return event

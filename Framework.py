@@ -89,6 +89,7 @@ class Framework:
 
         self._LogType = 'columns'
         self._LogInit()
+        self.PropagatedIndexes = set()
         for ToolName in self.ToolsList:
             ToolArgsDict = {}
             for key, value in ArgsDict.items():
@@ -98,6 +99,8 @@ class Framework:
             if not InitializationAnswer:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
                 return False
+            for Index in self.Tools[ToolName].__CameraOutputRestriction__:
+                self.PropagatedIndexes.add(Index)
         self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ != 'Input']) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
@@ -112,6 +115,13 @@ class Framework:
                 ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
             if ans != '':
                 self.SaveProject(ans)
+
+    def _GetCameraIndexChain(self, Index):
+        ToolsChain = []
+        for ToolName in self.ToolsList:
+            if not self.Tools[ToolName].__CameraOutputRestriction__ or Index in self.Tools[ToolName].__CameraOutputRestriction__:
+                ToolsChain += [ToolName]
+        return ToolsChain
 
     def _GetParentModule(self, Tool):
         ToolEventsRestriction = Tool.__CameraInputRestriction__
@@ -1157,6 +1167,11 @@ class CameraPoseEvent(_EventExtension):
     _Key = 4
     _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
     _Defaults = {'worldHomography': 0} # As one homograĥy can be recovered from the other, we allow for a non defined value
+    _AutoPublic = True
+
+class TauEvent(_EventExtension):
+    _Key = 5
+    _Fields = ['tau']
     _AutoPublic = True
 
 class EventOld:

@@ -41,9 +41,3 @@ class StreamSpliter(Module):
         event.cameraIndex = self._CameraIndexMethod()
         return event
 
-    @property
-    def StreamName(self):
-        return self.__Framework__._GetStreamFormattedName(self)
-    @property
-    def Geometry(self):
-        return self.__Framework__._GetStreamGeometry(self)

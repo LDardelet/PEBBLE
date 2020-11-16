@@ -5,6 +5,7 @@ import random
 import time
 import _pickle as cPickle
 import types
+import numpy as np
 
 import threading
 from multiprocessing import Queue
@@ -54,7 +55,7 @@ class DisplayHandler(Module):
         Class to handle the stream Display.
         '''
         Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Display'
+        self.__Type__ = 'Output'
 
         self.__Started__ = False
         self._CompulsoryModule = False
@@ -276,14 +277,12 @@ class DisplayHandler(Module):
         self.Socket = None
 
     def _GetDisplaySocket(self):
-        Geometry = self.__Framework__._GetStreamGeometry(self)
-
         ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_addr = ("",TransmissionInfo._ResponsePort)
         ResponseUDP.bind(listen_addr)
 
         id_random = random.randint(100000,200000)
-        QuestionDict = {'id': id_random, 'shape':Geometry}
+        QuestionDict = {'id': id_random, 'shape':np.array(self.Geometry)}
         if self.Socket is None:
             QuestionDict['command'] = "asksocket"
         else:

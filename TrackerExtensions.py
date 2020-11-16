@@ -80,7 +80,7 @@ class FeatureManagerClass:
         self.ComputationData = {'Delta': [], 'S':[], 'R2':[], 'Omega':[], 'N': []}
         PreviousIDsAndPositions = {}
         PreviousT = None
-        ScreenCenter = self.TrackerManager.__Framework__._GetStreamGeometry(self.TrackerManager)[:2]/2
+        ScreenCenter = self.TrackerManager.Geometry[:2]/2
         def AddSnap(t, x, y, z):
             self.IMUData['t'] += [t]
             self.IMUData['x'] += [x]

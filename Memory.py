@@ -16,7 +16,7 @@ class Memory(Module):
 
     def _InitializeModule(self, **kwargs):
 
-        self.STContext = -np.inf*np.ones(self.__Framework__._GetStreamGeometry(self))
+        self.STContext = -np.inf*np.ones(self.Geometry)
         self.LastEvent = Event(timestamp = -np.inf, location = np.array([0,0]), polarity = 0)
 
         return True
@@ -35,13 +35,13 @@ class Memory(Module):
     def _Rewind(self, tNew):
         self.STContext[self.STContext >= tNew] = -np.inf
 
-    def GetPatch(self, x, y, Rx, Ry):
-        return self.STContext[max(0,x-Rx):x+Rx,max(0,y-Ry):y+Ry,:]
+    def GetSquarePatch(self, xy, R):
+        return self.STContext[max(0,xy[0]-R):xy[0]+R+1,max(0,xy[1]-R):xy[1]+R+1,:]
 
     def GetTs(self, Tau, xy = None, R = None):
         if not xy is None:
             x, y = xy
-            Map = self.GetPatch(x, y, R, R)
+            Map = self.GetSquarePatch(xy, R)
         else:
             Map = self.STContext
         return np.e**((Map.max(axis = 2) - self.LastEvent.timestamp)/Tau)

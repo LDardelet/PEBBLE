@@ -113,7 +113,7 @@ class DisplayHandler(Module):
 
         return True
 
-    def Restart(self):
+    def _Restart(self):
         self.EndTransmission()
         self._InitializeModule()
     def _Pause(self, Origin):

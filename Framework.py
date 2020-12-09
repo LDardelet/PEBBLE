@@ -341,6 +341,7 @@ class Framework:
                 self.Paused = 'Framework'
             if t > self.LastStartWarning + 1.:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at))
+                self._SendLog()
                 self.LastStartWarning = t
             if t >= start_at:
                 break
@@ -366,6 +367,10 @@ class Framework:
     def Resume(self, stop_at = np.inf):
         self._LogType = 'columns'
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
+
+    def Display(self):
+        for ToolName in self.ToolsList:
+            self.Tools[ToolName]._Restart()
 
     def NextEvent(self, AtEventMethod = None):
         self.PropagatedEvent = self._NextInputEvent()
@@ -874,7 +879,9 @@ class Module:
 
     def GetSnapIndexAt(self, t):
         return (abs(np.array(self.History['t']) - t)).argmin()
-
+    def _Restart(self):
+        # Template method for restarting modules, for instant display handler. Quite specific for now
+        pass
     def _InitializeModule(self, **kwargs):
         # Template for user-filled module initialization
         return True
@@ -1160,7 +1167,7 @@ class TrackerEvent(_EventExtension):
 
 class DisparityEvent(_EventExtension):
     _Key = 3
-    _Fields = ['disparity']
+    _Fields = ['disparity', 'disparityLocation'] # need to put location again in order for display to work correctly.
     _AutoPublic = True
 
 class CameraPoseEvent(_EventExtension):

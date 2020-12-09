@@ -44,6 +44,7 @@ class StremWriter(Module):
     def _OnEventModule(self, event):
         if self.Offset is None:
             self.Offset = event.timestamp
+            self.CurrentFile.write("# ts Offset = {0:.6f}\n".format(self.Offset))
         self.CurrentFile.write(self._Separator.join(["{0:.6f}".format(event.timestamp - self.Offset), str(event.location[0]), str(self.yFunc(event.location[1])), str(event.polarity)]) + '\n')
         return event
 

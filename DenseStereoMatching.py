@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
 
+# Last Run:
+# F.RunStream({'RightReader':'davis.right.events@'+DLS+'1_data.hdf5', 'LeftReader':'davis.left.events@'+DLS+'1_data.hdf5'}, _CalibrationInput={'0x':DLS+'_right_x_map.txt', '0y':DLS+'_right_y_map.txt', '1x':DLS+'_left_x_map.txt', '1y':DLS+'_left_y_map.txt'}, _TxtDefaultGeometry = [346,260,2], _DisparityRange = [0, 50], _MatchThreshold = 0.8, DenseStereo_MonitorDt = 0.05, start_at=10, stop_at=30, _ComparisonRadius = 10, DenseStereo_Tau = 0.05) 
+
 class DenseStereo(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
@@ -15,7 +18,7 @@ class DenseStereo(Module):
         self.__ReferencesAsked__ = []
 
         self._ComparisonRadius = 10
-        self._KeyPointsComparisonRadiusRatio = 0.5
+        self._KeyPointsComparisonRadiusRatio = 0.2
         self._Tau = 0.005
         self._MaxSimultaneousPointsPerType = np.array([100, 100])
 
@@ -61,6 +64,8 @@ class DenseStereo(Module):
         self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (2,2)) # 0 default value seems legit as it pushes all points to infinity
         self.DisparityMap[:,:,1,:] = -np.inf
         self.ComparedPoints = np.array([[0,0],[0,0]], dtype = int)
+
+        self.EventsAge = []
 
         self.MatchedCPs = np.array([0,0])
         self.InputEvents = 0
@@ -199,6 +204,148 @@ class DenseStereo(Module):
             f.savefig(SaveLocationPrefix + suffix + ".png")
         return f, axs, StoredImages
 
+    def PlotGTAnalysis(self, DataH5File, GTH5File, PastIndex = None, f_axs_images = None, Cam = 'right', Sensor = 'davis', Sigma = 0, DisparityRange = None, Tau = None, DataOffset = 0):
+        CamIndex = ['left', 'right'].index(Cam)
+        if DisparityRange is None:
+            DisparityRange = self._DisparityRange
+        if Tau is None:
+            Tau = self.Maps[CamIndex].Tau
+
+        if f_axs_images is None:
+            f, axs = plt.subplots(2, 4)
+            f.tight_layout()
+            for nRow in range(2):
+                for nCol in range(3): # Leave ticks for histograms
+                    axs[nRow,nCol].tick_params('both', bottom = False, labelbottom = False, left = False, labelleft = False)
+            axs[0,0].set_title("Events, Tau = {0:.3f}s".format(Tau))
+            axs[1,0].set_title("Raw Images")
+            axs[0,1].set_title("Experimental Depth")
+            axs[1,1].set_title("Ground-Truth Depth")
+            axs[0,2].set_title("Experimental Disparity")
+            axs[1,2].set_title("Ground-Truth Disparity")
+        else:
+            f, axs, Images = f_axs_images
+        if PastIndex == 'all' or type(PastIndex) in [tuple, list]:
+            Images = None
+            while True:
+                if PastIndex == 'all':
+                    IndexesRange = list(range(len(self.History['t'])))
+                else:
+                    if type(PastIndex[0]) == float:
+                        PastIndex = [(abs(np.array(self.History['t']) - PastIndex[0]).argmin()), PastIndex[1]]
+                    if PastIndex[1] == np.inf:
+                        PastIndex = [PastIndex[0], len(self.History['t'])]
+                    elif type(PastIndex[1]) == float:
+                        PastIndex = [PastIndex[0], (abs(np.array(self.History['t']) - PastIndex[1]).argmin())]
+                    IndexesRange = list(range(PastIndex[0], min(PastIndex[1], len(self.History['t']))))
+                    print("Ranging indexes from {0} to {1}".format(IndexesRange[0], IndexesRange[-1]))
+                for Index in IndexesRange:
+                    f, axs, Images = self.PlotGTAnalysis(DataH5File, GTH5File, Index, (f, axs, Images), Cam, Sensor, Sigma, DisparityRange, Tau, DataOffset)
+                    plt.pause(0.1)
+            return
+
+        def Convolute(D, T, Tau, sigma):
+            xs, ys = np.where((T.max() - T) < Tau)
+            ds = D[xs, ys]
+            Res = np.zeros(D.shape)
+            if sigma == 0:
+                Res[xs, ys] = ds
+                return Res
+            S = 1/(2 * sigma**2)
+            for x, y in zip(xs, ys):
+                Weights = np.e**(-((x - xs)**2 + (y - ys)**2)*S)
+                Res[x,y] = ((Weights * ds).sum()) / Weights.sum()
+            return Res
+
+        if Images is None:
+            StoredImages = [[None, None, None, None], [None, None, None, None]]
+        if PastIndex is None:
+            t = self.__Framework__.PropagatedEvent.timestamp
+        else:
+            t = self.History['t'][PastIndex]
+        tData = t + DataOffset
+        Mem = [self.__Framework__.LeftMemory, self.__Framework__.RightMemory][CamIndex]
+        if Images is None:
+            StoredImages[0][0] = axs[0,0].imshow(np.transpose(Mem.GetTs(Tau)), origin = 'lower', cmap = 'binary')
+        else:
+            Images[0][0].set_data(np.transpose(Mem.GetTs(Tau)))
+
+        ts = array(DataH5File[Sensor][Cam]['image_raw_ts'])
+        ImageIndex = abs((ts - ts[0]) - tData).argmin()
+        if Images is None:
+            StoredImages[1][0] = axs[1,0].imshow(DataH5File[Sensor]['right']['image_raw'][ImageIndex, :, :])
+        else:
+            Images[1][0].set_data(DataH5File[Sensor]['right']['image_raw'][ImageIndex, :, :])
+
+        ts = np.array(GTH5File['davis']['right']['depth_image_rect_ts'])
+        DepthIndex = abs((ts - ts[0]) - tData).argmin()
+        DepthMap = np.flip(np.transpose(np.array(GTH5File['davis']['right']['depth_image_rect'][DepthIndex, :, :])), axis = 1)
+        if PastIndex is None:
+            DispMap = self.DisparityMap
+        else:
+            DispMap = self.History['DisparityMap'][PastIndex]
+        if Sigma:
+            D = Convolute(abs(DispMap[:,:,0,CamIndex]), DispMap[:,:,1,CamIndex], Tau, Sigma)
+            DispMap = np.array(DispMap)
+            DispMap[:,:,0,CamIndex] = D
+        xs, ys = np.where((t - DispMap[:,:,1,CamIndex] < Tau) * (DispMap[:,:,0,CamIndex] != 0))
+        Subs = np.where(np.logical_not(isnan(DepthMap[xs, ys])))
+        Xs, Ys = xs[Subs], ys[Subs]
+        ThValues = DepthMap[Xs, Ys]
+        ThValues /= ThValues.max()
+        ExpValues = 1./DispMap[Xs, Ys, 0, CamIndex]
+        ScaledValues = (ThValues.mean() / ExpValues.mean()) * ExpValues
+
+        DefaultValue = 10
+        PlottedThMap = np.ones(DepthMap.shape) * DefaultValue
+        PlottedThMap[Xs, Ys] = ThValues
+        PlottedExpMap = np.ones(DepthMap.shape) * DefaultValue
+        PlottedExpMap[Xs, Ys] = ScaledValues
+        if Images is None:
+            StoredImages[0][1] = axs[0,1].imshow(np.transpose(PlottedExpMap), origin = 'lower', cmap = 'hot', vmin = 0, vmax = np.median(ScaledValues)*1.5)
+            StoredImages[1][1] = axs[1,1].imshow(np.transpose(PlottedThMap), origin = 'lower', cmap = 'hot', vmin = 0, vmax = np.median(ThValues)*1.5)
+        else:
+            Images[0][1].set_data(np.transpose(PlottedExpMap))
+            Images[0][1].set_clim(vmax = np.median(ScaledValues)*1.5)
+            Images[1][1].set_data(np.transpose(PlottedThMap))
+            Images[1][1].set_clim(vmax = np.median(ThValues)*1.5)
+
+        Error = (abs(ThValues - ScaledValues) / ThValues).mean()
+        axs[0,3].cla()
+        axs[0,3].set_title("t = {0:.3f}\nAs depth : {1:.1f}% error".format(t, 100*Error))
+        axs[0,3].hist(ThValues, range=(0,1), bins = int(DisparityRange[1] - DisparityRange[0]+1), label = "GT")
+        axs[0,3].hist(ScaledValues, range=(0,1), bins = int(DisparityRange[1] - DisparityRange[0]+1), alpha = 0.5, label = "Exp")
+        axs[0,3].legend(loc = "upper left")
+        #return ThValues, ExpValues, ScaledValues
+
+        ThValues = 1/DepthMap[Xs, Ys]
+        ExpValues = DispMap[Xs, Ys, 0, CamIndex]
+        ThValues = (ExpValues.mean() / ThValues.mean()) * ThValues
+        ScaledValues = ExpValues
+        DefaultValue = 0
+        PlottedThMap = np.ones(DepthMap.shape) * DefaultValue
+        PlottedThMap[Xs, Ys] = ThValues
+        PlottedExpMap = np.ones(DepthMap.shape) * DefaultValue
+        PlottedExpMap[Xs, Ys] = ScaledValues
+        if Images is None:
+            StoredImages[0][2] = axs[0,2].imshow(np.transpose(PlottedExpMap), origin = 'lower', cmap = 'hot', vmax = np.median(ScaledValues)*1.5, vmin = DefaultValue)
+            StoredImages[1][2] = axs[1,2].imshow(np.transpose(PlottedThMap), origin = 'lower', cmap = 'hot', vmax = np.median(ScaledValues)*1.5, vmin = DefaultValue)
+        else:
+            Images[0][2].set_data(np.transpose(PlottedExpMap))
+            Images[0][2].set_clim(vmax = np.median(ScaledValues)*1.5)
+            Images[1][2].set_data(np.transpose(PlottedThMap))
+            Images[1][2].set_clim(vmax = np.median(ScaledValues)*1.5)
+        Error = (abs(ThValues - ScaledValues) / ThValues).mean()
+        axs[1,3].cla()
+        axs[1,3].set_title("As disparity : {0:.1f}% error".format(100*Error))
+        axs[1,3].hist(ThValues, range=DisparityRange, bins = int(DisparityRange[1] - DisparityRange[0]+1), label = "GT")
+        axs[1,3].hist(ScaledValues, range=DisparityRange, bins = int(DisparityRange[1] - DisparityRange[0]+1), alpha = 0.5, label = "Exp")
+        axs[1,3].legend(loc = "upper left")
+
+        if Images is None:
+            Images = StoredImages
+        return f, axs, Images
+
     def AnimatedDisparitiesMaps(self, MaxDepth = 1., MinDepth = None, MaxDisp = None, DepthSigma = 0.03, NSteps = 30, Tau = 0.05, cmap = 'binary'):
         f, axs = plt.subplots(1,2)
         
@@ -276,7 +423,7 @@ class DenseStereo(Module):
                         self.DisparitiesStored[event.cameraIndex].append((np.array(CP[0]), event.timestamp, Offset))
                         self.DisparityMap[CP[0][0],CP[0][1],:,1-event.cameraIndex] = np.array([-Offset, event.timestamp])
                         self.DisparityMap[Location,CP[0][1],:,event.cameraIndex] = np.array([Offset, event.timestamp])
-                        event.Attach(DisparityEvent, disparity = abs(Offset), disparityLocation = np.array(event.location))
+                        event.Attach(DisparityEvent, disparity = abs(Offset), disparitySign = np.sign(Offset), disparityLocation = np.array(event.location))
                         MatchedAndRemoved += [nCP]
                         self.MatchedCPs[CP[1]] += 1
                         Matched = True
@@ -290,8 +437,9 @@ class DenseStereo(Module):
             return True
         LocalPatch = self.DisparityMap[event.location[0]-self._DisparityPatchRadius:event.location[0]+self._DisparityPatchRadius+1,event.location[1]-self._DisparityPatchRadius:event.location[1]+self._DisparityPatchRadius+1,:,event.cameraIndex]
         DisparitiesSearched = set()
+        EarliestMoment = event.timestamp - 3 * self._Tau
         for Disparity, t in LocalPatch.reshape(((self._DisparityPatchRadius*2 + 1)**2 , 2)):
-            if event.timestamp - t < 4*self._Tau:
+            if t >= EarliestMoment:
                 for delta in range(int(Disparity)-self._DisparitySearchRadius, int(Disparity)+self._DisparitySearchRadius+1):
                     if delta < self._DisparityRanges[event.cameraIndex][0] or delta > self._DisparityRanges[event.cameraIndex][1]:
                         continue
@@ -301,23 +449,28 @@ class DenseStereo(Module):
             return False
 
         EventSignatures = self.Maps[event.cameraIndex].GetSignatures(event.location, event.timestamp)
-        BestMatch = [0, None]
+        BestMatch = [0, None, 0]
         for Disparity in DisparitiesSearched:
-            if Disparity == 0:
-                continue
             XLocation = event.location[0] - Disparity
             if XLocation < self._ComparisonRadius or XLocation >= self.UsedGeometry[0] - self._ComparisonRadius:
+                continue
+            t = self.Maps[1-event.cameraIndex].GetLastEventTimestamp(XLocation, event.location[1])
+            if t < EarliestMoment: # If the last event that affected here is too old, then probably its not here
+                continue
+            if self.DisparityMap[XLocation, event.location[1],1,1-event.cameraIndex] > event.timestamp - 0.8 * self._Tau: # If the last disparity found here is too recent, then that can't be here neither.
                 continue
             StereoSignatures = self.Maps[1-event.cameraIndex].GetSignatures(np.array([XLocation, event.location[1]]), event.timestamp)
             MatchValue = self.Match(EventSignatures, StereoSignatures)
             if MatchValue > BestMatch[0]:
-                BestMatch = [MatchValue, Disparity]
-        if BestMatch[0] > self.MetricThreshold:
+                BestMatch = [MatchValue, Disparity, BestMatch[0]]
+        if BestMatch[0] > self.MetricThreshold and BestMatch[0] * self._MinMatchMargin > BestMatch[2]:
             Disparity = BestMatch[1]
             XLocation = event.location[0] - Disparity
-            event.Attach(DisparityEvent, disparity = abs(Disparity), disparityLocation = np.array(event.location))
+            event.Attach(DisparityEvent, disparity = abs(Disparity), disparitySign = np.sign(Disparity), disparityLocation = np.array(event.location))
             self.DisparityMap[event.location[0], event.location[1],:,event.cameraIndex] = np.array([Disparity, event.timestamp])
             self.DisparityMap[XLocation, event.location[1],:,1-event.cameraIndex] = np.array([-Disparity, event.timestamp])
+
+            self.EventsAge = self.EventsAge[-10000:] + [event.timestamp - max(0, self.Maps[1-event.cameraIndex].LastUpdateMap[XLocation,event.location[1]-self._ComparisonRadius])]
             return True
         else:
             self.ConsiderAddingCP(event, 1)
@@ -427,6 +580,9 @@ class AnalysisMapClass:
         self.ActivityMap[event.location[0],YMin:YMax] = self.ActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
         self.DistanceMap[event.location[0],YMin:YMax] = self.DistanceMap[event.location[0],YMin:YMax] * DecayColumn + Offset
         self.SigmaMap[event.location[0],YMin:YMax] = self.SigmaMap[event.location[0],YMin:YMax] * DecayColumn + (Offset - self.DistanceMap[event.location[0],YMin:YMax] / self.ActivityMap[event.location[0],YMin:YMax])**2
+
+    def GetLastEventTimestamp(self, x, y):
+        return self.LastUpdateMap[x,y-self.Radius]
 
     def GetLineSignatures(self, Y, t):
         YUsed = Y - self.Radius

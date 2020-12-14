@@ -1167,7 +1167,7 @@ class TrackerEvent(_EventExtension):
 
 class DisparityEvent(_EventExtension):
     _Key = 3
-    _Fields = ['disparity', 'disparityLocation'] # need to put location again in order for display to work correctly.
+    _Fields = ['disparity', 'disparitySign', 'disparityLocation'] # need to put location again in order for display to work correctly.
     _AutoPublic = True
 
 class CameraPoseEvent(_EventExtension):

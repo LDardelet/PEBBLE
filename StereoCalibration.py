@@ -21,6 +21,7 @@ class StereoCalibration(Module):
         self._CalibrationInput = ''
         self._SendUncalibratedEvents = False
         self._TriggerCalibrationAfterRatio = 0.1
+        self._EnhanceSTContext = True
 
     def _InitializeModule(self, **kwargs):
         self.UsedGeometry = np.array(self.Geometry[:2])
@@ -75,7 +76,7 @@ class StereoCalibration(Module):
 
     def Calibrate(self, Data, AutoEnhance):
         self.Calibrating = True
-        C = CalibrationSystem(self, Data, AutoEnhance)
+        C = CalibrationSystem(self, Data, AutoEnhance and self._EnhanceSTContext)
         while(self.Calibrating):
             plt.pause(0.01)
         delattr(self, 'Calibrating')
@@ -120,19 +121,20 @@ class CalibrationSystem:
         self.f.canvas.mpl_connect('close_event', self.OnClosing)
         self.f.canvas.mpl_connect('resize_event', self.OnResize)
     def OnClick(self, event):
-        if event.button == 3:
-            self.Zoom()
-            return
         if event.inaxes is None:
             return
         try:
             nax = self.IniAxs.index(event.inaxes)
         except:
             return
+        if event.button == 3:
+            if not self.Zoomed[nax]:
+                self.Zoom((event.xdata, event.ydata), nax)
+                return
+            else:
+                self.Zoom()
+                return
         print("Axes {0}, x = {1}, y = {2}".format(nax, event.xdata, event.ydata))
-        if not self.Zoomed[nax]:
-            self.Zoom((event.xdata, event.ydata), nax)
-            return
         if not self.CurrentPoints[nax] is None:
             self.CurrentPoints[nax].set_xdata([event.xdata])
             self.CurrentPoints[nax].set_ydata([event.ydata])

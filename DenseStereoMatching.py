@@ -463,6 +463,8 @@ class DenseStereo(Module):
             MatchValue = self.Match(EventSignatures, StereoSignatures)
             if MatchValue > BestMatch[0]:
                 BestMatch = [MatchValue, Disparity, BestMatch[0]]
+            else:
+                BestMatch[2] = max(BestMatch[2], MatchValue)
         if BestMatch[0] > self.MetricThreshold and BestMatch[0] * self._MinMatchMargin > BestMatch[2]:
             Disparity = BestMatch[1]
             XLocation = event.location[0] - Disparity

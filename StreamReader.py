@@ -36,6 +36,8 @@ class Reader(Module):
         self._AutoZeroOffset = True
         self._yInvert = True
 
+        self._InputTsFactor = 1
+
         self._TxtFileStructure = ['t', 'x', 'y', 'p']
         self._TxtTimestampMultiplier = 1.
         self._TxtDefaultGeometry = [240, 180, 2]
@@ -73,20 +75,25 @@ class Reader(Module):
         self.TsOffset = None
 
         Extension = self.StreamName.split('.')[-1]
-        if Extension == 'dat':
+        if 'dat' == Extension:
             self._NextEvent = self._NextEventDat
+            self.Log("Using dat extension")
             return self._InitializeDat()
-        elif Extension == 'es':
+        elif 'es' == Extension:
             self._NextEvent = self._NextEventEs
+            self.Log("Using es extension")
             return self._InitializeEs()
-        elif Extension == 'txt':
+        elif 'txt' == Extension or 'csv' == Extension:
             self._NextEvent = self._NextEventTxt
+            self.Log("Using txt extension")
             return self._InitializeTxt()
-        elif Extension == 'aedat':
+        elif 'aedat' == Extension:
             self._NextEvent = self._NextEventAedat
+            self.Log("Using aedat extension")
             return self._InitializeAedat()
-        elif Extension == 'hdf5':
+        elif 'hdf5' == Extension:
             self._NextEvent = self._NextEventH5
+            self.Log("Using hdf5 extension")
             return self._InitializeH5()
         else:
             self.LogWarning("Invalid filename.")
@@ -105,6 +112,7 @@ class Reader(Module):
                 self.NextOwnEvent = self._NextEvent()
         if not self.NextOwnEvent is None:
             self.NextOwnEvent.cameraIndex = self._CameraIndex
+            self.NextOwnEvent.timestamp *= self._InputTsFactor
         if not self._Rewinded:
             # Possibly save the event
             self._StorageFunction(self.NextOwnEvent)
@@ -459,18 +467,21 @@ class Reader(Module):
         self.Geometry = list(self._TxtDefaultGeometry)
         self.CurrentFile = open(self.StreamName,'r')
         atexit.register(self._CloseFile)
-
-        Separators = [' ', '&', '_']
-        l = self.CurrentFile.readline()[:-1]
+        StartNoComment = 0
+        Line = self.CurrentFile.readline()
+        while Line[0] == '#':
+            StartNoComment = self.CurrentFile.tell()
+            Line = self.CurrentFile.readline()
+        Separators = [' ', '&', '_', ',']
         Found = False
         for self._Separator in Separators:
-            if l.count(self._Separator) > 2:
+            if Line.count(self._Separator) > 2:
                 Found = True
                 break
         if not Found:
             "No defined separator found. Aborting."
             return False
-        self.CurrentFile.seek(0)
+        self.CurrentFile.seek(StartNoComment)
         self.nEvent = 0
         return True
 

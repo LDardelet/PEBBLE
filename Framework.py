@@ -89,6 +89,7 @@ class Framework:
 
         self._LogType = 'columns'
         self._LogInit()
+        self.PropagatedIndexes = set()
         for ToolName in self.ToolsList:
             ToolArgsDict = {}
             for key, value in ArgsDict.items():
@@ -98,6 +99,8 @@ class Framework:
             if not InitializationAnswer:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
                 return False
+            for Index in self.Tools[ToolName].__CameraOutputRestriction__:
+                self.PropagatedIndexes.add(Index)
         self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ != 'Input']) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
@@ -112,6 +115,13 @@ class Framework:
                 ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
             if ans != '':
                 self.SaveProject(ans)
+
+    def _GetCameraIndexChain(self, Index):
+        ToolsChain = []
+        for ToolName in self.ToolsList:
+            if not self.Tools[ToolName].__CameraOutputRestriction__ or Index in self.Tools[ToolName].__CameraOutputRestriction__:
+                ToolsChain += [ToolName]
+        return ToolsChain
 
     def _GetParentModule(self, Tool):
         ToolEventsRestriction = Tool.__CameraInputRestriction__
@@ -130,7 +140,7 @@ class Framework:
         '''
         Method to retreive the geometry of the events handled by a tool
         '''
-        return self._GetParentModule(Tool).Geometry
+        return self._GetParentModule(Tool).OutputGeometry
 
     def _GetStreamFormattedName(self, Tool):
         '''
@@ -331,6 +341,7 @@ class Framework:
                 self.Paused = 'Framework'
             if t > self.LastStartWarning + 1.:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at))
+                self._SendLog()
                 self.LastStartWarning = t
             if t >= start_at:
                 break
@@ -356,6 +367,10 @@ class Framework:
     def Resume(self, stop_at = np.inf):
         self._LogType = 'columns'
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
+
+    def Display(self):
+        for ToolName in self.ToolsList:
+            self.Tools[ToolName]._Restart()
 
     def NextEvent(self, AtEventMethod = None):
         self.PropagatedEvent = self._NextInputEvent()
@@ -796,6 +811,9 @@ class Module:
             return self.__Framework__.CurrentInputStreams[self.__Name__]
         else:
             return self.__Framework__._GetStreamGeometry(self)
+    @property
+    def OutputGeometry(self):
+        return self.Geometry
 
     def _SetOutputCameraIndexes(self):
         '''
@@ -861,7 +879,9 @@ class Module:
 
     def GetSnapIndexAt(self, t):
         return (abs(np.array(self.History['t']) - t)).argmin()
-
+    def _Restart(self):
+        # Template method for restarting modules, for instant display handler. Quite specific for now
+        pass
     def _InitializeModule(self, **kwargs):
         # Template for user-filled module initialization
         return True
@@ -1147,13 +1167,18 @@ class TrackerEvent(_EventExtension):
 
 class DisparityEvent(_EventExtension):
     _Key = 3
-    _Fields = ['disparity']
+    _Fields = ['disparity', 'disparitySign', 'disparityLocation'] # need to put location again in order for display to work correctly.
     _AutoPublic = True
 
 class CameraPoseEvent(_EventExtension):
     _Key = 4
     _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
     _Defaults = {'worldHomography': 0} # As one homograĥy can be recovered from the other, we allow for a non defined value
+    _AutoPublic = True
+
+class TauEvent(_EventExtension):
+    _Key = 5
+    _Fields = ['tau']
     _AutoPublic = True
 
 class EventOld:

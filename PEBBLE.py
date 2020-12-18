@@ -1164,7 +1164,6 @@ class _EventExtension(BareEvent):
     def _Hide(self, BaseEvent):
         for Field in self._Fields:
             del BaseEvent.__dict__[Field]
-
 class Event(_EventExtension):
     _Key = 1
     _Fields = ['location', 'polarity', 'cameraIndex']

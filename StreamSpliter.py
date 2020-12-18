@@ -1,5 +1,5 @@
 import numpy as np
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 class StreamSpliter(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -41,3 +41,9 @@ class StreamSpliter(Module):
         event.cameraIndex = self._CameraIndexMethod()
         return event
 
+    @property
+    def StreamName(self):
+        return self.__Framework__._GetStreamFormattedName(self)
+    @property
+    def Geometry(self):
+        return self.__Framework__._GetStreamGeometry(self)

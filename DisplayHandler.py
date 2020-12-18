@@ -1,4 +1,3 @@
-#import tools
 import atexit
 import socket
 import random
@@ -10,7 +9,7 @@ import numpy as np
 import threading
 from multiprocessing import Queue
 
-from Framework import Module
+from PEBBLE import Module
 
 class TransmissionInfo:
     _EventPort = 54242

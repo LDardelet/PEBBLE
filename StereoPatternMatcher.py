@@ -1,5 +1,5 @@
 import numpy as np
-from Framework import Module, Event, TrackerEvent
+from PEBBLE import Module, Event, TrackerEvent
 
 class StereoPatternMatcher(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

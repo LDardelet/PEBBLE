@@ -1,5 +1,5 @@
 import numpy as np
-from Framework import Module, Event, DisparityEvent, TrackerEvent
+from PEBBLE import Module, Event, DisparityEvent, TrackerEvent
 import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
@@ -22,7 +22,7 @@ class DenseStereo(Module):
         self._Tau = 0.005
         self._MaxSimultaneousPointsPerType = np.array([100, 100])
 
-        self._MinCPAverageActivityRadiusRatio = 3. / 10
+        self._MinCPAverageActivityRadiusRatio = 2. / 10
         self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
         self._CleanupTauRatio = 0.5 
         self._SignaturesExponents = [1,1,1]
@@ -423,7 +423,7 @@ class DenseStereo(Module):
                         self.DisparitiesStored[event.cameraIndex].append((np.array(CP[0]), event.timestamp, Offset))
                         self.DisparityMap[CP[0][0],CP[0][1],:,1-event.cameraIndex] = np.array([-Offset, event.timestamp])
                         self.DisparityMap[Location,CP[0][1],:,event.cameraIndex] = np.array([Offset, event.timestamp])
-                        event.Attach(DisparityEvent, disparity = abs(Offset), disparitySign = np.sign(Offset), disparityLocation = np.array(event.location))
+                        event.Attach(DisparityEvent, disparity = abs(Offset), sign = np.sign(Offset), location = np.array(event.location))
                         MatchedAndRemoved += [nCP]
                         self.MatchedCPs[CP[1]] += 1
                         Matched = True
@@ -468,7 +468,7 @@ class DenseStereo(Module):
         if BestMatch[0] > self.MetricThreshold and BestMatch[0] * self._MinMatchMargin > BestMatch[2]:
             Disparity = BestMatch[1]
             XLocation = event.location[0] - Disparity
-            event.Attach(DisparityEvent, disparity = abs(Disparity), disparitySign = np.sign(Disparity), disparityLocation = np.array(event.location))
+            event.Attach(DisparityEvent, disparity = abs(Disparity), sign = np.sign(Disparity), location = np.array(event.location))
             self.DisparityMap[event.location[0], event.location[1],:,event.cameraIndex] = np.array([Disparity, event.timestamp])
             self.DisparityMap[XLocation, event.location[1],:,1-event.cameraIndex] = np.array([-Disparity, event.timestamp])
 

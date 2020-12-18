@@ -1,6 +1,6 @@
 import numpy as np
 
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 def _CompleteWarpBasisFrom(BasisVectors):
     # All input vectors must already by unitary and orthogonal. It is just a completion of the basis

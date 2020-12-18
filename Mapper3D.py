@@ -1,4 +1,4 @@
-from Framework import Module, DisparityEvent, CameraPoseEvent
+from PEBBLE import Module, DisparityEvent, CameraPoseEvent
 
 class Mapper3D(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

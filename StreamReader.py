@@ -4,7 +4,7 @@ from sys import stdout
 import atexit
 import h5py
 
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 _ES_HEADER_SIZE = 15
 

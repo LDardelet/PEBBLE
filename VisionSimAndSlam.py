@@ -8,7 +8,7 @@ import mpl_toolkits.mplot3d.art3d as art3d
 from matplotlib.text import TextPath
 from matplotlib.transforms import Affine2D
 
-from Framework import Module, Event, TrackerEvent
+from PEBBLE import Module, Event, TrackerEvent
 
 _SPACE_DIM = 3
 _VOXEL_SIZE = 0.1

@@ -7,7 +7,7 @@ import atexit
 
 import cv2
 
-from Framework import Module
+from PEBBLE import Module
 
 class HoughCD(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

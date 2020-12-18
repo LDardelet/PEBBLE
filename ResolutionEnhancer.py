@@ -2,7 +2,7 @@ import numpy as np
 import DisplayHandler
 import Memory
 
-from Framework import Module, Event, Framework
+from PEBBLE import Module, Event, Framework
 
 class ResolutionEnhancer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

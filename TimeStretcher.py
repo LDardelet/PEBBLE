@@ -1,6 +1,6 @@
 import numpy as np
 
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 class Stretcher(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

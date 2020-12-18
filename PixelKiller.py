@@ -1,6 +1,6 @@
 import numpy as np
 
-from Framework import Module
+from PEBBLE import Module
 
 class PixelKiller(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

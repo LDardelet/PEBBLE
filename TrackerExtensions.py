@@ -7,7 +7,7 @@ import os
 import inspect
 import pickle
 from sys import stdout
-from Framework import Module, TrackerEvent
+from PEBBLE import Module, TrackerEvent
 
 import imageio
 

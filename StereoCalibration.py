@@ -1,4 +1,4 @@
-from Framework import Module, Event
+from PEBBLE import Module, Event
 import cv2
 import json
 import numpy as np

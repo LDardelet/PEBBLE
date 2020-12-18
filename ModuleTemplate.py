@@ -1,4 +1,4 @@
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 class ModuleTemplate(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

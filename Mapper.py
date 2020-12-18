@@ -1,4 +1,4 @@
-from Framework import Module, TrackerEvent, CameraPoseEvent
+from PEBBLE import Module, TrackerEvent, CameraPoseEvent
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2

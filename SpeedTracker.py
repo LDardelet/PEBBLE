@@ -6,7 +6,7 @@ import datetime
 import os
 import pickle
 from sys import stdout
-from Framework import Module, TrackerEvent
+from PEBBLE import Module, TrackerEvent
 
 import pathos.multiprocessing as mp
 from functools import partial

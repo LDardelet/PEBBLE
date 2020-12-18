@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from Framework import Module, TrackerEvent
+from PEBBLE import Module, TrackerEvent
 
 def _CompleteWarpBasisFrom(BasisVectors):
     # All input vectors must already by unitary and orthogonal. It is just a completion of the basis

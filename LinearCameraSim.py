@@ -3,7 +3,7 @@ import random
 
 import matplotlib.pyplot as plt
 
-from Framework import Module, Event, TrackerEvent
+from PEBBLE import Module, Event, TrackerEvent
 
 _SPACE_DIM = 2
 _VOXEL_SIZE = 0.01

@@ -56,7 +56,10 @@ class Framework:
             atexit.register(self._SessionLog.close)
         self._LogOut = self._SessionLog
         self._LastLogOut = self._SessionLog
-        self._Terminal_Width = int(os.popen('stty size', 'r').read().split()[1])
+        try:
+            self._Terminal_Width = int(os.popen('stty size', 'r').read().split()[1])
+        except:
+            self._Terminal_Width = 100
         
         self.Modified = False
         self.StreamHistory = []
@@ -257,6 +260,9 @@ class Framework:
                         ProjectFile = ProjectFileRecovered
                     else:
                         self._Log("Overwrote with {0}".format(ProjectFile), 3)
+                    if '/' not in ProjectFile:
+                        PEBBLE_LOCATION = '/'.join(os.path.realpath(__file__).split('/')[:-1])
+                        ProjectFile = PEBBLE_LOCATION + '/Projects/' + ProjectFile
                     ProjectRawDataReferred = pickle.load(open(ProjectFile, 'rb'))
                     ProjectFileHash = str(hash(json.dumps(ProjectRawDataReferred, sort_keys=True)))
                     self._Log(Value, 3)
@@ -436,6 +442,9 @@ class Framework:
         self._GenerateEmptyProject()
 
         if not ProjectFile is None:
+            if '/' not in ProjectFile:
+                PEBBLE_LOCATION = '/'.join(os.path.realpath(__file__).split('/')[:-1])
+                ProjectFile = PEBBLE_LOCATION + '/Projects/' + ProjectFile
             self.ProjectFile = ProjectFile
             self._ProjectRawData = pickle.load(open(self.ProjectFile, 'rb'))
 
@@ -1064,9 +1073,7 @@ class BareEvent:
             self._Extensions = []
             self._ExtensionKeys = set()
             self._RunningExtensions = None
-    def _AsList(self):
-        if self._Key < 0: #Ill defined Key
-            return None
+    def _AsList(self, AskedKey = None):
         List = [self._Key]
         for Field in self.__class__._Fields:
             Value = getattr(self, Field)
@@ -1077,10 +1084,15 @@ class BareEvent:
         if not self.__class__ == BareEvent:
             return List
         for Extension in self._Extensions:
-            ExList = Extension._AsList()
-            if not ExList is None:
-                List += [ExList]
-        return List
+            if AskedKey is None: 
+                ExList = Extension._AsList()
+                if not ExList is None:
+                    List += [ExList]
+            else:
+                if AskedKey == Extension._Key:
+                    return List[1:] + Extension._AsList()[1:]
+        return List[1:]
+
     def Attach(self, Extension, **kwargs):
         self._Extensions += [Extension(bare = True, **kwargs)]
         self._ExtensionKeys.add(Extension._Key)
@@ -1167,7 +1179,7 @@ class TrackerEvent(_EventExtension):
 
 class DisparityEvent(_EventExtension):
     _Key = 3
-    _Fields = ['disparity', 'disparitySign', 'disparityLocation'] # need to put location again in order for display to work correctly.
+    _Fields = ['location', 'disparity', 'sign'] # need to put location again in order for display to work correctly.
     _AutoPublic = True
 
 class CameraPoseEvent(_EventExtension):

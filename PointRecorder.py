@@ -5,7 +5,7 @@ import datetime
 import json
 import atexit
 
-from Framework import Module
+from PEBBLE import Module
 
 class Clicker(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

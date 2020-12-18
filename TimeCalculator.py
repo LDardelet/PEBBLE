@@ -1,4 +1,4 @@
-from Framework import Module, Event, TauEvent
+from PEBBLE import Module, Event, TauEvent
 import numpy as np
 
 class ModuleTemplate(Module):

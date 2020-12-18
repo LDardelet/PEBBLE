@@ -2,7 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-from Framework import Module, Event
+from PEBBLE import Module, Event
 
 class FlowComputer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):

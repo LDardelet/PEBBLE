@@ -22,7 +22,7 @@ class DenseStereo(Module):
         self._Tau = 0.005
         self._MaxSimultaneousPointsPerType = np.array([100, 100])
 
-        self._MinCPAverageActivityRadiusRatio = 2. / 10
+        self._MinCPAverageActivityRadiusRatio = 1.5 / 10
         self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
         self._CleanupTauRatio = 0.5 
         self._SignaturesExponents = [1,1,1]
@@ -520,7 +520,10 @@ class DenseStereo(Module):
             NA, NB = np.linalg.norm(SigsA[nMetric]), np.linalg.norm(SigsB[nMetric])
             if NA == 0 or NB == 0:
                 return False
-            MatchValue *= ((1+(SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB)))/2)**Exponent
+            if nMetric == 1: # If this is the y distance metric
+                MatchValue *= ((1+(SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB)))/2)**Exponent
+            else:
+                MatchValue *= (SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB))**Exponent
         return MatchValue
 
     def FullMapping(self, yOffset = 0, AutoMatch = False, UseRanges = True):

@@ -69,7 +69,7 @@ class Solver:
         for ID, (Anchor, Location) in self.AnchorsAndLocations.items():
             V = self.GetWorldVectorFromLocation(Location)
             Anchor.Update(self.X, V)
-            F, X_F = Anchor.GetForce(self.X, V)
+            F, X_F = Anchor.ForceAndPoint
             F_Total += F
             Omega_Total += np.cross(F, X_F)
         A = (F_Total - self._MuX * self.V) / self._Mass
@@ -127,34 +127,29 @@ class Solver:
             U[nDim] = 1.
             V = R.T.dot(U)
             TV = T+V
-            self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
+            #self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
 
         EV, EOmega = self.Energies
-        ETotalAxis = 0
         ETotalNonAxis = 0
         for ID, (Anchor, Location) in self.AnchorsAndLocations.items():
             V = self.GetWorldVectorFromLocation(Location)
             Anchor.Update(self.X, V)
             Pu, Pv = Anchor.RestrictedPuPv
             TPv = T+Pv
-            self._PlotData['Anchors'][ID]['CurrentVision'].set_data_3d([T[0], TPv[0]], [T[1], TPv[1]], [T[2], TPv[2]])
+            #self._PlotData['Anchors'][ID]['CurrentVision'].set_data_3d([T[0], TPv[0]], [T[1], TPv[1]], [T[2], TPv[2]])
             O = Anchor.Origin
             P = Anchor.X
-            self._PlotData['Anchors'][ID]['InitialObservation'].set_data_3d([O[0], P[0]], [O[1], P[1]], [O[2], P[2]])
-            EAxis, ENonAxis = Anchor.Energies
-            self._PlotData['Anchors'][ID]['NonAxis'].set_data_3d([Pv[0], Pu[0]], [Pv[1], Pu[1]], [Pv[2], Pu[2]])
+            #self._PlotData['Anchors'][ID]['InitialObservation'].set_data_3d([O[0], P[0]], [O[1], P[1]], [O[2], P[2]])
+            ENonAxis = Anchor.Energies
+            #self._PlotData['Anchors'][ID]['NonAxis'].set_data_3d([Pv[0], Pu[0]], [Pv[1], Pu[1]], [Pv[2], Pu[2]])
             self._PlotData['Anchors'][ID]['NonAxis'].set_linewidth(min(4, EnergyLWRatio * ENonAxis))
-            self._PlotData['Anchors'][ID]['Axis'].set_data_3d([P[0], Pu[0]], [P[1], Pu[1]], [P[2], Pu[2]])
-            self._PlotData['Anchors'][ID]['Axis'].set_linewidth(min(4, EnergyLWRatio * EAxis))
-            ETotalAxis += EAxis
             ETotalNonAxis += ENonAxis
         if not self.t is None:
             axGraph = self._PlotData['axGraph']
-            axGraph.plot(self.t, ETotalAxis, 'ob')
             axGraph.plot(self.t, ETotalNonAxis, 'or')
             axGraph.plot(self.t, EV, 'xb')
             axGraph.plot(self.t, EOmega, 'xr')
-            axGraph.plot(self.t, EV+EOmega+ETotalAxis+ETotalNonAxis, 'xk')
+            axGraph.plot(self.t, EV+EOmega+ETotalNonAxis, 'xk')
 
     def _PlotInit(self, ax3D, axGraph):
         NS = [0,0]
@@ -170,8 +165,7 @@ class Solver:
         NS = [0,0]
         self._PlotData['Anchors'][ID] = {'CurrentVision':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW)[0], 
                                          'InitialObservation':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW, linestyle = '--')[0], 
-                                         'NonAxis':ax3D.plot(NS, NS, NS, 'k')[0], 
-                                         'Axis':ax3D.plot(NS, NS, NS, 'k')[0]}
+                                         'NonAxis':ax3D.plot(NS, NS, NS, 'k')[0]}
 
 class CameraClass:
     MaxDx = 0.0001
@@ -288,7 +282,7 @@ class CameraClass:
             U[nDim] = 1.
             V = R.T.dot(U)
             TV = T+V
-            self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
+            #self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
 
     def _PlotInit(self, ax, ax3D):
         self._PlotData = {'Frame':[], 'Points':[]}
@@ -299,6 +293,66 @@ class CameraClass:
             self._PlotData['Points'] += ax.plot(0,0,0, color = 'r', marker = 'o', alpha = 0)
 
 class AnchorClass:
+    K_NonAxis = 1.
+
+    def __init__(self, X, Origin, LambdaMin = None, LambdaMax = None):
+        self.X = np.array(X)
+        self.Origin = np.array(Origin)
+        self.U = (X - Origin)
+        N = np.linalg.norm(self.U)
+        self.U /= N
+        if LambdaMin is None:
+            self.LambdaMin = N
+        else:
+            self.LambdaMin = LambdaMin
+        if LambdaMax is None:
+            self.LambdaMax = np.inf
+
+        self._WX = 0.
+        self._W = 0.
+
+        self.XCamera = np.array(X)
+        self.V = np.array(self.U)
+
+    def Update(self, XCamera, V):
+        self.XCamera = XCamera
+        self.V = V
+    
+    @property
+    def ObservedX(self):
+        if self._W == 0:
+            return self.X
+        else:
+            return self._WX / self._W
+
+    @property
+    def Energy(self):
+        Pu, Pv = self.RestrictedPuPv
+        return self.K_NonAxis * ((Pu - Pv)**2).sum()
+
+    @property
+    def RestrictedPuPv(self):
+        Delta = self.XCamera - self.X
+        Alpha = (self.U * self.V).sum()
+        if Alpha ** 2 == 1: # If both lines of sight are parallel
+            Pu = self.X # Application point is placed at point location
+            Pv = Pu - (Delta * self.U).sum() * self.U 
+        else:
+            Lambda = (Delta * (self.U - self.V * Alpha)).sum() / (1-Alpha**2)
+            Lambda = min(self.LambdaMax, max(self.LambdaMin, Lambda)) # We restrict on the acting zone of the point
+            Mu = Lambda * Alpha - (Delta * self.V).sum()
+            Pu = self.X + Lambda * self.U
+            Pv = self.XCamera + Mu * self.V
+        return Pu, Pv
+
+    @property
+    def ForceAndPoint(self):
+        Pu, Pv = self.RestrictedPuPv
+        F_NonAxis = (Pu - Pv) * self.K_NonAxis
+
+        return F_NonAxis, Pv # Forces and Application Point
+
+class OldAnchorClass:
     _K0_Axis = 1.
     K_NonAxis = 1.
 

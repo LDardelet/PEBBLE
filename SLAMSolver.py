@@ -1,19 +1,22 @@
 import numpy as np
 
 CS = np.array([320, 240])
+SIZE = CS * 2
 ALPHAS = np.array([320,240])
 
 FRAME_LW = 1
 DEPTH_CONSTANT = 20.
 
 class Solver:
-    _Mass = 1.
-    _Moment = 1.
-    _MuX = 10.
-    _MuOmega = 10.
+    _Mass = 0.1
+    _Moment = 0.5
+    _MuX = 3.
+    _MuOmega = 3.
+
+    ScreenEdgeRepelDistance = 5.
     
     def __init__(self):
-        self.t = None
+        self.t = 0.
         self.X = np.array([0., 0., 0.])
         self.Theta = np.array([0., 0., 0.])
         self.V = np.array([0., 0., 0.])
@@ -33,37 +36,42 @@ class Solver:
 
         self.Camera.Init()
 
-
-
     def AddAnchor(self, ID, x, disparity):
         V = self.GetWorldVectorFromLocation(x)
-        z = 1./(disparity  / DEPTH_CONSTANT)
-        Delta = DEPTH_CONSTANT/(2 * disparity * (1+disparity))
-        self.AnchorsAndLocations[ID] = (AnchorClass(self.X + V * z, self.X, Delta), np.array(x))
+        WVisionAxis = np.array(self.WVisionAxis)
+        N = (V * WVisionAxis).sum()
+
+        Lambda = DEPTH_CONSTANT / (disparity * N)
+
+        LambdaMin = DEPTH_CONSTANT / ((disparity + 0.5) * N) - Lambda
+        LambdaMax = DEPTH_CONSTANT / ((disparity - 0.5) * N) - Lambda
+        self.AnchorsAndLocations[ID] = (AnchorClass(ID, self.X + V * Lambda, self.X, LambdaMin, LambdaMax), np.array(x))
+        d = min(x.min(), (SIZE - 1 - x).max())
+        self.AnchorsAndLocations[ID][0].K = self.AnchorsAndLocations[ID][0].K_NonAxis * min(d / self.ScreenEdgeRepelDistance, 1)
         self._InitAnchorPlot(ID)
 
     def DelAnchor(self, ID):
+        self.Print("Removed anchor {0}".format(ID))
         for line in self._PlotData['Anchors'][ID].values():
             line.remove()
         del self._PlotData['Anchors'][ID]
         del self.AnchorsAndLocations[ID]
 
-    def OnTrackerData(self, t, ID, x, disparity = None):
+    def OnTrackerData(self, t, ID = None, x = None, disparity = None):
         if self.t is None:
             self.t = t
             dt = 0
         else:
             dt = t - self.t
             self.t = t
-        self.AnchorsAndLocations[ID][1][:] = x
+        if not ID is None:
+            self.AnchorsAndLocations[ID][1][:] = x
+            d = min(x.min(), (SIZE - 1 - x).max())
+            self.AnchorsAndLocations[ID][0].K = self.AnchorsAndLocations[ID][0].K_NonAxis * min(d / self.ScreenEdgeRepelDistance, 1)
         self.Step(dt)
         self.Plotter.UpdatePlot(self.t)
 
     def Step(self, dt):
-        self.X += self.V * dt
-        self.Theta += self.Omega * dt
-        self._UpToDate = False
-
         F_Total = np.zeros(3)
         Omega_Total = np.zeros(3)
         for ID, (Anchor, Location) in self.AnchorsAndLocations.items():
@@ -72,12 +80,14 @@ class Solver:
             F, X_F = Anchor.ForceAndPoint
             F_Total += F
             Omega_Total += np.cross(F, X_F)
-        A = (F_Total - self._MuX * self.V) / self._Mass
-        self.V += dt * (A + self.A) / 2
-        self.A = A
-        Alpha = (Omega_Total - self._MuOmega * self.Omega) /  self._Moment
-        self.Omega += dt * (Alpha + self.Alpha) / 2
-        self.Alpha = Alpha
+        self.A = (F_Total - self._MuX * self.V) / self._Mass
+        self.V += dt * self.A
+        self.Alpha = (Omega_Total - self._MuOmega * self.Omega) /  self._Moment
+        self.Omega += dt * self.Alpha
+
+        self.X += self.V * dt
+        self.Theta += self.Omega * dt
+        self._UpToDate = False
 
 #    @property
 #    def R(self):
@@ -115,9 +125,14 @@ class Solver:
         U /= np.linalg.norm(U)
         return (self.R).T.dot(U)
 
-    def Plot(self, ax3D = None, axGraph = None, Init = False):
+    @property
+    def WVisionAxis(self):
+        U = np.array([1., 0., 0.])
+        return self.R.T.dot(U)
+
+    def Plot(self, ax3D = None, axEnergy = None, axPosition = None, axAngle = None, Init = False):
         if Init:
-            self._PlotInit(ax3D, axGraph)
+            self._PlotInit(ax3D, axEnergy, axPosition, axAngle)
         EnergyLWRatio = 1.
 
         R = np.array(self.R)
@@ -127,7 +142,7 @@ class Solver:
             U[nDim] = 1.
             V = R.T.dot(U)
             TV = T+V
-            #self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
+            self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
 
         EV, EOmega = self.Energies
         ETotalNonAxis = 0
@@ -136,40 +151,64 @@ class Solver:
             Anchor.Update(self.X, V)
             Pu, Pv = Anchor.RestrictedPuPv
             TPv = T+Pv
-            #self._PlotData['Anchors'][ID]['CurrentVision'].set_data_3d([T[0], TPv[0]], [T[1], TPv[1]], [T[2], TPv[2]])
-            O = Anchor.Origin
-            P = Anchor.X
-            #self._PlotData['Anchors'][ID]['InitialObservation'].set_data_3d([O[0], P[0]], [O[1], P[1]], [O[2], P[2]])
-            ENonAxis = Anchor.Energies
-            #self._PlotData['Anchors'][ID]['NonAxis'].set_data_3d([Pv[0], Pu[0]], [Pv[1], Pu[1]], [Pv[2], Pu[2]])
-            self._PlotData['Anchors'][ID]['NonAxis'].set_linewidth(min(4, EnergyLWRatio * ENonAxis))
+            self._PlotData['Anchors'][ID]['CurrentVision'].set_data_3d([T[0], TPv[0]], [T[1], TPv[1]], [T[2], TPv[2]])
+            ENonAxis = Anchor.Energy
+            self._PlotData['Anchors'][ID]['NonAxis'].set_data_3d([Pv[0], Pu[0]], [Pv[1], Pu[1]], [Pv[2], Pu[2]])
+            self._PlotData['Anchors'][ID]['NonAxis'].set_linewidth(min(4, max(1, EnergyLWRatio * ENonAxis)))
             ETotalNonAxis += ENonAxis
         if not self.t is None:
-            axGraph = self._PlotData['axGraph']
-            axGraph.plot(self.t, ETotalNonAxis, 'or')
-            axGraph.plot(self.t, EV, 'xb')
-            axGraph.plot(self.t, EOmega, 'xr')
-            axGraph.plot(self.t, EV+EOmega+ETotalNonAxis, 'xk')
+            axEnergy = self._PlotData['axEnergy']
+            axEnergy.plot(self.t, ETotalNonAxis, 'or')
+            axEnergy.plot(self.t, EV, 'xb')
+            axEnergy.plot(self.t, EOmega, 'xr')
+            axEnergy.plot(self.t, EV+EOmega+ETotalNonAxis, 'xk')
 
-    def _PlotInit(self, ax3D, axGraph):
+            axPosition, axAngle = self._PlotData['axPosition'], self._PlotData['axAngle']
+            for nDim, Color in enumerate(['r', 'g', 'b']):
+                axPosition.plot(self.t, self.X[nDim], marker = 'x', color = Color)
+                axAngle.plot(self.t, self.Theta[nDim], marker = 'x', color = Color)
+
+    def Print(self, Data):
+        print("t = {0:.3f} : ".format(self.t) + Data)
+
+    def _PlotInit(self, ax3D, axEnergy, axPosition, axAngle):
         NS = [0,0]
-        self._PlotData = {'Frame':[], 'Anchors':{}, 'ax3D':ax3D, 'axGraph':axGraph}
+        self._PlotData = {'Frame':[], 'Anchors':{}, 'ax3D':ax3D, 'axEnergy':axEnergy, 'axPosition':axPosition, 'axAngle':axAngle}
         for nDim in range(3):
             self._PlotData['Frame'] += ax3D.plot(NS, NS, NS, color = 'r', linewidth = FRAME_LW)
         for ID in self.AnchorsAndLocations.keys():
             self._InitAnchorPlot(ID)
 
     def _InitAnchorPlot(self, ID):
+        self.Print("New Anchor {0}".format(ID))
         ax3D = self._PlotData['ax3D']
         VisionLW = 1
         NS = [0,0]
-        self._PlotData['Anchors'][ID] = {'CurrentVision':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW)[0], 
-                                         'InitialObservation':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW, linestyle = '--')[0], 
+        self._PlotData['Anchors'][ID] = {'CurrentVision':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW, linestyle = '--')[0], 
+                                         'Range':ax3D.plot(NS, NS, NS, 'b', linewidth = VisionLW * 2, linestyle = '-')[0], 
                                          'NonAxis':ax3D.plot(NS, NS, NS, 'k')[0]}
+        Anchor = self.AnchorsAndLocations[ID][0]
+        O = Anchor.X + Anchor.LambdaMin * Anchor.U
+        P = Anchor.X + Anchor.LambdaMax * Anchor.U
+        self._PlotData['Anchors'][ID]['Range'].set_data_3d([O[0], P[0]], [O[1], P[1]], [O[2], P[2]])
+
+    def AnchorToMapError(self, ID):
+        Anchor = self.AnchorsAndLocations[ID][0]
+        Point3D = self.Map.Points[ID]
+        Delta = (Point3D - Anchor.X)
+        Lambda = (Delta * Anchor.U).sum()
+        if Lambda < Anchor.LambdaMin:
+            print("{0:.2f} < {1:.2f}".format(Lambda, Anchor.LambdaMin))
+        elif Lambda > Anchor.LambdaMax:
+            print("{0:.2f} > {1:.2f}".format(Lambda, Anchor.LambdaMax))
+        else:
+            print("{0:.2f} <= {1:.2f} <= {2:.2f}".format(Anchor.LambdaMin, Lambda, Anchor.LambdaMax))
+        print("OffAxis by {0:.2f}".format(np.linalg.norm(Delta - Lambda * Anchor.U)))
 
 class CameraClass:
     MaxDx = 0.0001
     MaxDTheta = 0.01 / 180 * np.pi
+    MaxDt = 0.0001
     
     def __init__(self, Map, Solver):
         self.X = np.zeros(3, dtype = float)
@@ -182,6 +221,7 @@ class CameraClass:
         self.Map = Map
         self.OnScreen = []
 
+        self.t = 0.
 
     def Init(self):
         CamVisionAxis = np.array([1., 0., 0.])
@@ -191,12 +231,10 @@ class CameraClass:
             if OnScreen:
                 self.OnScreen += [np.array([1, Location[0], Location[1]])]
                 Depth = ((Point - self.X) * WVisionAxis).sum()
-                disparity = int(1/(Depth/DEPTH_CONSTANT))
+                disparity = int(DEPTH_CONSTANT/Depth + 0.5)
                 self.Solver.AddAnchor(nPoint, Location, disparity)
             else:
                 self.OnScreen += [np.zeros(3)]
-
-        self.t = 0.
 
     def Move(self, tData, XData, ThetaData, moveType = 'relative'):
         if moveType == 'relative':
@@ -206,7 +244,7 @@ class CameraClass:
             V = (XData - self.X) / tData
             Omega = (ThetaData - self.Theta) / tData
 
-        N = max(100, int(max(abs(XData / self.MaxDx).max(), abs(ThetaData / self.MaxDTheta).max())))
+        N = max(int(tData/self.MaxDt), int(max(abs(XData / self.MaxDx).max(), abs(ThetaData / self.MaxDTheta).max())))
         dt = tData / N
         print(N)
 
@@ -216,6 +254,7 @@ class CameraClass:
             self.t += dt
             self.X += dt*V
             self.Theta += dt * Omega
+            self._UpToDate = False
             for nPoint, Point in enumerate(self.Map.Points):
                 OnScreen, Location = self.GetOnScreenLocation(Point)
                 if self.OnScreen[nPoint][0]:
@@ -235,14 +274,21 @@ class CameraClass:
                         Depth = ((Point - self.X) * WVisionAxis).sum()
                         disparity = int(1/(Depth/DEPTH_CONSTANT))
                         self.Solver.AddAnchor(nPoint, Location, disparity)
+                        self.OnScreen[nPoint][0] = 1
+                        self.OnScreen[nPoint][1:] = Location
+
             if MaxDisplacement > 0.1:
                 self.Solver.OnTrackerData(self.t, DisplacementData[0], DisplacementData[1])
+                self.OnScreen[DisplacementData[0]][1:] = DisplacementData[1]
+            else:
+                self.Solver.OnTrackerData(self.t)
 
     @property
     def R(self):
         if self._UpToDate:
             return self.RStored
         Theta = np.linalg.norm(self.Theta)
+        self._UpToDate = True
         if Theta == 0:
             self.RStored = np.identity(3)
             return self.RStored
@@ -260,13 +306,13 @@ class CameraClass:
             return False, None
         CV /= CV[0]
         x = CV[1:] * ALPHAS + CS
-        if (x<0).any() or (x>=CS*2).any():
+        if (x<0).any() or (x>=SIZE).any():
             return False, None
         return True, x
 
-    def Plot(self, ax = None, ax3D = None, Init = False):
+    def Plot(self, ax = None, ax3D = None, axPosition = None, axAngle = None, Init = False):
         if Init:
-            self._PlotInit(ax, ax3D)
+            self._PlotInit(ax, ax3D, axPosition, axAngle)
         for nPoint, X in enumerate(self.Map.Points):
             OnScreen, x = self.GetOnScreenLocation(X)
             alpha = np.e**-(np.linalg.norm(X - self.X) / 3)
@@ -282,10 +328,14 @@ class CameraClass:
             U[nDim] = 1.
             V = R.T.dot(U)
             TV = T+V
-            #self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
+            self._PlotData['Frame'][nDim].set_data_3d([T[0], TV[0]], [T[1], TV[1]], [T[2], TV[2]])
+        axPosition, axAngle = self._PlotData['axPosition'], self._PlotData['axAngle']
+        for nDim, Color in enumerate(['r', 'g', 'b']):
+            axPosition.plot(self.t, self.X[nDim], marker = 'o', color = Color)
+            axAngle.plot(self.t, self.Theta[nDim], marker = 'o', color = Color)
 
-    def _PlotInit(self, ax, ax3D):
-        self._PlotData = {'Frame':[], 'Points':[]}
+    def _PlotInit(self, ax, ax3D, axPosition, axAngle):
+        self._PlotData = {'Frame':[], 'Points':[], 'axPosition':axPosition, 'axAngle':axAngle}
         NS = [0,0]
         for nDim in range(3):
             self._PlotData['Frame'] += ax3D.plot(NS, NS, NS, color = 'g', linewidth = FRAME_LW)
@@ -294,8 +344,10 @@ class CameraClass:
 
 class AnchorClass:
     K_NonAxis = 1.
+    NonAxisTolerance = 0.1
 
-    def __init__(self, X, Origin, LambdaMin = None, LambdaMax = None):
+    def __init__(self, ID, X, Origin, LambdaMin = None, LambdaMax = None):
+        self.ID = ID
         self.X = np.array(X)
         self.Origin = np.array(Origin)
         self.U = (X - Origin)
@@ -307,12 +359,16 @@ class AnchorClass:
             self.LambdaMin = LambdaMin
         if LambdaMax is None:
             self.LambdaMax = np.inf
+        else:
+            self.LambdaMax = LambdaMax
 
         self._WX = 0.
         self._W = 0.
 
         self.XCamera = np.array(X)
         self.V = np.array(self.U)
+
+        self.K = self.K_NonAxis
 
     def Update(self, XCamera, V):
         self.XCamera = XCamera
@@ -328,7 +384,7 @@ class AnchorClass:
     @property
     def Energy(self):
         Pu, Pv = self.RestrictedPuPv
-        return self.K_NonAxis * ((Pu - Pv)**2).sum()
+        return self.K * ((Pu - Pv)**2).sum()
 
     @property
     def RestrictedPuPv(self):
@@ -339,7 +395,12 @@ class AnchorClass:
             Pv = Pu - (Delta * self.U).sum() * self.U 
         else:
             Lambda = (Delta * (self.U - self.V * Alpha)).sum() / (1-Alpha**2)
-            Lambda = min(self.LambdaMax, max(self.LambdaMin, Lambda)) # We restrict on the acting zone of the point
+            if Lambda < self.LambdaMin:
+                #print("{0} is too close by {1:.3f}".format(self.ID, self.LambdaMin - Lambda))
+                Lambda = self.LambdaMin
+            elif Lambda > self.LambdaMax:
+                #print("{0} is too far by {1:.3f}".format(self.ID, Lambda - self.LambdaMax))
+                Lambda = self.LambdaMin
             Mu = Lambda * Alpha - (Delta * self.V).sum()
             Pu = self.X + Lambda * self.U
             Pv = self.XCamera + Mu * self.V
@@ -348,7 +409,12 @@ class AnchorClass:
     @property
     def ForceAndPoint(self):
         Pu, Pv = self.RestrictedPuPv
-        F_NonAxis = (Pu - Pv) * self.K_NonAxis
+        Delta = (Pu - Pv)
+        N = np.linalg.norm(Delta)
+        if N == 0:
+            return Delta, Pv
+        Delta *= max(0, N - self.NonAxisTolerance) / N
+        F_NonAxis = Delta * self.K
 
         return F_NonAxis, Pv # Forces and Application Point
 
@@ -408,32 +474,38 @@ class PlotterClass:
         self.Init()
 
     def Init(self):
+        NLines = 3
         self.Figure = plt.figure()
-        self.GTAx = self.Figure.add_subplot(3, 2, 1, projection='3d')
-        self.GTAx.set_label("Ground-truth Map")
+        self.GTAx = self.Figure.add_subplot(NLines, 2, 1, projection='3d')
+        self.GTAx.set_title("Ground-truth Map")
         self.GTAx.set_xlabel("X")
         self.GTAx.set_ylabel("Y")
         self.GTAx.set_zlabel("Z")
         self.GTAx.set_xlim(self.Map._Min - 0.2, self.Map._Max + 0.2)
         self.GTAx.set_ylim(self.Map._Min - 0.2, self.Map._Max + 0.2)
         self.GTAx.set_zlim(self.Map._Min - 0.2, self.Map._Max + 0.2)
-        self.SolverAx = self.Figure.add_subplot(3, 2, 2, projection='3d')
-        self.SolverAx.set_label("Solver Map")
+        self.SolverAx = self.Figure.add_subplot(NLines, 2, 2, projection='3d')
+        self.SolverAx.set_title("Solver Map")
         self.SolverAx.set_xlabel("X")
         self.SolverAx.set_ylabel("Y")
         self.SolverAx.set_zlabel("Z")
         self.SolverAx.set_xlim(self.Map._Min - 0.2, self.Map._Max + 0.2)
         self.SolverAx.set_ylim(self.Map._Min - 0.2, self.Map._Max + 0.2)
         self.SolverAx.set_zlim(self.Map._Min - 0.2, self.Map._Max + 0.2)
-        self.CamerasAxs = [self.Figure.add_subplot(3, 2, 3+nCam) for nCam in range(2)]
-        self.GraphAx = self.Figure.add_subplot(3, 1, 3)
+        self.CamerasAxs = [self.Figure.add_subplot(NLines, 2, 3+nCam) for nCam in range(2)]
+        self.EnergiesAx = self.Figure.add_subplot(NLines, 3, 7)
+        self.EnergiesAx.set_title("Energy Data")
+        self.PositionsAx = self.Figure.add_subplot(NLines, 3, 8)
+        self.PositionsAx.set_title("Translation Data")
+        self.AnglesAx = self.Figure.add_subplot(NLines, 3, 9)
+        self.AnglesAx.set_title("Rotation Data")
         self.Map.Plot(self.GTAx)
-        self.Solver.Plot(self.SolverAx, self.GraphAx, Init = True)
+        self.Solver.Plot(self.SolverAx, self.EnergiesAx, self.PositionsAx, self.AnglesAx, Init = True)
         for nCam, Camera in enumerate(self.Cameras):
-            Camera.Plot(self.CamerasAxs[nCam], self.GTAx, Init = True)
-            self.CamerasAxs[nCam].set_label("Camera {0}".format(nCam+1))
-            self.CamerasAxs[nCam].set_xlim(0, CS[0]*2)
-            self.CamerasAxs[nCam].set_ylim(0, CS[1]*2)
+            Camera.Plot(self.CamerasAxs[nCam], self.GTAx, self.PositionsAx, self.AnglesAx, Init = True)
+            self.CamerasAxs[nCam].set_title("Camera {0}".format(nCam+1))
+            self.CamerasAxs[nCam].set_xlim(0, SIZE[0])
+            self.CamerasAxs[nCam].set_ylim(0, SIZE[1])
             self.CamerasAxs[nCam].set_aspect("equal")
         self.LastUpdate = 0
 
@@ -452,7 +524,7 @@ class PlotterClass:
         self.LastUpdate = _LastUpdate
 
     def UpdatePlot(self, t):
-        if t - self.LastUpdate < 0.1:
+        if t - self.LastUpdate < 0.05:
             return
         self.LastUpdate = t
 
@@ -462,9 +534,9 @@ class PlotterClass:
         self.Figure.canvas.draw()
         
 class MapClass:
-    _NPoints = 6
-    _Min = -5
-    _Max = 5
+    _NPoints = 5
+    _Min = -5.4
+    _Max = 4.85
     def __init__(self):
         self.Points = []
         for x in linspace(self._Min, self._Max, self._NPoints):

@@ -10,7 +10,7 @@ DEPTH_CONSTANT = 20.
 class Solver:
     _Mass = 0.1
     _Moment = 0.5
-    _MuX = 3.
+    _MuV = 3.
     _MuOmega = 3.
 
     ScreenEdgeRepelDistance = 5.
@@ -25,6 +25,9 @@ class Solver:
         self.A = np.zeros(3)
         self.Alpha = np.zeros(3)
 
+        self.TotalDampening = 0.
+        self.TotalSpringAdded = 0.
+
         self.AnchorsAndLocations = {}
 
         self.RStored = np.identity(3)
@@ -36,8 +39,8 @@ class Solver:
 
         self.Camera.Init()
 
-    def AddAnchor(self, ID, x, disparity):
-        V = self.GetWorldVectorFromLocation(x)
+    def AddAnchor(self, ID, Location, disparity):
+        V = self.GetWorldVectorFromLocation(Location)
         WVisionAxis = np.array(self.WVisionAxis)
         N = (V * WVisionAxis).sum()
 
@@ -45,29 +48,36 @@ class Solver:
 
         LambdaMin = DEPTH_CONSTANT / ((disparity + 0.5) * N) - Lambda
         LambdaMax = DEPTH_CONSTANT / ((disparity - 0.5) * N) - Lambda
-        self.AnchorsAndLocations[ID] = (AnchorClass(ID, self.X + V * Lambda, self.X, LambdaMin, LambdaMax), np.array(x))
-        d = min(x.min(), (SIZE - 1 - x).max())
+        self.AnchorsAndLocations[ID] = (AnchorClass(ID, self.X + V * Lambda, self.X, LambdaMin, LambdaMax), np.array(Location))
+        d = min(Location.min(), (SIZE - 1 - Location).max())
         self.AnchorsAndLocations[ID][0].K = self.AnchorsAndLocations[ID][0].K_NonAxis * min(d / self.ScreenEdgeRepelDistance, 1)
         self._InitAnchorPlot(ID)
 
+        self.SystemEnergyUpdate(SpringVariation = self.AnchorsAndLocations[ID][0].Energy)
+
     def DelAnchor(self, ID):
-        self.Print("Removed anchor {0}".format(ID))
+        self.SystemEnergyUpdate(SpringVariation = -self.AnchorsAndLocations[ID][0].Energy)
         for line in self._PlotData['Anchors'][ID].values():
             line.remove()
         del self._PlotData['Anchors'][ID]
         del self.AnchorsAndLocations[ID]
+        self.Print("Removed anchor {0}".format(ID))
+
 
     def OnTrackerData(self, t, ID = None, x = None, disparity = None):
-        if self.t is None:
-            self.t = t
-            dt = 0
-        else:
-            dt = t - self.t
-            self.t = t
+        dt = t - self.t
+        self.t = t
         if not ID is None:
-            self.AnchorsAndLocations[ID][1][:] = x
-            d = min(x.min(), (SIZE - 1 - x).max())
-            self.AnchorsAndLocations[ID][0].K = self.AnchorsAndLocations[ID][0].K_NonAxis * min(d / self.ScreenEdgeRepelDistance, 1)
+            Anchor, Location = self.AnchorsAndLocations[ID]
+            V = self.GetWorldVectorFromLocation(Location)
+            Anchor.Update(self.X, V)
+            E = Anchor.Energy
+            Location[:] = x
+            d = min(x.min(), (SIZE - 1 - x).min())
+            Anchor.K = Anchor.K_NonAxis * min(d / self.ScreenEdgeRepelDistance, 1)
+            V = self.GetWorldVectorFromLocation(Location)
+            Anchor.Update(self.X, V)
+            self.SystemEnergyUpdate(SpringVariation = Anchor.Energy - E)
         self.Step(dt)
         self.Plotter.UpdatePlot(self.t)
 
@@ -80,9 +90,13 @@ class Solver:
             F, X_F = Anchor.ForceAndPoint
             F_Total += F
             Omega_Total += np.cross(F, X_F)
-        self.A = (F_Total - self._MuX * self.V) / self._Mass
+        DampeningTranslation =  - self._MuV * self.V
+        DampeningRotation =  - self._MuOmega * self.Omega
+        self.SystemEnergyUpdate(DampeningVariation = ((DampeningTranslation * self.V).sum() + (DampeningRotation * self.Omega).sum()) * dt)
+
+        self.A = (F_Total - self._MuV * self.V) / self._Mass
         self.V += dt * self.A
-        self.Alpha = (Omega_Total - self._MuOmega * self.Omega) /  self._Moment
+        self.Alpha = (Omega_Total - self._MuOmega * self.Omega) / self._Moment
         self.Omega += dt * self.Alpha
 
         self.X += self.V * dt
@@ -117,6 +131,19 @@ class Solver:
     @property
     def Energies(self):
         return self._Mass * (self.V**2).sum(), self._Moment * (self.Omega**2).sum()
+
+    def SystemEnergyUpdate(self, DampeningVariation = 0., SpringVariation = 0.):
+        self.TotalDampening += DampeningVariation
+        self.TotalSpringAdded += SpringVariation
+
+    @property
+    def MechanicalEnergy(self):
+        TotalEnergy = np.sum(self.Energies)
+        for ID, (Anchor, Location) in self.AnchorsAndLocations.items():
+            V = self.GetWorldVectorFromLocation(Location)
+            Anchor.Update(self.X, V)
+            TotalEnergy += Anchor.Energy
+        return TotalEnergy
 
     def GetWorldVectorFromLocation(self, x):
         Offsets = x - CS
@@ -208,7 +235,7 @@ class Solver:
 class CameraClass:
     MaxDx = 0.0001
     MaxDTheta = 0.01 / 180 * np.pi
-    MaxDt = 0.0001
+    MaxDt = 0.000001
     
     def __init__(self, Map, Solver):
         self.X = np.zeros(3, dtype = float)
@@ -277,7 +304,7 @@ class CameraClass:
                         self.OnScreen[nPoint][0] = 1
                         self.OnScreen[nPoint][1:] = Location
 
-            if MaxDisplacement > 0.1:
+            if MaxDisplacement > 0.05:
                 self.Solver.OnTrackerData(self.t, DisplacementData[0], DisplacementData[1])
                 self.OnScreen[DisplacementData[0]][1:] = DisplacementData[1]
             else:
@@ -381,6 +408,37 @@ class AnchorClass:
         else:
             return self._WX / self._W
 
+    def PlotVisionPlane(self):
+        Pu, Pv = self.RestrictedPuPv
+        UV = Pu - Pv
+        N = np.linalg.norm(UV)
+        if N == 0:
+            print("Unable to plot")
+        UV /= np.linalg.norm(UV)
+        Pu -= self.X
+        Pv -= self.X
+        f, ax = plt.subplots(1,1)
+        Z = np.cross(UV, self.V)
+        Z /= np.linalg.norm(Z)
+        X = self.V - (self.V*Z).sum() * Z
+        X /= np.linalg.norm(X)
+        Y = np.cross(Z, X)
+        LMin, LMax = self.U * self.LambdaMin, self.U * self.LambdaMax
+        PLMin, PLMax = LMin - (Z*LMin).sum() * Z, LMax - (Z*LMax).sum() * Z
+        ax.plot(0, 0, "ob")
+        ax.plot([(PLMin*X).sum(), (PLMax*X).sum()], [(PLMin*Y).sum(), (PLMax*Y).sum()], 'b')
+        for P in [Pu, Pv]:
+            P = P
+            PProj = P - (P*Z).sum() * Z
+            Px, Py = (PProj * X).sum(), (PProj * Y).sum()
+            ax.plot(Px, Py, 'xk')
+        O1 = Pv - 10 * self.V
+        O2 = Pv + 10 * self.V
+        PO1, PO2 = O1 - (Z*O1).sum() * Z, O2 - (Z*O2).sum() * Z
+        POx1, POy1 = (PO1 * X).sum(), (PO1 * Y).sum()
+        POx2, POy2 = (PO2 * X).sum(), (PO2 * Y).sum()
+        ax.plot([POx1, POx2], [POy1, POy2], '--k')
+
     @property
     def Energy(self):
         Pu, Pv = self.RestrictedPuPv
@@ -467,6 +525,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 class PlotterClass:
+    TimeWindow = 2.
     def __init__(self, Solver, Map, Cameras):
         self.Solver = Solver
         self.Map = Map
@@ -531,6 +590,8 @@ class PlotterClass:
         self.Solver.Plot()
         for Camera in self.Cameras:
             Camera.Plot()
+        for ax in [self.EnergiesAx, self.PositionsAx, self.AnglesAx]:
+            ax.set_xlim(t-self.TimeWindow, t)
         self.Figure.canvas.draw()
         
 class MapClass:

@@ -9,7 +9,6 @@ import pickle
 from sys import stdout
 from PEBBLE import Module, TrackerEvent
 
-import pathos.multiprocessing as mp
 from functools import partial
 
 from TrackerExtensions import *

@@ -121,17 +121,17 @@ class TrackerTRS(Module):
                                      ('RecordedTrackers@Speed', np.array),
                                      ('RecordedTrackers@State.Value', tuple),
                                      ('RecordedTrackers@ProjectedEvents', np.array),
-                                     #('RecordedTrackers@TimeConstant', float),
+                                     ('RecordedTrackers@TimeConstant', float),
                                      #('RecordedTrackers@DynamicsEstimator.W', float),
                                      #('RecordedTrackers@DynamicsEstimator.MDet', float),
-                                     #('RecordedTrackers@DynamicsEstimator.Speed', np.array),
+                                     ('RecordedTrackers@DynamicsEstimator.Speed', np.array),
                                      #('RecordedTrackers@DynamicsEstimator.Displacement', np.array),
                                      #('RecordedTrackers@DynamicsEstimator._Es', np.array),
                                      #('RecordedTrackers@DynamicsEstimator.X', np.array),
                                      #('RecordedTrackers@ApertureIssue', bool),
                                      #('RecordedTrackers@OffCentered', bool)
-                                     #('RecordedTrackers@ApertureEstimator.Value', float),
-                                     #('RecordedTrackers@SpeedConvergenceEstimator.Value', np.array)
+                                     ('RecordedTrackers@ApertureEstimator.Value', float),
+                                     ('RecordedTrackers@SpeedConvergenceEstimator.Value', np.array)
                                      ]
         self._StateClass = StateClass
 

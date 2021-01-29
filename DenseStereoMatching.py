@@ -1,5 +1,5 @@
 import numpy as np
-from PEBBLE import Module, Event, DisparityEvent, TrackerEvent
+from PEBBLE import Module, Event, DisparityEvent, TrackerEvent, FlowEvent
 import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
@@ -571,6 +571,8 @@ class AnalysisMapClass:
         self.ActivityMap = np.zeros(self.UsableGeometry)
         self.DistanceMap = np.zeros(self.UsableGeometry)
         self.SigmaMap = np.zeros(self.UsableGeometry)
+        self.FlowMap = np.zeros(tuple(self.UsableGeometry) + (2,))
+        self.FlowActivityMap = np.zeros(self.UsableGeometry)
         self.LastUpdateMap = -np.inf * np.ones(self.UsableGeometry)
 
     def OnEvent(self, event):
@@ -585,6 +587,16 @@ class AnalysisMapClass:
         self.ActivityMap[event.location[0],YMin:YMax] = self.ActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
         self.DistanceMap[event.location[0],YMin:YMax] = self.DistanceMap[event.location[0],YMin:YMax] * DecayColumn + Offset
         self.SigmaMap[event.location[0],YMin:YMax] = self.SigmaMap[event.location[0],YMin:YMax] * DecayColumn + (Offset - self.DistanceMap[event.location[0],YMin:YMax] / self.ActivityMap[event.location[0],YMin:YMax])**2
+
+        if event.Has(FlowEvent):
+            self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn + event.flow[0]
+            self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn + event.flow[1]
+            self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
+        else:
+            self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn
+            self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn
+            self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn
+
 
     def GetLastEventTimestamp(self, x, y):
         return self.LastUpdateMap[x,y-self.Radius]

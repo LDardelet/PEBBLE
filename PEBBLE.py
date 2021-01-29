@@ -1192,6 +1192,11 @@ class TauEvent(_EventExtension):
     _Fields = ['tau']
     _AutoPublic = True
 
+class FlowEvent(_EventExtension):
+    _Key = 6
+    _Fields = ['location', 'flow']
+    _AutoPublic = True
+
 class EventOld:
     def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):
         if original == None:

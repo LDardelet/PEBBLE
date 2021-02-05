@@ -374,7 +374,7 @@ class Framework:
         self._LogType = 'columns'
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
-    def Display(self):
+    def DisplayRestart(self):
         for ToolName in self.ToolsList:
             self.Tools[ToolName]._Restart()
 
@@ -1190,6 +1190,11 @@ class CameraPoseEvent(_EventExtension):
 class TauEvent(_EventExtension):
     _Key = 5
     _Fields = ['tau']
+    _AutoPublic = True
+
+class FlowEvent(_EventExtension):
+    _Key = 6
+    _Fields = ['location', 'flow']
     _AutoPublic = True
 
 class EventOld:

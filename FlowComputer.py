@@ -2,7 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, Event
+from PEBBLE import Module, FlowEvent
 
 class FlowComputer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -13,9 +13,9 @@ class FlowComputer(Module):
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Computation'
 
-        self._R = 5
-        self._EventsAgeLimit = 0.3
-        self._PolaritySeparation = True
+        self._R = 10
+        self._Tau = 0.2
+        self._PolaritySeparation = False
 
     def _InitializeModule(self, **kwargs):
         self.CurrentShape = list(self.__Framework__._GetStreamGeometry(self))
@@ -35,15 +35,15 @@ class FlowComputer(Module):
         return event
 
     def ComputeFullFlow(self, event):
-        Patch = self._LinkedMemory.GetPatch(event.location[0], event.location[1], self._R, self._R)
+        Patch = self._LinkedMemory.GetSquarePatch(event.location, self._R)
         if self._PolaritySeparation:
             Patch = Patch[:,:,event.polarity] #for polarity separation
         else:
             Patch = Patch.max(axis = 2)
         
-        Positions = np.where(Patch > Patch.max() - self._EventsAgeLimit)
-        self.NEventsMap[event.location[0], event.location[1], event.polarity] = Positions[0].shape[0]
-        if self.NEventsMap[event.location[0], event.location[1], event.polarity] > 2:
+        Positions = np.where(Patch > event.timestamp - self._Tau)
+        NEvents = Positions[0].shape[0]
+        if NEvents > 5:
             Ts = Patch[Positions]
             tMean = Ts.mean()
             
@@ -60,50 +60,11 @@ class FlowComputer(Module):
             Stx = (tDeltas*xDeltas).sum()
             Sty = (tDeltas*yDeltas).sum()
 
-            self.DetMap[event.location[0], event.location[1], event.polarity] = Sx2*Sy2 - Sxy**2
-            if self.DetMap[event.location[0], event.location[1], event.polarity] > 0:
-                F = np.array([(Sy2*Stx - Sxy*Sty)/self.DetMap[event.location[0], event.location[1], event.polarity], (Sx2*Sty - Sxy*Stx)/self.DetMap[event.location[0], event.location[1], event.polarity]])
+            Det = Sx2*Sy2 - Sxy**2
+            if Det / (NEvents**2 * self._R ** 4) > 0.05:
+                F = np.array([(Sy2*Stx - Sxy*Sty), (Sx2*Sty - Sxy*Stx)]) / Det
 
                 N2 = (F**2).sum()
                 if N2 > 0:
-                    self.NormMap[event.location[0], event.location[1], event.polarity] = 1./N2
-                    St2 = (tDeltas ** 2).sum()
-                    if St2 != 0:
-                        self.RegMap[event.location[0], event.location[1], event.polarity] = 1 - ((tDeltas - F[0]*xDeltas - F[1]*yDeltas)**2).sum()/St2
-                    else:
-                        self.RegMap[event.location[0], event.location[1], event.polarity] = 1
-                    self.FlowMap[event.location[0], event.location[1], event.polarity, :] = F * self.NormMap[event.location[0], event.location[1], event.polarity]
-                else:                    
-                    self.FlowMap[event.location[0], event.location[1], event.polarity, :] = 0.
-                    self.RegMap[event.location[0], event.location[1], event.polarity] = 0.
-                    self.NormMap[event.location[0], event.location[1], event.polarity] = 0.
-
-            else:
-                self.FlowMap[event.location[0], event.location[1], event.polarity, :] = 0.
-                self.RegMap[event.location[0], event.location[1], event.polarity] = 0.
-                self.NormMap[event.location[0], event.location[1], event.polarity] = 0.
-
-        else:
-            self.FlowMap[event.location[0], event.location[1], event.polarity, :] = 0.
-            self.RegMap[event.location[0], event.location[1], event.polarity] = 0.
-            self.NormMap[event.location[0], event.location[1], event.polarity] = 0.
-
-###### PLOTTING TOOLS ######
-
-    def PlotFlow(self, location, radius, timelimit = -np.inf, ax = None):
-        xMin = max(0, location[0] - radius)
-        yMin = max(0, location[1] - radius)
-        xMax = min(self.CurrentShape[0], location[0] + radius)
-        yMax = min(self.CurrentShape[1], location[0] + radius)
-
-        if ax is None:
-            fig,  ax = plt.subplots(1,1)
-
-        for x in range(xMin, xMax + 1):
-            for y  in range(yMin, yMax + 1):
-                pol = self.STContext[x, y, :].argmax()
-                if self.STContext[x, y, pol] > timelimit:
-                    if self.NormMap[xx, y, pol] > 0:
-                        F = self.FlowMap[x, y, pol, :]
-                        ax.quiver(x, y, F[0], F[1])
-        return fig, ax
+                    F /= N2
+                event.Attach(FlowEvent, location = np.array(event.location), flow = F)

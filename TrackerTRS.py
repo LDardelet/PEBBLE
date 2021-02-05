@@ -1151,7 +1151,7 @@ class TrackerClass:
         SpeedError = DeltaPos / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaPos
 
-    def PlotShape(self, LockSave = -1):
+    def PlotShape(self, LockSave = -1, OnlyReferenceShape = False):
         f, ax = plt.subplots(1,1)
         ax.set_aspect('equal')
         ax.set_xlim(-self.Radius, self.Radius)
@@ -1175,8 +1175,9 @@ class TrackerClass:
         ax.set_title(title)
         MaxFlow = np.linalg.norm(self.AssociatedFlows, axis = 1).max()
         PlottedList = list(self.ProjectedEvents)
-        for E in self.ProjectedEvents:
-            ax.plot(E[1], E[2], 'ob', alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant))
+        if not Lock or not OnlyReferenceShape:
+            for E in self.ProjectedEvents:
+                ax.plot(E[1], E[2], 'ob', alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant))
         if Lock:
             PlottedList += Lock.Events[:-1]
             for E in Lock.Events[:-1]:

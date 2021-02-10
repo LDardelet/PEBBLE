@@ -241,7 +241,8 @@ class TrackerTRS(Module):
             Associated = Tracker.RunEvent(event)
             if Associated and self.TrackerEventCondition(Tracker):
                 event.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = TrackerID, TrackerAngle = Tracker.Position[2], TrackerScaling = Tracker.Position[3], TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
-                event.Attach(TauEvent, tau = Tracker.TimeConstant)
+                if Tracker.State.Locked:
+                    event.Attach(TauEvent, tau = Tracker.TimeConstant)
 
         if self.NewTrackersAsked:
             self._PlaceNewTrackers()

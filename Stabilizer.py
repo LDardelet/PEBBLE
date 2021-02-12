@@ -13,11 +13,18 @@ class Stabilizer(Module):
         self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
-        self._MonitoredVariables = []
+        self._MonitoredVariables = [('Tau', float),
+                                    ('T', np.array),
+                                    ('TComp', np.array),
+                                    ('Theta', float),
+                                    ('ThetaComp', float),
+                                    ('ThetaFromTrackers', float)]
 
         self._MinTrackersForStabilizing = 8
+        self._MaxNormRatioOutlier = 1.2
         self._OutputEventsCameraIndex = 1
-        self._NPixelsAverage = 0.2
+        self._NPixelsAverage = 10
+        self._RatioThetaTrackers = 1.
 
     def _InitializeModule(self, **kwargs):
         self.ScreenCenter = np.array(self.Geometry[:2])/2
@@ -25,16 +32,22 @@ class Stabilizer(Module):
 
         self.RotationCenter = np.array(self.ScreenCenter)
         self.ADis = 0.
+        self.TComp = np.zeros(2, dtype = float)
         self.TSum = np.zeros(2, dtype = float)
-        self.CSum = 0.
-        self.SSum = 0.
+        self.ThetaComp = 0.
+        self.ThetaSum = 0.
+        self.ThetaFromTrackers = 0.
         self.LastDispacementUpdate = -np.inf
 
         self.ActiveTrackers = set()
         self.StaticTrackerLocations = {}
         self.OnScreenTrackerLocations = {}
+        self.StaticTrackerAngles = {}
+        self.OnScreenTrackerAngles = {}
 
-
+        self.StaticCenter = np.array(self.ScreenCenter)
+        self.OnScreenCenter = np.array(self.ScreenCenter)
+        self.NOutliers = 0
 
         self.LastTauUpdate = -np.inf
         self.ATau = 0.
@@ -57,26 +70,36 @@ class Stabilizer(Module):
         return event
 
     def AnalyzeTrackerData(self, event):
-        ID = event.TrackerID
-        if not event.TrackerColor == 'g':
-            if ID in self.ActiveTrackers:
-                self.ActiveTrackers.remove(ID)
-                del self.StaticTrackerLocations[ID]
-                del self.OnScreenTrackerLocations[ID]
-            return
-
-        TrackerCenteredLocation = event.TrackerLocation
-        self.OnScreenTrackerLocations[ID] = np.array(TrackerCenteredLocation)
-        if ID not in self.ActiveTrackers:
-            self.ActiveTrackers.add(ID)
-            if not self.Started:
-                self.StaticTrackerLocations[ID] = None
-                if len(self.ActiveTrackers) >= self._MinTrackersForStabilizing:
-                    self.Start()
+        for _ in event.Get(TrackerEvent):
+            ID = event.TrackerID
+            if event.TrackerColor == 'k':
+                if ID in self.ActiveTrackers:
+                    self.ActiveTrackers.remove(ID)
+                    del self.StaticTrackerLocations[ID]
+                    del self.OnScreenTrackerLocations[ID]
+                    del self.StaticTrackerAngles[ID]
+                    del self.OnScreenTrackerAngles[ID]
+                continue
+            if (event.TrackerColor != 'g' or event.TrackerMarker != 'o'):
+                if ID in self.ActiveTrackers:
+                    self.ActiveTrackers.remove(ID)
+                continue
+    
+            TrackerCenteredLocation = event.TrackerLocation
+            self.OnScreenTrackerLocations[ID] = np.array(TrackerCenteredLocation)
+            self.OnScreenTrackerAngles[ID] = event.TrackerAngle
+            if ID not in self.ActiveTrackers:
+                self.ActiveTrackers.add(ID)
+                if not self.Started:
+                    self.StaticTrackerLocations[ID] = None
+                    self.StaticTrackerAngles[ID] = None
+                    if len(self.ActiveTrackers) >= self._MinTrackersForStabilizing:
+                        self.Start()
+                    else:
+                        continue
                 else:
-                    return
-            else:
-                self.StaticTrackerLocations[ID] = self.ComputeStaticLocationFrom(TrackerCenteredLocation)
+                    self.StaticTrackerLocations[ID] = self.ComputeStaticLocationFrom(TrackerCenteredLocation)
+                    self.StaticTrackerAngles[ID] = event.TrackerAngle - self.Theta
         if self.Started:
             self.UpdateDisplacement(event.timestamp)
 
@@ -84,48 +107,80 @@ class Stabilizer(Module):
     def T(self):
         if self.ADis == 0:
             return np.zeros(2, dtype = float)
-        return self.TSum / self.ADis
+        return self.TComp - self.TSum / self.ADis
     @property
-    def C(self):
-        if self.ADis == 0:
-            return 1.
-        return self.CSum / self.ADis
-    @property
-    def S(self):
+    def Theta(self):
         if self.ADis == 0:
             return 0.
-        return self.SSum / self.ADis
+        #return -(self.ThetaComp - self.ThetaSum / self.ADis)
+        return 0.
+
+    @property
+    def C(self):
+        return np.cos(self.Theta)
+    @property
+    def S(self):
+        return np.sin(self.Theta)
 
     @property
     def R(self): # From StaticToCurrent
         return np.array([[self.C, -self.S], [self.S, self.C]])
 
     def ComputeStaticLocationFrom(self, OnScreenLocation):
-        return self.RotationCenter - self.T + self.R.T.dot(OnScreenLocation - self.RotationCenter)
+        return self.StaticCenter + self.R.T.dot(OnScreenLocation - self.OnScreenCenter)
 
-    def UpdateDisplacement(self, t):
-        OnScreenLocations = np.zeros((len(self.ActiveTrackers), 2), dtype = float)
-        StaticLocations = np.zeros((len(self.ActiveTrackers), 2), dtype = float)
-        for nID, ID in enumerate(self.ActiveTrackers):
+    def UpdateDisplacement(self, t, Outliers = []):
+        self.NOutliers = len(Outliers)
+        NTrackersConsidered = len(self.ActiveTrackers) - len(Outliers)
+        OnScreenLocations = np.zeros((NTrackersConsidered, 2), dtype = float)
+        StaticLocations = np.zeros((NTrackersConsidered, 2), dtype = float)
+        IDs = np.zeros(NTrackersConsidered, dtype = int)
+        nID = 0
+        for ID in self.ActiveTrackers:
+            if ID in Outliers:
+                continue
             OnScreenLocations[nID,:] = self.OnScreenTrackerLocations[ID]
             StaticLocations[nID,:] = self.StaticTrackerLocations[ID]
-        AverageOnScreenLocation = OnScreenLocations.mean(axis = 0)
-        AverageStaticLocation = StaticLocations.mean(axis = 0)
-        DeltasOnScreen = np.zeros((len(self.ActiveTrackers), 2), dtype = float)
-        DeltasOnScreen[:,0] = OnScreenLocations[:,0] - AverageOnScreenLocation[0]
-        DeltasOnScreen[:,1] = OnScreenLocations[:,1] - AverageOnScreenLocation[1]
-        DeltasStatic = np.zeros((len(self.ActiveTrackers), 2), dtype = float)
-        DeltasStatic[:,0] = StaticLocations[:,0] - AverageStaticLocation[0]
-        DeltasStatic[:,1] = StaticLocations[:,1] - AverageStaticLocation[1]
-        NDeltas = np.maximum(0.001, np.linalg.norm(DeltasOnScreen, axis = 1) * np.linalg.norm(DeltasStatic, axis = 1))
+            IDs[nID] = ID
+            nID += 1
+        self.OnScreenCenter = OnScreenLocations.mean(axis = 0)
+        self.StaticCenter = StaticLocations.mean(axis = 0)
+        DeltasOnScreen = np.zeros((NTrackersConsidered, 2), dtype = float)
+        DeltasOnScreen[:,0] = OnScreenLocations[:,0] - self.OnScreenCenter[0]
+        DeltasOnScreen[:,1] = OnScreenLocations[:,1] - self.OnScreenCenter[1]
+        DeltasStatic = np.zeros((NTrackersConsidered, 2), dtype = float)
+        DeltasStatic[:,0] = StaticLocations[:,0] - self.StaticCenter[0]
+        DeltasStatic[:,1] = StaticLocations[:,1] - self.StaticCenter[1]
+        NStatic = np.linalg.norm(DeltasStatic, axis = 1)
+        NOnScreen = np.linalg.norm(DeltasOnScreen, axis = 1)
+        NDeltas = np.maximum(0.001, NStatic * NOnScreen)
+        Ratios = NOnScreen / np.maximum(0.001, NStatic)
+        RatiosRatios = Ratios / Ratios.mean()
+        NewOutliers = (IDs[np.where(np.logical_or((RatiosRatios > self._MaxNormRatioOutlier), (RatiosRatios < 1./self._MaxNormRatioOutlier)))]).tolist()
+        if NewOutliers:
+            Outliers = Outliers + NewOutliers
+            if len(self.ActiveTrackers) - len(Outliers) > self._MinTrackersForStabilizing:
+                return self.UpdateDisplacement(t, Outliers)
+        
 
-        Decay = np.e**((self.LastDispacementUpdate - t)/(self.Tau * self._NPixelsAverage))
-        self.TSum = self.TSum * Decay + (AverageOnScreenLocation - AverageStaticLocation)
-        self.CSum = self.CSum * Decay + ((DeltasOnScreen * DeltasStatic).sum(axis = 1) / NDeltas).mean()
-        self.SSum = self.SSum * Decay + ((DeltasOnScreen[:,1] * DeltasStatic[:,0] - DeltasOnScreen[:,0] * DeltasStatic[:,1]) / NDeltas).mean()
+        self.TComp = (self.OnScreenCenter - self.StaticCenter)
+        CComp = ((DeltasOnScreen * DeltasStatic).sum(axis = 1) / NDeltas).mean()
+        SComp = ((DeltasOnScreen[:,1] * DeltasStatic[:,0] - DeltasOnScreen[:,0] * DeltasStatic[:,1]) / NDeltas).mean()
+        ThetaComp = np.arccos(CComp) * np.sign(SComp)
+        nTurns = int(np.rint((self.ThetaComp - ThetaComp) / (2*np.pi)))
+        self.ThetaFromTrackers = np.mean([self.OnScreenTrackerAngles[ID] - self.StaticTrackerAngles[ID] for ID in self.ActiveTrackers])
+        self.ThetaComp = (1-self._RatioThetaTrackers) * (ThetaComp + 2 * np.pi * nTurns) + self._RatioThetaTrackers * self.ThetaFromTrackers
+
+        if self._NPixelsAverage == 0:
+            Decay = 0
+        else:
+            Decay = np.e**((self.LastDispacementUpdate - t)/(self.Tau * self._NPixelsAverage))
+        self.TSum = self.TSum * Decay + self.TComp
+        self.ThetaSum = self.ThetaSum * Decay + self.ThetaComp
         self.ADis = self.ADis * Decay + 1
 
         self.LastDispacementUpdate = t
+
 
 #    def UpdateDisplacement(self):
 #        Denom = (self.Sxx + self.Syy - self.Sx**2 - self.Sy**2)
@@ -143,6 +198,7 @@ class Stabilizer(Module):
     def Start(self):
         for ID in self.ActiveTrackers:
             self.StaticTrackerLocations[ID] = np.array(self.OnScreenTrackerLocations[ID])
+            self.StaticTrackerAngles[ID] = self.OnScreenTrackerAngles[ID]
         self.Started = True
         self.LogSuccess("Started")
 

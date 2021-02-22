@@ -65,6 +65,7 @@ class DisplayHandler(Module):
         self._PostService = None
         self._NeedsLogColumn = False
 
+
         self.Socket = None
         atexit.register(self.EndTransmission)
 

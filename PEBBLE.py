@@ -860,7 +860,7 @@ class Module:
         if self.__CameraInputRestriction__ and self.__Type__ != 'Input':
             OnEventMethodUsed = self.__OnEventRestricted__
         else:
-            OnEventMethodUsed = self._OnEventModule
+            OnEventMethodUsed = self.__OnEventUnrestricted__
 
         if self._MonitorDt and self._MonitoredVariables:
             self.History = {'t':[]}
@@ -919,10 +919,14 @@ class Module:
         pass
 
     def __OnEventRestricted__(self, event):
-        if event.cameraIndex in self.__CameraInputRestriction__:
+        if event.RunCameraIndexes(self.__CameraInputRestriction__):
             return self._OnEventModule(event)
-        else:
-            return event
+        return event
+
+    def __OnEventUnrestricted__(self, event):
+        if not event is None:
+            event.RunAllCameraIndexes()
+        return self._OnEventModule(event)
 
     def __OnEventMonitor__(self, event):
         if event.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
@@ -1070,9 +1074,10 @@ class BareEvent:
             except:
                 self.__dict__[Field] = self._Defaults[Field]
         if self.__class__ == BareEvent:
-            self._Extensions = []
-            self._ExtensionKeys = set()
+            self._ExtensionsForCameraIndex = {}
+            self._ExtensionKeysForCameraIndex = {}
             self._RunningExtensions = None
+            self._RunningCameraIndexes = []
     def _AsList(self, AskedKey = None):
         List = [self._Key]
         for Field in self.__class__._Fields:
@@ -1083,28 +1088,61 @@ class BareEvent:
                 List += [Value]
         if not self.__class__ == BareEvent:
             return List
-        for Extension in self._Extensions:
-            if AskedKey is None: 
-                ExList = Extension._AsList()
-                if not ExList is None:
-                    List += [ExList]
-            else:
-                if AskedKey == Extension._Key:
-                    return List[1:] + Extension._AsList()[1:]
+        for CameraIndex in self._RunningCameraIndexes:
+            for Extension in self._ExtensionsForCameraIndex[CameraIndex]:
+                if AskedKey is None: 
+                    ExList = Extension._AsList(None)
+                    if not ExList is None:
+                        List += [ExList]
+                else:
+                    if AskedKey == Extension._Key:
+                        return List[1:] + Extension._AsList()[1:]
         return List[1:]
 
     def Attach(self, Extension, **kwargs):
-        self._Extensions += [Extension(bare = True, **kwargs)]
-        self._ExtensionKeys.add(Extension._Key)
+        if 'cameraIndex' in kwargs:
+            CameraIndex = kwargs['cameraIndex']
+            del kwargs['cameraIndex']
+        else:
+            Indexes = list(self._RunningCameraIndexes)
+            if len(Indexes) == 0:
+                CameraIndex = 0
+            else:
+                CameraIndex = Indexes[0]
+        if CameraIndex not in self._ExtensionsForCameraIndex:
+            self._ExtensionsForCameraIndex[CameraIndex] = []
+            self._ExtensionKeysForCameraIndex[CameraIndex] = set()
+        self._ExtensionsForCameraIndex[CameraIndex] += [Extension(bare = True, **kwargs)]
+        self._ExtensionKeysForCameraIndex[CameraIndex].add(Extension._Key)
         if Extension._AutoPublic:
-            self._Extensions[-1]._Publicize(self)
+            self._ExtensionsForCameraIndex[CameraIndex][-1]._Publicize(self)
 
+    def RunAllCameraIndexes(self):
+        self._RunningCameraIndexes = list(self._ExtensionsForCameraIndex.keys())
+
+    def RunCameraIndexes(self, CameraIndexesRestrictions):
+        if not CameraIndexesRestrictions:
+            self._RunningCameraIndexes = list(self._ExtensionsForCameraIndex.keys())
+            return bool(self._RunningCameraIndexes)
+        self._RunningCameraIndexes = []
+        for CameraIndex in CameraIndexesRestrictions:
+            if CameraIndex in self._ExtensionsForCameraIndex.keys():
+                self._RunningCameraIndexes += [CameraIndex]
+        return bool(self._RunningCameraIndexes)
+
+    def HasIndex(self, CameraIndex):
+        return CameraIndex in self._ExtensionKeysForCameraIndex.keys()
     def Has(self, ExtensionRequired):
         if not isinstance(self, BareEvent):
             return False
-        return ExtensionRequired._Key in self._ExtensionKeys
+        for CameraIndex in self._RunningCameraIndexes:
+            if ExtensionRequired._Key in self._ExtensionKeysForCameraIndex[CameraIndex]:
+                return True
+        return False
     def Get(self, ExtensionRequired):
-        self._RunningExtensions = [Extension for Extension in self._Extensions if ExtensionRequired._Key == Extension._Key]
+        self._RunningExtensions = []
+        for CameraIndex in self._RunningCameraIndexes:
+            self._RunningExtensions += [Extension for Extension in self._ExtensionsForCameraIndex[CameraIndex] if ExtensionRequired._Key == Extension._Key]
         return self.__iter__()
     def __iter__(self):
         if self._RunningExtensions is None:
@@ -1139,8 +1177,11 @@ class BareEvent:
     def Copy(self):
         SelfDict = {Key: getattr(self, Key) for Key in self._Fields}
         NewInstance = self.__class__(**SelfDict)
-        for Extension in self._Extensions:
-            NewInstance.Attach(Extension.__class__, **{Key: getattr(Extension, Key) for Key in Extension._Fields})
+        for CameraIndex, Extensions in self._ExtensionsForCameraIndex.items():
+            for Extension in Extensions:
+                Data = {Key: getattr(Extension, Key) for Key in Extension._Fields}
+                Data['cameraIndex'] = CameraIndex
+                NewInstance.Attach(Extension.__class__, **Data)
         return NewInstance
 
 class _EventExtension(BareEvent):
@@ -1166,7 +1207,7 @@ class _EventExtension(BareEvent):
             del BaseEvent.__dict__[Field]
 class Event(_EventExtension):
     _Key = 1
-    _Fields = ['location', 'polarity', 'cameraIndex']
+    _Fields = ['location', 'polarity']
     _Defaults = {'cameraIndex':0}
     _AutoPublic = True
 

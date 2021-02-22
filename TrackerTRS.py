@@ -7,7 +7,7 @@ import os
 import inspect
 import pickle
 from sys import stdout
-from PEBBLE import Module, TrackerEvent
+from PEBBLE import Module, TrackerEvent, TauEvent
 
 from functools import partial
 
@@ -120,7 +120,7 @@ class TrackerTRS(Module):
                                     ('RecordedTrackers@Position', np.array),
                                      ('RecordedTrackers@Speed', np.array),
                                      ('RecordedTrackers@State.Value', tuple),
-                                     ('RecordedTrackers@ProjectedEvents', np.array),
+                                     #('RecordedTrackers@ProjectedEvents', np.array),
                                      ('RecordedTrackers@TimeConstant', float),
                                      #('RecordedTrackers@DynamicsEstimator.W', float),
                                      #('RecordedTrackers@DynamicsEstimator.MDet', float),
@@ -241,6 +241,8 @@ class TrackerTRS(Module):
             Associated = Tracker.RunEvent(event)
             if Associated and self.TrackerEventCondition(Tracker):
                 event.Attach(TrackerEvent, TrackerLocation = np.array(Tracker.Position[:2]), TrackerID = TrackerID, TrackerAngle = Tracker.Position[2], TrackerScaling = Tracker.Position[3], TrackerColor = Tracker.State.GetColor(), TrackerMarker = Tracker.State.GetMarker())
+                if Tracker.State.Locked:
+                    event.Attach(TauEvent, tau = Tracker.TimeConstant)
 
         if self.NewTrackersAsked:
             self._PlaceNewTrackers()
@@ -1150,12 +1152,12 @@ class TrackerClass:
         SpeedError = DeltaPos / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaPos
 
-    def PlotShape(self, LockSave = -1):
+    def PlotShape(self, LockSave = -1, OnlyReferenceShape = False, MinAlpha = 0., AddText = True):
         f, ax = plt.subplots(1,1)
         ax.set_aspect('equal')
         ax.set_xlim(-self.Radius, self.Radius)
         ax.set_ylim(-self.Radius, self.Radius)
-        Zone = plt.Circle((0, 0), self.Radius, color='k', fill=False)
+        Zone = plt.Circle((0, 0), self.Radius, color='g', fill=False, linewidth = 2)
         EventZone = plt.Circle((-100, -100), self.TM._ClosestEventProximity, color='k', fill=False, linestyle = '--')
         OffsetUsed = plt.plot(-100, -100, 'vg', zorder = 10)[0]
         FlowUsed = plt.plot([-100, -101], [-100, -101], 'r')[0]
@@ -1171,15 +1173,23 @@ class TrackerClass:
             if not Lock.ReleaseTime is None:
                 title += ", Release : {0:.3f}".format(Lock.ReleaseTime)
         title +="\nEvent time : {0:.3f}"
-        ax.set_title(title)
+        if AddText:
+            ax.set_title(title)
         MaxFlow = np.linalg.norm(self.AssociatedFlows, axis = 1).max()
         PlottedList = list(self.ProjectedEvents)
-        for E in self.ProjectedEvents:
-            ax.plot(E[1], E[2], 'ob', alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant))
+        if not Lock or not OnlyReferenceShape:
+            for E in self.ProjectedEvents:
+                alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant)
+                if alpha < MinAlpha:
+                    continue
+                ax.plot(E[1], E[2], 'ob', alpha = alpha)
         if Lock:
             PlottedList += Lock.Events[:-1]
             for E in Lock.Events[:-1]:
-                ax.plot(E[1], E[2], 'og', alpha = np.e**((E[0]-Lock.Time)/self.TimeConstant))
+                alpha = np.e**((E[0]-Lock.Time)/self.TimeConstant)
+                if alpha < MinAlpha:
+                    continue
+                ax.plot(E[1], E[2], 'og', alpha = alpha)
         PlottedList = np.array(PlottedList)
         def onclick(event):
             EventConsidered = np.linalg.norm(PlottedList[:,1:] - np.array([event.xdata, event.ydata]), axis = 1).argmin()

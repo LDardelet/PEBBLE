@@ -340,33 +340,33 @@ class Framework:
             for tool_name in self.ToolsList:
                 self.Tools[tool_name]._Resume()
 
-        t = 0.
+        self.t = 0.
         while self.Running and not self.Paused:
-            t = self._NextInputEvent().timestamp
-            if t is None or t > stop_at:
+            self.t = self._NextInputEvent().timestamp
+            if self.t is None or self.t > stop_at:
                 self.Paused = 'Framework'
-            if t > self.LastStartWarning + 1.:
-                self._Log("Warping : {0:.1f}/{1:.1f}s".format(t, start_at))
+            if self.t > self.LastStartWarning + 1.:
+                self._Log("Warping : {0:.1f}/{1:.1f}s".format(self.t, start_at))
                 self._SendLog()
-                self.LastStartWarning = t
-            if t >= start_at:
+                self.LastStartWarning = self.t
+            if self.t >= start_at:
                 break
 
         while self.Running and not self.Paused:
-            t = self.NextEvent(AtEventMethod)
+            self.t = self.NextEvent(AtEventMethod)
             self._SendLog()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 promptedLine = sys.stdin.readline()
                 if 'a' in promptedLine or 'q' in promptedLine:
                     self.Paused = 'user'
-            if t is None or t > stop_at:
+            if self.t is None or self.t > stop_at:
                 self.Paused = 'Framework'
         if not self.Running:
             self._Log("Main loop finished without error.")
         else:
             if self.Paused:
-                self._Log("Paused at t = {0:.3f}s by {1}.".format(t, self.Paused), 1)
+                self._Log("Paused at t = {0:.3f}s by {1}.".format(self.t, self.Paused), 1)
                 for tool_name in self.ToolsList:
                     self.Tools[tool_name]._Pause(self.Paused)
 

@@ -25,7 +25,7 @@ class DenseStereo(Module):
         self._MinCPAverageActivityRadiusRatio = 1.5 / 10
         self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
         self._CleanupTauRatio = 0.5 
-        self._SignaturesExponents = [1,1,1]
+        self._SignaturesExponents = [1,1,1,1]
         self._yAverageSignatureNullAverage = True
 
         self._MatchThreshold = 0.9
@@ -514,29 +514,34 @@ class DenseStereo(Module):
                 CP[4][0][:], CP[4][1][:] = CP[4][1][:], CP[4][0][:]
         return False, None
 
-    def Match(self, SigsA, SigsB):
+    def Match(self, SigsA, SigsB, LocalExponents = None):
+        if LocalExponents is None:
+            LocalExponents = self._SignaturesExponents
         MatchValue = 1.
-        for nMetric, Exponent in enumerate(self._SignaturesExponents):
+        for nMetric, Exponent in enumerate(LocalExponents):
             NA, NB = np.linalg.norm(SigsA[nMetric]), np.linalg.norm(SigsB[nMetric])
             if NA == 0 or NB == 0:
                 return False
             if nMetric == 1: # If this is the y distance metric
                 MatchValue *= ((1+(SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB)))/2)**Exponent
+            elif nMetric == 3:
+                PatchMatch = (1+(SigsA[nMetric] * SigsB[nMetric]).sum(axis = 1))/2
+                MatchValue *= (PatchMatch.sum() / PatchMatch.shape[0])
             else:
                 MatchValue *= (SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB))**Exponent
         return MatchValue
 
-    def FullMapping(self, yOffset = 0, AutoMatch = False, UseRanges = True):
-        t = self.__Framework__.PropagatedEvent.timestamp
+    def FullMapping(self, yOffset = 0, AutoMatch = False, UsedRanges = None, UsedExponents = None):
+        t = self.__Framework__.t
         DisparityMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = int)
         CertaintyMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = float)
         for y in range(self._ComparisonRadius + max(0, yOffset), self.UsedGeometry[1]-self._ComparisonRadius + min(0, yOffset)):
             print("y = {0}/{1}".format(y - self._ComparisonRadius - max(0, yOffset), self.UsedGeometry[1]-2*self._ComparisonRadius - abs(yOffset)))
             for nCam in range(2):
-                if UseRanges:
+                if UsedRanges is None:
                     minOffset, maxOffset = self._DisparityRanges[nCam]
                 else:
-                    minOffset, maxOffset = -np.inf, np.inf
+                    minOffset, maxOffset = UsedRanges
                 if AutoMatch:
                     nOpp = nCam
                 else:
@@ -548,7 +553,7 @@ class DenseStereo(Module):
                         continue
                     for xMatch in range(max(self._ComparisonRadius, xPoint + minOffset), min(self.UsedGeometry[0]-self._ComparisonRadius, xPoint + maxOffset)):
                         MatchSigs = self.Maps[nOpp].GetSignatures((xMatch, y - yOffset), t)
-                        V = self.Match(PointSigs, MatchSigs)
+                        V = self.Match(PointSigs, MatchSigs, UsedExponents)
                         if V > DBest:
                             DBest, CertaintyMaps[xPoint, y, nCam] = V, V - DBest
                             DisparityMaps[xPoint, y, nCam] = xMatch - xPoint
@@ -589,9 +594,18 @@ class AnalysisMapClass:
         self.SigmaMap[event.location[0],YMin:YMax] = self.SigmaMap[event.location[0],YMin:YMax] * DecayColumn + (Offset - self.DistanceMap[event.location[0],YMin:YMax] / self.ActivityMap[event.location[0],YMin:YMax])**2
 
         if event.Has(FlowEvent):
-            self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn + event.flow[0]
-            self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn + event.flow[1]
-            self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
+            flow = event.flow
+            N = np.linalg.norm(flow)
+            if N == 0:
+                self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn
+                self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn
+                self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn
+            else:
+                direction = flow / N
+                ox, oy = direction[0]**2 - direction[1]**2, 2 * direction[0] * direction[1]
+                self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn + ox
+                self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn + oy
+                self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
         else:
             self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn
             self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn
@@ -623,14 +637,15 @@ class AnalysisMapClass:
         YUsed = location[1] - self.Radius
         DeltaRow = self.LastUpdateMap[XMin:XMax,YUsed] - t
         DecayRow = np.e**(DeltaRow / self.Tau)
-        
-        Signatures = self._SignaturesCreation(self.ActivityMap[XMin:XMax,YUsed], self.DistanceMap[XMin:XMax,YUsed], self.SigmaMap[XMin:XMax,YUsed], DecayRow)
+        FAPatch = np.maximum(0.001, self.FlowActivityMap[XMin:XMax,YUsed])
+        FlowPatch = np.array([self.FlowMap[XMin:XMax,YUsed,0] / FAPatch, self.FlowMap[XMin:XMax,YUsed,1] / FAPatch])
+        Signatures = self._SignaturesCreation(self.ActivityMap[XMin:XMax,YUsed], self.DistanceMap[XMin:XMax,YUsed], self.SigmaMap[XMin:XMax,YUsed], FlowPatch, DecayRow)
 
         return Signatures
 
-    def _SignaturesCreation(self, AMap, DMap, SMap, DecayMap):
+    def _SignaturesCreation(self, AMap, DMap, SMap, FMap, DecayMap):
         MaxedAMap = np.maximum(0.001, AMap)
-        Signatures = [AMap * DecayMap, DMap / MaxedAMap, SMap / MaxedAMap]
+        Signatures = [AMap * DecayMap, DMap / MaxedAMap, SMap / MaxedAMap, FMap]
         if self.ySigNullMean:
             Signatures[1] -= Signatures[1].mean()
         for nAverage in range(self.AveragingRadius):

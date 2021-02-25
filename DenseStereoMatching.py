@@ -25,7 +25,7 @@ class DenseStereo(Module):
         self._MinCPAverageActivityRadiusRatio = 1.5 / 10
         self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
         self._CleanupTauRatio = 0.5 
-        self._SignaturesExponents = [1,1,1,1]
+        self._SignaturesExponents = [1,1,1,0]
         self._yAverageSignatureNullAverage = True
 
         self._MatchThreshold = 0.9

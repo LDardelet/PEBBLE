@@ -342,8 +342,10 @@ class Framework:
 
         self.t = 0.
         while self.Running and not self.Paused:
-            self.t = self._NextInputEvent().timestamp
-            if self.t is None or self.t > stop_at:
+            e = self._NextInputEvent()
+            if not e is None:
+                self.t = e.timestamp
+            if self.t > stop_at:
                 self.Paused = 'Framework'
             if self.t > self.LastStartWarning + 1.:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(self.t, start_at))
@@ -477,9 +479,8 @@ class Framework:
             else:
                 self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[tool_name]), 2)
                 return None
-        if None in self.ToolsList:
-            while None in self.ToolsList:
-                self.ToolsList.remove(None)
+        while None in self.ToolsList:
+            self.ToolsList.remove(None)
 
         self._Log("Successfully generated tools order", 3)
         self._Log("")
@@ -578,7 +579,11 @@ class Framework:
                 entry = ''
                 while entry == '':
                     entry = input('')
-                self._ProjectRawData[Name]['Order'] = int(entry)
+                if int(entry) >= len(self._ProjectRawData):
+                    self._Log("Excessive tool number, assuming last position")
+                    self._ProjectRawData[Name]['Order'] = len(self._ProjectRawData[Name]['Order'])-1
+                else:
+                    self._ProjectRawData[Name]['Order'] = int(entry)
             else:
                 self._Log("Input Type detected. Setting to next default index.")
                 self._ProjectRawData[Name]['Order'] = 0
@@ -919,14 +924,22 @@ class Module:
         pass
 
     def __OnEventRestricted__(self, event):
-        if event.RunCameraIndexes(self.__CameraInputRestriction__):
-            return self._OnEventModule(event)
+        for CameraIndex in self.__CameraInputRestriction__:
+            if event.RunCameraIndex(CameraIndex):
+                event = self._OnEventModule(event)
+                if event is None:
+                    return None
         return event
 
     def __OnEventUnrestricted__(self, event):
-        if not event is None:
-            event.RunAllCameraIndexes()
-        return self._OnEventModule(event)
+        if event is None:
+            return self._OnEventModule(event)
+        for CameraIndex in event._ExtensionKeysForCameraIndex.keys():
+            event.RunCameraIndex(CameraIndex)
+            event = self._OnEventModule(event)
+            if event is None:
+                return None
+        return event
 
     def __OnEventMonitor__(self, event):
         if event.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
@@ -1077,7 +1090,7 @@ class BareEvent:
             self._ExtensionsForCameraIndex = {}
             self._ExtensionKeysForCameraIndex = {}
             self._RunningExtensions = None
-            self._RunningCameraIndexes = []
+            self._RunningCameraIndex = None
     def _AsList(self, AskedKey = None):
         List = [self._Key]
         for Field in self.__class__._Fields:
@@ -1088,15 +1101,14 @@ class BareEvent:
                 List += [Value]
         if not self.__class__ == BareEvent:
             return List
-        for CameraIndex in self._RunningCameraIndexes:
-            for Extension in self._ExtensionsForCameraIndex[CameraIndex]:
-                if AskedKey is None: 
-                    ExList = Extension._AsList(None)
-                    if not ExList is None:
-                        List += [ExList]
-                else:
-                    if AskedKey == Extension._Key:
-                        return List[1:] + Extension._AsList()[1:]
+        for Extension in self._ExtensionsForCameraIndex[self._RunningCameraIndex]:
+            if AskedKey is None: 
+                ExList = Extension._AsList(None)
+                if not ExList is None:
+                    List += [ExList]
+            else:
+                if AskedKey == Extension._Key:
+                    return List[1:] + Extension._AsList()[1:]
         return List[1:]
 
     def Attach(self, Extension, **kwargs):
@@ -1104,45 +1116,39 @@ class BareEvent:
             CameraIndex = kwargs['cameraIndex']
             del kwargs['cameraIndex']
         else:
-            Indexes = list(self._RunningCameraIndexes)
-            if len(Indexes) == 0:
+            if self._RunningCameraIndex is None:
                 CameraIndex = 0
             else:
-                CameraIndex = Indexes[0]
+                CameraIndex = self._RunningCameraIndex
         if CameraIndex not in self._ExtensionsForCameraIndex:
             self._ExtensionsForCameraIndex[CameraIndex] = []
             self._ExtensionKeysForCameraIndex[CameraIndex] = set()
         self._ExtensionsForCameraIndex[CameraIndex] += [Extension(bare = True, **kwargs)]
         self._ExtensionKeysForCameraIndex[CameraIndex].add(Extension._Key)
-        if Extension._AutoPublic:
-            self._ExtensionsForCameraIndex[CameraIndex][-1]._Publicize(self)
+        self._ExtensionsForCameraIndex[CameraIndex][-1]._Publicize(self)
 
-    def RunAllCameraIndexes(self):
-        self._RunningCameraIndexes = list(self._ExtensionsForCameraIndex.keys())
+    def RunCameraIndex(self, CameraIndex):
+        if CameraIndex in self._ExtensionsForCameraIndex.keys():
+            self._RunningCameraIndex = CameraIndex
+            return True
+        else:
+            self._RunningCameraIndex = None
+            return False
 
-    def RunCameraIndexes(self, CameraIndexesRestrictions):
-        if not CameraIndexesRestrictions:
-            self._RunningCameraIndexes = list(self._ExtensionsForCameraIndex.keys())
-            return bool(self._RunningCameraIndexes)
-        self._RunningCameraIndexes = []
-        for CameraIndex in CameraIndexesRestrictions:
-            if CameraIndex in self._ExtensionsForCameraIndex.keys():
-                self._RunningCameraIndexes += [CameraIndex]
-        return bool(self._RunningCameraIndexes)
+    @property
+    def cameraIndex(self):
+        return self._RunningCameraIndex
 
     def HasIndex(self, CameraIndex):
         return CameraIndex in self._ExtensionKeysForCameraIndex.keys()
     def Has(self, ExtensionRequired):
         if not isinstance(self, BareEvent):
             return False
-        for CameraIndex in self._RunningCameraIndexes:
-            if ExtensionRequired._Key in self._ExtensionKeysForCameraIndex[CameraIndex]:
-                return True
-        return False
+        if self._RunningCameraIndex is None:
+            return False
+        return ExtensionRequired._Key in self._ExtensionKeysForCameraIndex[self._RunningCameraIndex]
     def Get(self, ExtensionRequired):
-        self._RunningExtensions = []
-        for CameraIndex in self._RunningCameraIndexes:
-            self._RunningExtensions += [Extension for Extension in self._ExtensionsForCameraIndex[CameraIndex] if ExtensionRequired._Key == Extension._Key]
+        self._RunningExtensions = [Extension for Extension in self._ExtensionsForCameraIndex[self._RunningCameraIndex] if ExtensionRequired._Key == Extension._Key]
         return self.__iter__()
     def __iter__(self):
         if self._RunningExtensions is None:
@@ -1155,8 +1161,7 @@ class BareEvent:
             self._RunningExtensions[self._IterVar-1]._Publicize(self)
             return self
         else:
-            if not self._RunningExtensions[-1]._AutoPublic:
-                self._RunningExtensions[-1]._Hide(self)
+            self._RunningExtensions[-1]._Hide(self)
             self._RunningExtensions = None
             raise StopIteration
 
@@ -1186,7 +1191,6 @@ class BareEvent:
 
 class _EventExtension(BareEvent):
     _Key = -1
-    _AutoPublic = False # Careful to check that this extention _Fields are not conflicting with another publishable extension.
     def __new__(cls, *args, **kw):
         if not 'bare' in kw:
             BaseInstance = BareEvent(**kw)
@@ -1208,60 +1212,31 @@ class _EventExtension(BareEvent):
 class Event(_EventExtension):
     _Key = 1
     _Fields = ['location', 'polarity']
-    _Defaults = {'cameraIndex':0}
-    _AutoPublic = True
+    _Defaults = {}
 
 class TrackerEvent(_EventExtension):
     _Key = 2
     _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
     _Defaults = {'TrackerID':'', 'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
-    _AutoPublic = True
 
 class DisparityEvent(_EventExtension):
     _Key = 3
     _Fields = ['location', 'disparity', 'sign'] # need to put location again in order for display to work correctly.
-    _AutoPublic = True
 
 class CameraPoseEvent(_EventExtension):
     _Key = 4
     _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
     _Defaults = {'worldHomography': 0} # As one homograĥy can be recovered from the other, we allow for a non defined value
-    _AutoPublic = True
 
 class TauEvent(_EventExtension):
     _Key = 5
     _Fields = ['tau']
-    _AutoPublic = True
 
 class FlowEvent(_EventExtension):
     _Key = 6
     _Fields = ['location', 'flow']
-    _AutoPublic = True
 
-class EventOld:
-    def __init__(self, timestamp=None, location=None, polarity=None, cameraIndex = 0, original = None):
-        if original == None:
-            self.timestamp = timestamp
-            self.location = np.array(location, dtype = np.int16)
-            self.polarity = polarity
-            self.cameraIndex = cameraIndex # Used for indexing cameras incase of multiple cameras, for stereoscopy in particular
-        else:
-            for key, value in original.__dict__.items():
-                self.__dict__[key] = value
-
-    def _AsList(self):
-        return self.location.tolist() + [self.timestamp, self.polarity]
-
-class TrackerEventOld(Event):
-    def __init__(self, original, TrackerLocation = None, TrackerID = None, TrackerAngle = 0., TrackerScaling = 1., TrackerColor = 'b', TrackerMarker = 'o'): # Some fields are added for dev purposes.
-        super().__init__(original = original)
-        self.TrackerLocation = np.array(TrackerLocation)
-        self.TrackerID = TrackerID
-        self.TrackerAngle = TrackerAngle
-        self.TrackerScaling = TrackerScaling
-        self.TrackerColor = TrackerColor
-        self.TrackerMarker = TrackerMarker
-
-    def _AsList(self):
-        return super()._AsList() + [1, self.TrackerID] + self.TrackerLocation.tolist() + [self.TrackerAngle, self.TrackerScaling, self.TrackerColor, self.TrackerMarker]
+class OdometryEvent(_EventExtension):
+    _Key = 7
+    _Fields = ['omega', 'v']
 

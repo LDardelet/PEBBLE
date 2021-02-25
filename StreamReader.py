@@ -76,23 +76,23 @@ class Reader(Module):
 
         Extension = self.StreamName.split('.')[-1]
         if 'dat' == Extension:
-            self._NextEvent = self._NextEventDat
+            self._NextEventData = self._NextEventDat
             self.Log("Using dat extension")
             return self._InitializeDat()
         elif 'es' == Extension:
-            self._NextEvent = self._NextEventEs
+            self._NextEventData = self._NextEventEs
             self.Log("Using es extension")
             return self._InitializeEs()
         elif 'txt' == Extension or 'csv' == Extension:
-            self._NextEvent = self._NextEventTxt
+            self._NextEventData = self._NextEventTxt
             self.Log("Using txt extension")
             return self._InitializeTxt()
         elif 'aedat' == Extension:
-            self._NextEvent = self._NextEventAedat
+            self._NextEventData = self._NextEventAedat
             self.Log("Using aedat extension")
             return self._InitializeAedat()
         elif 'hdf5' == Extension:
-            self._NextEvent = self._NextEventH5
+            self._NextEventData = self._NextEventH5
             self.Log("Using hdf5 extension")
             return self._InitializeH5()
         else:
@@ -111,7 +111,6 @@ class Reader(Module):
                 self._Rewinded = False
                 self.NextOwnEvent = self._NextEvent()
         if not self.NextOwnEvent is None:
-            self.NextOwnEvent.cameraIndex = self._CameraIndex
             self.NextOwnEvent.timestamp *= self._InputTsFactor
         if not self._Rewinded:
             # Possibly save the event
@@ -121,6 +120,13 @@ class Reader(Module):
             return self.NextOwnEvent
         else:
             return None
+
+    def _NextEvent(self):
+        Data = self._NextEventData()
+        if Data is None:
+            return None
+        t, X, p = Data
+        return Event(timestamp = t, location = X, polarity = p, cameraIndex = self._CameraIndex)
 
     def FastForward(self, t):
         try:
@@ -176,7 +182,7 @@ class Reader(Module):
             return None
         Line = self.Data[self.nEvent,:]
         self.nEvent += 1
-        return Event(timestamp = (Line[2] - self.tOffset), location = np.array([int(Line[0]), self.Geometry[1] - int(Line[1])-1]), polarity = int(Line[3] == 1))
+        return (Line[2] - self.tOffset), np.array([int(Line[0]), self.Geometry[1] - int(Line[1])-1]), int(Line[3] == 1)
 
 # .AEDAT Files methods
 
@@ -226,7 +232,7 @@ class Reader(Module):
             p = (Bytes[2] >> 3) & 0B1
             t = Bytes[-4] << 24 | Bytes[-3] << 16 | Bytes[-2] << 8 | Bytes[-1]
 
-            return Event(timestamp = t / 1e6 - self.Offset, location = np.array([self.xMax - x, y]), polarity = p)
+            return t / 1e6 - self.Offset, np.array([self.xMax - x, y]), p
 
 # .ES Files methods
 
@@ -271,20 +277,21 @@ class Reader(Module):
                 self.nByte += 1
                 Bytes.append(self.CurrentByteBatch[self.nByte])
 
-            CreatedEvent = self._BytesAnalysisFunction(self, Bytes)
+            Data = self._BytesAnalysisFunction(self, Bytes)
 
-            if not CreatedEvent is None:
+            if not Data is None:
+                t, X, p = Data
                 if self.TsOffset is None and self._AutoZeroOffset:
                     self.TsOffset = CreatedEvent.timestamp
                     if self.TsOffset:
                         self.Log("Setting AutoOffset to {0:.3f}".format(self.TsOffset))
-                    CreatedEvent.timestamp = 0
+                    t = 0
                 else:
-                    CreatedEvent.timestamp -= self.TsOffset
+                    t -= self.TsOffset
 
                 #if self._yInvert: Written in ANALYSIS_FUNCTIONS
                 #    CreatedEvent.location[1] = self.yMax - CreatedEvent.location[1]
-                return CreatedEvent
+                return t, X, p
 
     def _DVS_BYTES_ANALYSIS(self, Bytes):
         td = Bytes[0] >> 1
@@ -298,7 +305,7 @@ class Reader(Module):
         else:
             y = (Bytes[4] << 8) | (Bytes[3])
 
-        return Event(timestamp = float(self.PreviousEventTs) * 10**-6, location = np.array([x, y]), polarity = int(p))
+        return float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p)
 
     def _ATIS_BYTES_ANALYSIS(self, Bytes):
         td = Bytes[0] >> 2
@@ -314,7 +321,7 @@ class Reader(Module):
         else:
             y = (Bytes[4] << 8) | (Bytes[3])
 
-        return Event(timestap = float(self.PreviousEventTs) * 10**-6, location = np.array([x, y]), polarity = int(p))
+        return float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p)
 
     def _DealWithHeaderEs(self):
         self.Geometry = list(self.DefaultGeometry)
@@ -459,7 +466,7 @@ class Reader(Module):
             ts = 0
         else:
             ts -= self.TsOffset
-        return Event(timestamp = float(ts) * 10**-6, location = np.array([x, self.yMax - y]), polarity = int(p))
+        return float(ts) * 10**-6, np.array([x, self.yMax - y]), int(p)
 
     # .TXT METHODS
 
@@ -510,7 +517,7 @@ class Reader(Module):
         else:
             ts -= self.TsOffset
 
-        return Event(timestamp = ts, location = np.array([x, y]), polarity = int(p))
+        return ts, np.array([x, y]), int(p)
 
     # GENERIC METHODS
 

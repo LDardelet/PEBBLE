@@ -13,25 +13,21 @@ class FlowComputer(Module):
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Computation'
 
-        self._R = 10
-        self._Tau = 0.2
+        self._R = 5
+        self._Tau = 0.05
+        self._MinDetRatio = 0.01
         self._PolaritySeparation = False
+        self._NeedsLogColumn = False
 
     def _InitializeModule(self, **kwargs):
-        self.CurrentShape = list(self.__Framework__._GetStreamGeometry(self))
-        self.NEventsMap = np.zeros(self.CurrentShape)
-        self.DetMap = np.zeros(self.CurrentShape)
-        self.FlowMap = np.zeros(self.CurrentShape + [2])
-        self.NormMap = np.zeros(self.CurrentShape)
-        self.RegMap = np.zeros(self.CurrentShape)
+        self.CurrentShape = list(self.Geometry)
         self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
-        self.STContext = self.__Framework__.Tools[self.__CreationReferences__['Memory']].STContext
+        self.STContext = self._LinkedMemory.STContext
 
         return True
 
     def _OnEventModule(self, event):
         self.ComputeFullFlow(event)
-
         return event
 
     def ComputeFullFlow(self, event):
@@ -43,7 +39,7 @@ class FlowComputer(Module):
         
         Positions = np.where(Patch > event.timestamp - self._Tau)
         NEvents = Positions[0].shape[0]
-        if NEvents > 5:
+        if NEvents >= 4*self._R:
             Ts = Patch[Positions]
             tMean = Ts.mean()
             
@@ -61,10 +57,10 @@ class FlowComputer(Module):
             Sty = (tDeltas*yDeltas).sum()
 
             Det = Sx2*Sy2 - Sxy**2
-            if Det / (NEvents**2 * self._R ** 4) > 0.05:
+            if Det > self._MinDetRatio * (NEvents**2 * self._R ** 4):
                 F = np.array([(Sy2*Stx - Sxy*Sty), (Sx2*Sty - Sxy*Stx)]) / Det
 
                 N2 = (F**2).sum()
-                if N2 > 0:
+                if N2 != 0:
                     F /= N2
                 event.Attach(FlowEvent, location = np.array(event.location), flow = F)

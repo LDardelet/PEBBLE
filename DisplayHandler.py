@@ -127,7 +127,6 @@ class DisplayHandler(Module):
         if self.__Started__:
             self.RCV(event)
             self.Check()
-
         return event
 
     def EndTransmission(self):

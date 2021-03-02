@@ -12,17 +12,18 @@ class VisualOdometer(Module):
         self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = True
-        self._MonitoredVariables = [('V', np.array),
-                                    ('omega', np.array)]
+        self._MonitoredVariables = [('VOmega', np.array),
+                                    ('omegaOmega', np.array),
+                                    ('VGamma', np.array),
+                                    ('omegaGamma', np.array)]
 
-        self._HorizontalHalfAperture = np.pi / 6
         self._DisparityRange = [0, np.inf]
+        self._DefaultK = 5e2
+        self._Delta = 0.1
+        self._SolveK = True
 
-        self._PixelNormalizationExponent = 1
-        self._DisparityNormalizationExponent = 1
-        self._CompensateDisparityInteger = True
-
-        self._MinDetToSolve = 5e-7
+        self._MinDetOmegaToSolve = 5e-7
+        self._MinDetGammaToSolve = 5e-7
         self._Tau = 0.05
 
     def _InitializeModule(self, **kwargs):
@@ -34,33 +35,14 @@ class VisualOdometer(Module):
         self.FlowMap[:,:,2] = -np.inf
         self.DisparityMap[:,:,1] = -np.inf
 
-        self.F = (self.ScreenSize[0] - self.ScreenCenter[0]) / np.tan(self._HorizontalHalfAperture)
+        self.K = self._DefaultK
 
         if self._DisparityRange[1] == np.inf:
             self._DisparityRange[1] = self.ScreenSize[0]
 
-        self.PixelNormalization = (self.ScreenSize.min() / 2) ** self._PixelNormalizationExponent
-        self.DisparityNormalization = (self._DisparityRange[1]) ** self._DisparityNormalizationExponent
-        #self.PixelNormalization = 1.
-
-        if self._CompensateDisparityInteger:
-            self.Gamma = -2 * ((0.5**3 / self.DisparityNormalization**3) * 2 / 3)
-        else:
-            self.Gamma = 0
-
-        self.Terms, self.MComp, self.SigmaComp = _GetEquations(self.Gamma, self.PixelNormalization/self.F)
         self.N = 0.
 
         self.LastT = -np.inf
-
-        self.FoundSolution = False
-        self.MUpdated = False
-        self.MInvUpdated = False
-        self.SigmaUpdated = False
-
-        self._MStored = np.zeros((6,6))
-        self._MInvStored = np.zeros((6,6))
-        self._SigmaStored = np.zeros(6)
 
         return True
 
@@ -91,53 +73,203 @@ class VisualOdometer(Module):
         self.N += 1
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
-        self.MUpdated = True
-        self.SigmaUpdated = True
         if not self.FoundSolution and np.linalg.det(self.M) > self._MinDetToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True
 
     @property
-    def M(self):
-        if self.MUpdated:
-            self._MStored = np.zeros((6,6))
-            for nLine, Line in enumerate(self.MComp):
-                for nRow, Terms in enumerate(Line):
-                    for Name, Multiplier in Terms.items():
-                        self._MStored[nLine, nRow] += Multiplier * self.Terms[Name].Value
-            self.MUpdated = False
-            self.MInvUpdated = True
-        return self._MStored
-    @property
-    def Sigma(self):
-        if self.SigmaUpdated:
-            self._SigmaStored = np.zeros(6)
-            for nRow, Terms in enumerate(self.SigmaComp):
+    def MOmega(self):
+        M = np.zeros((6,6))
+        for nLine, Line in enumerate(self.MOmegaComp):
+            for nRow, Terms in enumerate(Line):
                 for Name, Multiplier in Terms.items():
-                    self._SigmaStored[nRow] += Multiplier * self.Terms[Name].Value
-            self.SigmaUpdated = False
-        return self._SigmaStored
+                    M[nLine, nRow] += Multiplier * self.Terms[Name].Value
+        return M
+    @property
+    def MGamma(self):
+        M = np.zeros((8,8))
+        for nLine, Line in enumerate(self.MGammaComp):
+            for nRow, Terms in enumerate(Line):
+                for Name, Multiplier in Terms.items():
+                    M[nLine, nRow] += Multiplier * self.Terms[Name].Value
+        return M
+    @property
+    def SigmaOmega(self):
+        Sigma = np.zeros(6)
+        for nRow, Terms in enumerate(self.SigmaOmegaComp):
+            for Name, Multiplier in Terms.items():
+                Sigma += Multiplier * self.Terms[Name].Value
+        return Sigma
+    @property
+    def SigmaGamma(self):
+        Sigma = np.zeros(6)
+        for nRow, Terms in enumerate(self.SigmaGammaComp):
+            for Name, Multiplier in Terms.items():
+                Sigma += Multiplier * self.Terms[Name].Value
+        return Sigma
 
     @property
-    def MInv(self):
-        if self.MInvUpdated:
-            self._MInvStored = np.linalg.inv(self.M)
-            self.MInvUpdated = False
-        return self._MInvStored
+    def MotionOmega(self):
+        M = self.MOmega
+        if abs(np.linalg.det(M)) < self._MinDetOmegaToSolve:
+            return np.zeros(6)
+        Omega = np.linalg.inv(M).dot(self.SigmaOmega)
+        return np.array([-Omega[3], Omega[1], Omega[5], -self._Delta*Omega[0], -self._Delta*Omega[2], -self._Delta*Omega[4]])
+    @property
+    def VOmega(self):
+        return self.MotionOmega[:3]
+    @property
+    def omegaOmega(self):
+        return self.MotionOmega[3:]
+    @property
+    def MotionGamma(self):
+        M = self.MGamma
+        if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
+            return np.zeros(6)
+        Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
+        K = np.sqrt((Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7]))
+        return np.array([-Gamma[7]*K, Gamma[6]*K, Gamma[5], -self._Delta*Gamma[0], -self._Delta*Gamma[2], -self._Delta*Gamma[4]])
+    @property
+    def VGamma(self):
+        return self.MotionGamma[:3]
+    @property
+    def omegaGamma(self):
+        return self.MotionGamma[3:]
+    @property
+    def KGamma(self):
+        M = self.MGamma
+        if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
+            return 0.
+        Gamma = np.linalg.inv(M).dot(self.Sigma)
+        K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
+        if K2 <= 0:
+            return 0
+        return np.sqrt(K2)
 
-    @property
-    def Motion(self):
-        M = self.M
-        if abs(np.linalg.det(M)) < self._MinDetToSolve:
-            return np.zeros(3), np.zeros(3)
-        Omega = self.MInv.dot(self.Sigma)
-        return np.array([-Omega[3]/self.F, Omega[1]/self.F, -Omega[5] / self.PixelNormalization]), np.array([Omega[0]/self.F, Omega[2]/self.F, Omega[4] / self.PixelNormalization])
-    @property
-    def V(self):
-        return self.Motion[1]
-    @property
-    def omega(self):
-        return self.Motion[0]
+    def InitComprehension(self):
+        self.Terms = {'Rx':SummationClass('Rx'), 'Ry':SummationClass('Ry'), 'Rnx':SummationClass('Rnx'), 'Rny':SummationClass('Rny'), 'Rd':SummationClass('Rd')}
+        self.MGammaComp = []
+        self.SigmaGammaComp = []
+        self._AddGammaEquality("Sfx", [{'Snx2d':1},
+            {'Snx2':1},
+            {'Rnxnyd':1},
+            {'Rnxny':1},
+            {'Rnx2xd':1, 'Rnxnyyd':1},
+            {'Rnx2y':1, 'Rnxnyx':-1},
+            {'Snx2x2':1, 'Rnxnyxy':1},
+            {'Rnx2xy':1, 'Rnxnyy2':1}])
+        self._AddGammaEquality("Sfy", [{'Rnxnyd':1},
+            {'Rnxny':1},
+            {'Sny2d':1},
+            {'Sny2':1},
+            {'Rnxnyxd':1,'Rny2yd':1},
+            {'Rnxnyy':1,'Rny2x':-1},
+            {'Rnxnyx2':1, 'Rny2xy':1},
+            {'Rnxnyxy':1, 'Sny2y2':1}])
+        self._AddGammaEquality("Sfxd", [{'Snx2d2':1},
+            {'Snx2d':1},
+            {'Rnxnyd2':1},
+            {'Rnxnyd':1},
+            {'Rnx2xd2':1, 'Rnxnyyd2':1},
+            {'Rnx2yd':1, 'Rnxnyxd':-1},
+            {'Snx2x2d':1, 'Rnxnyxyd':1},
+            {'Rnx2xyd':1, 'Rnxnyy2d':1}])
+        self._AddGammaEquality("Sfyd", [{'Rnxnyd2':1},
+            {'Rnxnyd':1},
+            {'Sny2d2':1},
+            {'Sny2d':1},
+            {'Rnxnyxd2':1,'Rny2yd2':1},
+            {'Rnxnyyd':1,'Rny2xd':-1},
+            {'Rnxnyx2d':1, 'Rny2xyd':1},
+            {'Rnxnyxyd':1, 'Sny2y2d':1}])
+        self._AddGammaEquality("Sfxxy", [{'Rnx2xyd':1},
+            {'Rnx2xy':1},
+            {'Rnxnyxyd':1},
+            {'Rnxnyxy':1},
+            {'Rnx2x2yd':1,'Rnxnyxy2d':1},
+            {'Rnx2xy2':1,'Rnxnyx2y':-1},
+            {'Rnx2x3y':1, 'Rnxnyx2y2':1},
+            {'Snx2x2y2':1, 'Rnxnyxy3':1}])
+        self._AddGammaEquality("Sfyxy", [{'Rnxnyxyd':1},
+            {'Rnxnyxy':1},
+            {'Rny2xyd':1},
+            {'Rny2xy':1},
+            {'Rnxnyx2yd':1,'Rny2xy2d':1},
+            {'Rnxnyxy2':1,'Rny2x2y':-1},
+            {'Rnxnyx3y':1, 'Sny2x2y2':1},
+            {'Rnxnyx2y2':1, 'Rny2xy3':1}])
+        self._AddGammaEquality("Sfxx+fyy", [{"Rnx2xd":1, "Rnxnyyd":1}, 
+            {"Rnx2x":1, "Rnxnyy":K},
+            {"Rnxnyxd":1, "Rny2yd":1},
+            {"Rnxnyx":1, "Rny2y":1},
+            {"Snx2x2d":1, "Sny2y2d": 1, "Rnxnyxyd":2},
+            {"Rnx2xy":1, "Rnxnyy2":1, "Rnxnyx2":-1, "Rny2xy":-1},
+            {"Rnx2x3":1, "Rnxnyx2y":2, "Rny2xy2":1},
+            {"Rnx2x2y":1, "Rnxnyxy2":2, "Rny2y3":1}])
+        self._AddGammaEquality("Sfxy-fyx", [{'Rnx2yd':1, 'Rnxnyxd':-1},
+            {'Rnx2y':1, 'Rnxnyx':-1},
+            {'Rnxnyyd':1, 'Rny2xd':-1},
+            {'Rnxnyy':1, 'Rny2x':-1}, 
+            {'Rnx2xyd':1, 'Rnxnyy2d':1, 'Rnxnyx2d':-1, 'Rny2xyd':-1},
+            {'Snx2y2':1, 'Sny2x2':1, 'Rnxnyxy':-2},
+            {'Rnx2x2y':1, 'Rnxnyxy2':1, 'Rnxnyx3':-1, 'Rny2x2y':-1},
+            {'Rnx2xy2':1, 'Rnxnyy3':1, 'Rnxnyx2y':-1, 'Rny2xy2':-1}])
+        self.MOmegaComp = []
+        self.SigmaOmegaComp = []
+        self._AddOmegaEquality("Sfx", [{'Snx2d':1},
+            {'Snx2':self.K, 'Snx2x2':1/self.K, 'Rnxnyxy':1/self.K},
+            {'Rnxnyd':1},
+            {'Rnxny':self.K, 'Rnx2xy':1/self.K, 'Rnxnyy2':1/self.K},
+            {'Rnx2xd':1/self.K, 'Rnxnyyd':1/self.K},
+            {'Rnx2y':1, 'Rnxnyx':-1}])
+        self._AddOmegaEquality("Sfy", [{'Rnxnyd':1},
+            {'Rnxny':self.K,'Rnxny':1/self.K,'Rny2xy':1/self.K},
+            {'Sny2d':1},
+            {'Sny2':self.K,'Sny2y2':1/self.K,'Rnxnyxy':1/self.K},
+            {'Rnxnyxd':1/self.K,'Rny2yd':1/self.K},
+            {'Rnxnyy':1,'Rny2x':-1}])
+        self._AddOmegaEquality("Sfxd", [{'Snx2d2':1},
+            {'Snx2d':self.K,'Snx2x2d':1/self.K,'Rnxnyxyd':1/self.K},
+            {'Rnxnyd2':1},
+            {'Rnxnyd':self.K,'Rnx2xyd':1/self.K,'Rnxnyy2d':1/self.K},
+            {'Rnx2xd2':1/self.K,'Rnxnyyd2':1/self.K},
+            {'Rnx2yd':1,'Rnxnyxd':-1}])
+        self._AddOmegaEquality("Sfyd", [{'Rnxnyd2':1},
+            {'Rnxnyd':self.K,'Rnxnyd':1/self.K,'Rny2xyd':1/self.K},
+            {'Sny2d2':1},
+            {'Sny2d':self.K,'Sny2y2d':1/self.K,'Rnxnyxyd':1/self.K},
+            {'Rnxnyxd2':1/self.K,'Rny2yd2':1/self.K},
+            {'Rnxnyyd':1,'Rny2xd':-1}])
+        self._AddOmegaEquality("Sfxx+fyy", [{"Rnx2xd":1, "Rnxnyyd":1},
+            {"Rnx2x":self.K, "Rnxnyy":self.K, "Rnx2x3":1/self.K, "Rnxnyx2y": 2/self.K, "Rny2xy2":1/self.K},
+            {"Rnxnyxd":1, "Rny2yd":1},
+            {"Rnxnyx":self.K, "Rny2y":self.K, "Rnx2x2y":1/self.K, "Rnxnyxy2":2/self.K, "Rny2y3":1/self.K},
+            {"Snx2x2d":1/self.K, "Sny2y2d": 1/self.K, "Rnxnyxyd":2/self.K},
+            {"Rnx2xy":1, "Rnxnyy2":1, "Rnxnyx2":-1, "Rny2xy":-1}])
+        self._AddOmegaEquality("Sfxy-fyx", [{'Rnx2yd':1, 'Rnxnyxd':-1},
+            {'Rnx2y':self.K, 'Rnxnyx':-self.K, 'Rnx2x2y':1/self.K, 'Rnxnyxy2':1/self.K, 'Rnxnyx3':-1/self.K, 'Rny2x2y':-1/self.K},
+            {'Rnxnyyd':1, 'Rny2xd':-1},
+            {'Rnxnyy':self.K, 'Rny2x':-self.K, 'Rnx2xy2':1/self.K, 'Rnxnyy3':1/self.K, 'Rnxnyx2y':-1/self.K, 'Rny2xy2':-1/self.K},
+            {'Rnx2xyd':1/self.K, 'Rnxnyy2d':1/self.K, 'Rnxnyx2d':-1/self.K, 'Rny2xyd':-1/self.K},
+            {'Snx2y2':1, 'Sny2x2':1, 'Rnxnyxy':-2}])
+        
+    def _AddOmegaEquality(self, SigmaTerm, MatrixTerm):
+        self.Terms[SigmaTerm] = SummationClass(SigmaTerm)
+        for Expression in MatrixTerm:
+            for Term in Expression.keys():
+                if not Term in self.Terms:
+                    self.Terms[Term] = SummationClass(Term)
+        self.SigmaOmegaComp += [SigmaTerm]
+        self.MOmegaComp += [MatrixTerm]
+
+    def _AddGammaEquality(self, SigmaTerm, MatrixTerm):
+        self.Terms[SigmaTerm] = SummationClass(SigmaTerm)
+        for Expression in MatrixTerm:
+            for Term in Expression.keys():
+                if not Term in self.Terms:
+                    self.Terms[Term] = SummationClass(Term)
+        self.SigmaGammaComp += [SigmaTerm]
+        self.MGammaComp += [MatrixTerm]
 
 class SummationClass:
     # Input data will be the array (x, y, d, fx, fy, nx, ny)
@@ -181,7 +313,7 @@ class SummationClass:
                 self.Exponents[-1][0][currentIndex] += currentExponent
                 currentExponent = 0
                 currentIndex = 0
-                self.Exponents += [(np.zeros(7), +1)]
+                self.Exponents += [(np.zeros(7), -1)]
                 continue
             currentExponent = int(letter)
         self.Exponents[-1][0][currentIndex] += currentExponent
@@ -210,142 +342,3 @@ class SummationClass:
 
     def __repr__(self):
         return str(self.Value)
-
-def _GetEquations(Gamma, G):
-    Terms = {'Rx':SummationClass('Rx'), 'Ry':SummationClass('Ry')}
-    MComp = _Comprehend(_MStr, Terms, G)
-    _AddCompensation(Terms, 'Snx2d2', 'Snx2', MComp, Gamma)
-    _AddCompensation(Terms, 'Sny2d2', 'Sny2', MComp, Gamma)
-    _AddCompensation(Terms, 'Rnxnyd2', 'Rnxny', MComp, Gamma)
-    _AddCompensation(Terms, 'Rnx2xd2', 'Rnx2x', MComp, Gamma)
-    _AddCompensation(Terms, 'Rny2yd2', 'Rny2y', MComp, Gamma)
-    _AddCompensation(Terms, 'Rnxnyxd2', 'Rnxnyx', MComp, Gamma)
-    _AddCompensation(Terms, 'Rnxnyyd2', 'Rnxnyy', MComp, Gamma)
-    SigmaComp = _Comprehend(_SigmaStr, Terms, G)[0]
-    return Terms, MComp, SigmaComp
-
-def _AddCompensation(Terms, InitialTerm, CompensationTerm, ComprehendedMatrix, CompensationFactor):
-    if CompensationFactor == 0:
-        return
-    print("Compensating {0} with {1}".format(InitialTerm, CompensationTerm))
-    if CompensationTerm not in Terms:
-        Terms[CompensationTerm] = SummationClass(CompensationTerm)
-    for Line in ComprehendedMatrix:
-        for Cell in Line:
-            if InitialTerm in Cell:
-                InitialFactor = Cell[InitialTerm]
-                if not CompensationTerm in Cell:
-                    Cell[CompensationTerm] = 0.
-                Cell[CompensationTerm] += CompensationFactor * InitialFactor
-
-def _Comprehend(StrData, Terms, G):
-    StorageMatrix = []
-    numbersAlpha = ''.join([str(n) for n in range(1, 10)])
-    Levels = []
-    FinishedLevel = None
-    for Line in StrData.split("#"):
-        StorageMatrix += [[]]
-        for Cell in Line.split("&"):
-            StorageMatrix[-1] += [{}]
-            Cell = Cell.strip("()")
-            Multiplier = +1
-            Term = ""
-            for letter in Cell:
-                if letter == "-":
-                    if Term:
-                        _AddTerm(Terms, Term, Multiplier, StorageMatrix, Levels)
-                    Multiplier = -1
-                    Term = ""
-                    continue
-                if letter == "+":
-                    if Term:
-                        _AddTerm(Terms, Term, Multiplier, StorageMatrix, Levels)
-                    Multiplier = +1
-                    Term = ""
-                    continue
-                if letter in numbersAlpha and not Term:
-                    if abs(Multiplier) == 1:
-                        Multiplier = Multiplier * int(letter)
-                    else:
-                        Multiplier = 10*Multiplier + int(letter)
-                    continue
-                if letter == "{":
-                    Levels += [(Multiplier, [])]
-                    Multiplier = +1
-                    continue
-                if letter == "}":
-                    _AddTerm(Terms, Term, Multiplier, StorageMatrix, Levels)
-                    Term = ""
-                    Multiplier = +1
-                    FinishedLevel = Levels.pop(-1)
-                    continue
-                if letter == "G":
-                    for FinishedTerm in FinishedLevel[1]:
-                        print("Correcting term {0} with 1/f^2".format(FinishedTerm))
-                        StorageMatrix[-1][-1][FinishedTerm] *= G**2
-                    continue
-                Term += letter
-            if Term:
-                _AddTerm(Terms, Term, Multiplier, StorageMatrix, Levels)
-    return StorageMatrix
-
-def _AddTerm(Terms, Name, Sign, StorageMatrix, Levels):
-    Sign = Sign * int(np.prod([LevelMultiplier for LevelMultiplier, Terms in Levels]))
-    if Name not in Terms:
-        Terms[Name] = SummationClass(Name)
-    if Name in StorageMatrix[-1][-1]:
-        print("Increasing multiplier of {0}".format(Name))
-        StorageMatrix[-1][-1][Name] += Sign
-    else:
-        print("Adding multiplier for {0}".format(Name))
-        StorageMatrix[-1][-1][Name] = Sign
-    if Levels:
-        Levels[-1][1].append(Name)
-
-_MRaw = """S_{n_x^2 d} &
-            S_{n_x^2} + \frac{S_{n_x^2 x^2} + R_{n_x n_y x y}}{f^2} &
-            R_{n_x n_y d} &
-            R_{n_x n_y} + \frac{R_{n_x^2 x y} + R_{n_x n_y y^2}}{f^2} &
-            R_{n_x^2 x d} + R_{n_x n_y y d} &
-            R_{n_x^2 y} - R_{n_x n_y x} \\
-        S_{n_x^2 d^2} &
-            S_{n_x^2 d} + \frac{S_{n_x^2 x^2 d} + R_{n_x n_y x y d}}{f^2} &
-            R_{n_x n_y d^2} &
-            R_{n_x n_y d} + \frac{R_{n_x^2 x y d} + R_{n_x n_y y^2 d}}{f^2} &
-            R_{n_x^2 x d^2} + R_{n_x n_y y d^2} &
-            R_{n_x^2 y d} - R_{n_x n_y x d} \\
-        R_{n_x n_y d} &
-            R_{n_x n_y} + \frac{R_{n_x n_y} + R_{n_y^2 x y}}{f^2} &
-            S_{n_y^2 d} &
-            S_{n_y^2} + \frac{S_{n_y^2 y^2} + R_{n_x n_y x y}}{f^2} &
-            R_{n_x n_y x d} + R_{n_y^2 y d} &
-            R_{n_x n_y y} - R_{n_y^2 x} \\
-        R_{n_x n_y d^2} &
-            R_{n_x n_y d} + \frac{R_{n_x n_y d} + R_{n_y^2 x y d}}{f^2} &
-            S_{n_y^2 d^2} &
-            S_{n_y^2 d} + \frac{S_{n_y^2 y^2 d} + R_{n_x n_y x y d}}{f^2} &
-            R_{n_x n_y x d^2} + R_{n_y^2 y d^2} &
-            R_{n_x n_y y d} - R_{n_y^2 x d} \\
-        R_{n_x^2 x d} + R_{n_x n_y y d} &
-            R_{n_x^2 x} + R_{n_x n_y y} + \frac{R_{n_x^2 x^3} + 2 R_{n_x n_y x^2 y} + R_{n_y^2 x y^2}}{f^2} &
-            R_{n_x n_y x d} + R_{n_y^2 y d} &
-            R_{n_x n_y x} + R_{n_y^2 y} + \frac{R_{n_x^2 x^2 y} + 2 R_{n_x n_y x y^2} + R_{n_y^2 y^3} }{f^2} & 
-            S_{n_x^2 x^2 d} + S_{n_y^2 y^2 d} + 2 R_{n_x n_y x y d} &
-            R_{n_x^2 x y} + R_{n_x n_y y^2} - R_{n_x n_y x^2} - R_{n_y^2 x y} \\
-        R_{n_x^2 y d} - R_{n_x n_y x d} &
-            R_{n_x^2 y} - R_{n_x n_y x} + \frac{R_{n_x^2 x^2 y} + R_{n_x n_y x y^2} - R_{n_x n_y x^3} - R_{n_y^2 x^2 y}}{f^2} &
-            R_{n_x n_y y d} - R_{n_y^2 x d} &
-            R_{n_x n_y y} - R_{n_y^2 x} + \frac{R_{n_x^2 x y^2} + R_{n_x n_y y^3} - R_{n_x n_y x^2 y} - R_{n_y^2 x y^2}}{f^2} &
-            R_{n_x^2 x y d} + R_{n_x n_y y^2 d} - R_{n_x n_y x^2 d} - R_{n_y^2 x y d} &
-            S_{n_x^2 y^2} + S_{n_y^2 x^2} - 2 R_{n_x n_y x y} """
-_MStr = _MRaw.replace("\n", "").replace("\\", "#").replace("}}", "}").replace("}{f^2}", "}G").replace("} ", " ").replace("\frac", "").replace("_{", "").replace(" ", "").replace("_", "").replace("^", "")
-
-_SigmaRaw = """S_{f_x} &
-        S_{f_x d} &
-        S_{f_y} &
-        S_{f_y d} &
-        S_{f_x x} + S_{f_y y} &
-        S_{f_x y} - S_{f_y x} """
-_SigmaStr = _SigmaRaw.replace("\n", "").replace("\\", "#").replace("}}", "}").replace("}{f^2}", "}G").replace("} ", " ").replace("\frac", "").replace("_{", "").replace(" ", "").replace("_", "").replace("^", "")
-
-

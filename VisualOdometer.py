@@ -15,7 +15,8 @@ class VisualOdometer(Module):
         self._MonitoredVariables = [('VOmega', np.array),
                                     ('omegaOmega', np.array),
                                     ('VGamma', np.array),
-                                    ('omegaGamma', np.array)]
+                                    ('omegaGamma', np.array),
+                                    ('KGamma', float)]
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
@@ -43,6 +44,8 @@ class VisualOdometer(Module):
         self.N = 0.
 
         self.LastT = -np.inf
+        self.InitComprehension()
+        self.FoundSolution = False
 
         return True
 
@@ -59,13 +62,13 @@ class VisualOdometer(Module):
         
         if HasValidPoint:
             self.Update(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2], self.DisparityMap[event.location[0], event.location[1], 0])
-            event.Attach(OdometryEvent, v = self.V, omega = self.omega)
+            event.Attach(OdometryEvent, v = self.VOmega, omega = self.omegaOmega)
         return event
 
     def Update(self, t, location, f, disparity):
 
-        X = (location - self.ScreenCenter) / self.PixelNormalization # Make it homogeneous
-        d = disparity / self.DisparityNormalization
+        X = (location - self.ScreenCenter) + 0.5 # Make it centered
+        d = disparity
 
         decay = np.e**((self.LastT - t)/self._Tau)
         self.LastT = t
@@ -73,7 +76,7 @@ class VisualOdometer(Module):
         self.N += 1
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
-        if not self.FoundSolution and np.linalg.det(self.M) > self._MinDetToSolve:
+        if not self.FoundSolution and np.linalg.det(self.MOmega) > self._MinDetOmegaToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True
 
@@ -96,16 +99,14 @@ class VisualOdometer(Module):
     @property
     def SigmaOmega(self):
         Sigma = np.zeros(6)
-        for nRow, Terms in enumerate(self.SigmaOmegaComp):
-            for Name, Multiplier in Terms.items():
-                Sigma += Multiplier * self.Terms[Name].Value
+        for nRow, Name in enumerate(self.SigmaOmegaComp):
+            Sigma[nRow] = self.Terms[Name].Value
         return Sigma
     @property
     def SigmaGamma(self):
-        Sigma = np.zeros(6)
-        for nRow, Terms in enumerate(self.SigmaGammaComp):
-            for Name, Multiplier in Terms.items():
-                Sigma += Multiplier * self.Terms[Name].Value
+        Sigma = np.zeros(8)
+        for nRow, Name in enumerate(self.SigmaGammaComp):
+            Sigma[nRow] = self.Terms[Name].Value
         return Sigma
 
     @property
@@ -127,7 +128,10 @@ class VisualOdometer(Module):
         if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
             return np.zeros(6)
         Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
-        K = np.sqrt((Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7]))
+        K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
+        if K2 < 0:
+            return np.zeros(6)
+        K = np.sqrt(K2)
         return np.array([-Gamma[7]*K, Gamma[6]*K, Gamma[5], -self._Delta*Gamma[0], -self._Delta*Gamma[2], -self._Delta*Gamma[4]])
     @property
     def VGamma(self):
@@ -140,7 +144,7 @@ class VisualOdometer(Module):
         M = self.MGamma
         if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
             return 0.
-        Gamma = np.linalg.inv(M).dot(self.Sigma)
+        Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
         K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
         if K2 <= 0:
             return 0
@@ -199,7 +203,7 @@ class VisualOdometer(Module):
             {'Rnxnyx3y':1, 'Sny2x2y2':1},
             {'Rnxnyx2y2':1, 'Rny2xy3':1}])
         self._AddGammaEquality("Sfxx+fyy", [{"Rnx2xd":1, "Rnxnyyd":1}, 
-            {"Rnx2x":1, "Rnxnyy":K},
+            {"Rnx2x":1, "Rnxnyy":1},
             {"Rnxnyxd":1, "Rny2yd":1},
             {"Rnxnyx":1, "Rny2y":1},
             {"Snx2x2d":1, "Sny2y2d": 1, "Rnxnyxyd":2},

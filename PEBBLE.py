@@ -924,8 +924,8 @@ class Module:
         pass
 
     def __OnEventRestricted__(self, event):
-        for CameraIndex in self.__CameraInputRestriction__:
-            if event.RunCameraIndex(CameraIndex):
+        for CameraIndex in list(event._ExtensionKeysForCameraIndex.keys()):
+            if CameraIndex in self.__CameraInputRestriction__:
                 event = self._OnEventModule(event)
                 if event is None:
                     return None
@@ -934,7 +934,7 @@ class Module:
     def __OnEventUnrestricted__(self, event):
         if event is None:
             return self._OnEventModule(event)
-        for CameraIndex in event._ExtensionKeysForCameraIndex.keys():
+        for CameraIndex in list(event._ExtensionKeysForCameraIndex.keys()):
             event.RunCameraIndex(CameraIndex)
             event = self._OnEventModule(event)
             if event is None:

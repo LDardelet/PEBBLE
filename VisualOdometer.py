@@ -16,7 +16,10 @@ class VisualOdometer(Module):
                                     ('omegaOmega', np.array),
                                     ('VGamma', np.array),
                                     ('omegaGamma', np.array),
-                                    ('KGamma', float)]
+                                    ('KGamma', float),
+                                    ('N', float),
+                                    ('DetOmega', float),
+                                    ('DetGamma', float)]
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
@@ -26,6 +29,8 @@ class VisualOdometer(Module):
         self._MinDetOmegaToSolve = 5e-7
         self._MinDetGammaToSolve = 5e-7
         self._Tau = 0.05
+
+        self._d2Correction = 0.5**2 / 3
 
     def _InitializeModule(self, **kwargs):
         self.ScreenSize = np.array(self.Geometry[:2])
@@ -73,7 +78,7 @@ class VisualOdometer(Module):
         decay = np.e**((self.LastT - t)/self._Tau)
         self.LastT = t
 
-        self.N += 1
+        self.N = self.N * decay + 1
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
         if not self.FoundSolution and np.linalg.det(self.MOmega) > self._MinDetOmegaToSolve:
@@ -89,6 +94,9 @@ class VisualOdometer(Module):
                     M[nLine, nRow] += Multiplier * self.Terms[Name].Value
         return M
     @property
+    def DetOmega(self):
+        return np.linalg.det(self.MOmega)
+    @property
     def MGamma(self):
         M = np.zeros((8,8))
         for nLine, Line in enumerate(self.MGammaComp):
@@ -96,6 +104,9 @@ class VisualOdometer(Module):
                 for Name, Multiplier in Terms.items():
                     M[nLine, nRow] += Multiplier * self.Terms[Name].Value
         return M
+    @property
+    def DetGamma(self):
+        return np.linalg.det(self.MGamma)
     @property
     def SigmaOmega(self):
         Sigma = np.zeros(6)
@@ -151,7 +162,7 @@ class VisualOdometer(Module):
         return np.sqrt(K2)
 
     def InitComprehension(self):
-        self.Terms = {'Rx':SummationClass('Rx'), 'Ry':SummationClass('Ry'), 'Rnx':SummationClass('Rnx'), 'Rny':SummationClass('Rny'), 'Rd':SummationClass('Rd')}
+        self.Terms = {'Rx':SummationClass('Rx'), 'Ry':SummationClass('Ry'), 'Rnx':SummationClass('Rnx'), 'Rny':SummationClass('Rny'), 'Rd':SummationClass('Rd'), 'Rd2':SummationClass('Rd2')}
         self.MGammaComp = []
         self.SigmaGammaComp = []
         self._AddGammaEquality("Sfx", [{'Snx2d':1},
@@ -162,14 +173,6 @@ class VisualOdometer(Module):
             {'Rnx2y':1, 'Rnxnyx':-1},
             {'Snx2x2':1, 'Rnxnyxy':1},
             {'Rnx2xy':1, 'Rnxnyy2':1}])
-        self._AddGammaEquality("Sfy", [{'Rnxnyd':1},
-            {'Rnxny':1},
-            {'Sny2d':1},
-            {'Sny2':1},
-            {'Rnxnyxd':1,'Rny2yd':1},
-            {'Rnxnyy':1,'Rny2x':-1},
-            {'Rnxnyx2':1, 'Rny2xy':1},
-            {'Rnxnyxy':1, 'Sny2y2':1}])
         self._AddGammaEquality("Sfxd", [{'Snx2d2':1},
             {'Snx2d':1},
             {'Rnxnyd2':1},
@@ -178,6 +181,14 @@ class VisualOdometer(Module):
             {'Rnx2yd':1, 'Rnxnyxd':-1},
             {'Snx2x2d':1, 'Rnxnyxyd':1},
             {'Rnx2xyd':1, 'Rnxnyy2d':1}])
+        self._AddGammaEquality("Sfy", [{'Rnxnyd':1},
+            {'Rnxny':1},
+            {'Sny2d':1},
+            {'Sny2':1},
+            {'Rnxnyxd':1,'Rny2yd':1},
+            {'Rnxnyy':1,'Rny2x':-1},
+            {'Rnxnyx2':1, 'Rny2xy':1},
+            {'Rnxnyxy':1, 'Sny2y2':1}])
         self._AddGammaEquality("Sfyd", [{'Rnxnyd2':1},
             {'Rnxnyd':1},
             {'Sny2d2':1},
@@ -186,14 +197,6 @@ class VisualOdometer(Module):
             {'Rnxnyyd':1,'Rny2xd':-1},
             {'Rnxnyx2d':1, 'Rny2xyd':1},
             {'Rnxnyxyd':1, 'Sny2y2d':1}])
-        self._AddGammaEquality("Sfxxy", [{'Rnx2xyd':1},
-            {'Rnx2xy':1},
-            {'Rnxnyxyd':1},
-            {'Rnxnyxy':1},
-            {'Rnx2x2yd':1,'Rnxnyxy2d':1},
-            {'Rnx2xy2':1,'Rnxnyx2y':-1},
-            {'Rnx2x3y':1, 'Rnxnyx2y2':1},
-            {'Snx2x2y2':1, 'Rnxnyxy3':1}])
         self._AddGammaEquality("Sfyxy", [{'Rnxnyxyd':1},
             {'Rnxnyxy':1},
             {'Rny2xyd':1},
@@ -202,6 +205,14 @@ class VisualOdometer(Module):
             {'Rnxnyxy2':1,'Rny2x2y':-1},
             {'Rnxnyx3y':1, 'Sny2x2y2':1},
             {'Rnxnyx2y2':1, 'Rny2xy3':1}])
+        self._AddGammaEquality("Sfxxy", [{'Rnx2xyd':1},
+            {'Rnx2xy':1},
+            {'Rnxnyxyd':1},
+            {'Rnxnyxy':1},
+            {'Rnx2x2yd':1,'Rnxnyxy2d':1},
+            {'Rnx2xy2':1,'Rnxnyx2y':-1},
+            {'Rnx2x3y':1, 'Rnxnyx2y2':1},
+            {'Snx2x2y2':1, 'Rnxnyxy3':1}])
         self._AddGammaEquality("Sfxx+fyy", [{"Rnx2xd":1, "Rnxnyyd":1}, 
             {"Rnx2x":1, "Rnxnyy":1},
             {"Rnxnyxd":1, "Rny2yd":1},
@@ -226,18 +237,18 @@ class VisualOdometer(Module):
             {'Rnxny':self.K, 'Rnx2xy':1/self.K, 'Rnxnyy2':1/self.K},
             {'Rnx2xd':1/self.K, 'Rnxnyyd':1/self.K},
             {'Rnx2y':1, 'Rnxnyx':-1}])
-        self._AddOmegaEquality("Sfy", [{'Rnxnyd':1},
-            {'Rnxny':self.K,'Rnxny':1/self.K,'Rny2xy':1/self.K},
-            {'Sny2d':1},
-            {'Sny2':self.K,'Sny2y2':1/self.K,'Rnxnyxy':1/self.K},
-            {'Rnxnyxd':1/self.K,'Rny2yd':1/self.K},
-            {'Rnxnyy':1,'Rny2x':-1}])
         self._AddOmegaEquality("Sfxd", [{'Snx2d2':1},
             {'Snx2d':self.K,'Snx2x2d':1/self.K,'Rnxnyxyd':1/self.K},
             {'Rnxnyd2':1},
             {'Rnxnyd':self.K,'Rnx2xyd':1/self.K,'Rnxnyy2d':1/self.K},
             {'Rnx2xd2':1/self.K,'Rnxnyyd2':1/self.K},
             {'Rnx2yd':1,'Rnxnyxd':-1}])
+        self._AddOmegaEquality("Sfy", [{'Rnxnyd':1},
+            {'Rnxny':self.K,'Rnxny':1/self.K,'Rny2xy':1/self.K},
+            {'Sny2d':1},
+            {'Sny2':self.K,'Sny2y2':1/self.K,'Rnxnyxy':1/self.K},
+            {'Rnxnyxd':1/self.K,'Rny2yd':1/self.K},
+            {'Rnxnyy':1,'Rny2x':-1}])
         self._AddOmegaEquality("Sfyd", [{'Rnxnyd2':1},
             {'Rnxnyd':self.K,'Rnxnyd':1/self.K,'Rny2xyd':1/self.K},
             {'Sny2d2':1},
@@ -256,6 +267,21 @@ class VisualOdometer(Module):
             {'Rnxnyy':self.K, 'Rny2x':-self.K, 'Rnx2xy2':1/self.K, 'Rnxnyy3':1/self.K, 'Rnxnyx2y':-1/self.K, 'Rny2xy2':-1/self.K},
             {'Rnx2xyd':1/self.K, 'Rnxnyy2d':1/self.K, 'Rnxnyx2d':-1/self.K, 'Rny2xyd':-1/self.K},
             {'Snx2y2':1, 'Sny2x2':1, 'Rnxnyxy':-2}])
+
+        self._d2Compensate()
+
+    def _d2Compensate(self):
+        if not self._d2Correction:
+            return
+        for M in [self.MOmegaComp, self.MGammaComp]:
+            for Row in M:
+                for Cell in Row:
+                    for Term in list(Cell.keys()):
+                        if 'd2' in Term:
+                            NewTerm = Term.replace('d2', '')
+                            if not NewTerm in self.Terms:
+                                self.Terms[NewTerm] = SummationClass(NewTerm)
+                            Cell[NewTerm] = -Cell[Term] * self._d2Correction
         
     def _AddOmegaEquality(self, SigmaTerm, MatrixTerm):
         self.Terms[SigmaTerm] = SummationClass(SigmaTerm)

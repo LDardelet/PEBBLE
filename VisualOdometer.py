@@ -17,20 +17,25 @@ class VisualOdometer(Module):
                                     ('VGamma', np.array),
                                     ('omegaGamma', np.array),
                                     ('KGamma', float),
-                                    ('N', float),
-                                    ('DetOmega', float),
-                                    ('DetGamma', float)]
+                                    ('NInput', float),
+                                    ('NValid', float),
+                                    ('DetOmegaRatio', float),
+                                    ('DetGammaRatio', float)]
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
         self._Delta = 0.1
         self._SolveK = True
 
-        self._MinDetOmegaToSolve = 5e-7
-        self._MinDetGammaToSolve = 5e-7
+        self._MinDetOmegaRatioToSolve = 5e-5
+        self._MinDetGammaRatioToSolve = 5e-5
+
+        self._DataRejectionRatio = 3.
+        self._MinValidRatio = 2
+
         self._Tau = 0.05
 
-        self._d2Correction = 0.5**2 / 3
+        self._d2Correction = 0 # Apparently changes nothing
 
     def _InitializeModule(self, **kwargs):
         self.ScreenSize = np.array(self.Geometry[:2])
@@ -46,7 +51,10 @@ class VisualOdometer(Module):
         if self._DisparityRange[1] == np.inf:
             self._DisparityRange[1] = self.ScreenSize[0]
 
-        self.N = 0.
+        self.NInput = 0.
+        self.NValid = 0.
+
+        self.AverageNormDelta2 = 0.
 
         self.LastT = -np.inf
         self.InitComprehension()
@@ -71,19 +79,41 @@ class VisualOdometer(Module):
         return event
 
     def Update(self, t, location, f, disparity):
-
         X = (location - self.ScreenCenter) + 0.5 # Make it centered
         d = disparity
 
         decay = np.e**((self.LastT - t)/self._Tau)
         self.LastT = t
 
-        self.N = self.N * decay + 1
+        if not self.IsDataPointValid(X, f, d, decay):
+            return
+
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
-        if not self.FoundSolution and np.linalg.det(self.MOmega) > self._MinDetOmegaToSolve:
+        if not self.FoundSolution and self.DetOmegaRatio >= self._MinDetOmegaRatioToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True
+
+    def IsDataPointValid(self, X, f, d, decay):
+
+        self.NInput = self.NInput*decay + 1
+        if (self._DataRejectionRatio == 0) or (self.DetOmegaRatio < self._MinDetOmegaRatioToSolve):
+            self.NValid = self.NValid*decay + 1
+            return True # If we dont have a solution, each data point is to be used
+
+        Nf = np.linalg.norm(f)
+        Nf_expected = self.ExpectedFlowNorm(X, d, f/Nf)
+        Error = Nf - Nf_expected
+        Delta2 = (Error)**2
+        Valid = (self._DataRejectionRatio * abs(Error) < np.sqrt(self.AverageNormDelta2/self.NValid)) or (self.NValid * self._MinValidRatio < self.NInput-1)
+
+        if Valid:
+            self.AverageNormDelta2 = self.AverageNormDelta2*decay + Delta2
+            self.NValid = self.NValid*decay + 1
+
+        self.NInput = self.NInput*decay + 1
+
+        return Valid
 
     @property
     def MOmega(self):
@@ -97,6 +127,14 @@ class VisualOdometer(Module):
     def DetOmega(self):
         return np.linalg.det(self.MOmega)
     @property
+    def MaxDetOmega(self):
+        x_max2 = (self.ScreenSize[0]/2)**2
+        y_max2 = (self.ScreenSize[1]/2)**2
+        return self.Terms['Rd'].Value / 576 * (self.Terms['Rd'].Value**2 - self.Terms['Rd2'].Value)**2 * (self.K + x_max2 / (3*self.K)) * (self.K + y_max2 / (3*self.K)) * (x_max2 + y_max2)**2
+    @property
+    def DetOmegaRatio(self):
+        return self.DetOmega / max(0.1, self.MaxDetOmega)
+    @property
     def MGamma(self):
         M = np.zeros((8,8))
         for nLine, Line in enumerate(self.MGammaComp):
@@ -107,6 +145,14 @@ class VisualOdometer(Module):
     @property
     def DetGamma(self):
         return np.linalg.det(self.MGamma)
+    @property
+    def MaxDetGamma(self):
+        x_max2 = (self.ScreenSize[0]/2)**2
+        y_max2 = (self.ScreenSize[1]/2)**2
+        return self.Terms['Rd'].Value * (self.Terms['Rd'].Value**2 - self.Terms['Rd2'].Value)**2 / 16 * x_max2**2 * y_max2**2 / 324 * (x_max2 + y_max2)**2 / 36
+    @property
+    def DetGammaRatio(self):
+        return self.DetGamma / max(0.1, self.MaxDetGamma)
     @property
     def SigmaOmega(self):
         Sigma = np.zeros(6)
@@ -121,11 +167,14 @@ class VisualOdometer(Module):
         return Sigma
 
     @property
-    def MotionOmega(self):
+    def Omega(self):
         M = self.MOmega
-        if abs(np.linalg.det(M)) < self._MinDetOmegaToSolve:
+        if self.DetOmegaRatio < self._MinDetOmegaRatioToSolve:
             return np.zeros(6)
-        Omega = np.linalg.inv(M).dot(self.SigmaOmega)
+        return np.linalg.inv(M).dot(self.SigmaOmega)
+    @property
+    def MotionOmega(self):
+        Omega = self.Omega
         return np.array([-Omega[3], Omega[1], Omega[5], -self._Delta*Omega[0], -self._Delta*Omega[2], -self._Delta*Omega[4]])
     @property
     def VOmega(self):
@@ -136,7 +185,7 @@ class VisualOdometer(Module):
     @property
     def MotionGamma(self):
         M = self.MGamma
-        if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
+        if self.DetGammaRatio < self._MinDetGammaRatioToSolve:
             return np.zeros(6)
         Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
         K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
@@ -153,13 +202,19 @@ class VisualOdometer(Module):
     @property
     def KGamma(self):
         M = self.MGamma
-        if abs(np.linalg.det(M)) < self._MinDetGammaToSolve:
+        if self.DetGammaRatio < self._MinDetGammaRatioToSolve:
             return 0.
         Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
         K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
         if K2 <= 0:
             return 0
         return np.sqrt(K2)
+
+    def ExpectedFlowNorm(self, X, d, n):
+        if self.DetOmegaRatio < self._MinDetOmegaRatioToSolve:
+            return None
+        x, y = X - self.ScreenCenter + 0.5
+        return np.array([n[0]*d, n[0]*self.K + (n[0]*x**2 + n[1]*x*y)/self.K, n[1]*d, n[1]*self.K + (n[0]*x*y + n[1]*y**2)/self.K, (n[0]*x + n[1]*y)*d/self.K, n[0]*y-n[1]*x]).dot(self.Omega)
 
     def InitComprehension(self):
         self.Terms = {'Rx':SummationClass('Rx'), 'Ry':SummationClass('Ry'), 'Rnx':SummationClass('Rnx'), 'Rny':SummationClass('Rny'), 'Rd':SummationClass('Rd'), 'Rd2':SummationClass('Rd2')}

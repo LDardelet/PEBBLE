@@ -19,10 +19,14 @@ class FlowComputer(Module):
         self._PolaritySeparation = False
         self._NeedsLogColumn = False
 
+        self._MaxFlowValue = np.inf
+
     def _InitializeModule(self, **kwargs):
         self.CurrentShape = list(self.Geometry)
         self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.STContext = self._LinkedMemory.STContext
+
+        self.N2Min = 1/self._MaxFlowValue**2
 
         return True
 
@@ -61,6 +65,6 @@ class FlowComputer(Module):
                 F = np.array([(Sy2*Stx - Sxy*Sty), (Sx2*Sty - Sxy*Stx)]) / Det
 
                 N2 = (F**2).sum()
-                if N2 != 0:
+                if N2 > self.N2Min:
                     F /= N2
-                event.Attach(FlowEvent, location = np.array(event.location), flow = F)
+                    event.Attach(FlowEvent, location = np.array(event.location), flow = F)

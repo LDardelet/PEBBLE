@@ -17,25 +17,20 @@ class VisualOdometer(Module):
                                     ('VGamma', np.array),
                                     ('omegaGamma', np.array),
                                     ('KGamma', float),
-                                    ('NInput', float),
-                                    ('NValid', float),
-                                    ('DetOmegaRatio', float),
-                                    ('DetGammaRatio', float)]
+                                    ('N', float),
+                                    ('DetOmega', float),
+                                    ('DetGamma', float)]
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
         self._Delta = 0.1
         self._SolveK = True
 
-        self._MinDetOmegaRatioToSolve = 5e-5
-        self._MinDetGammaRatioToSolve = 5e-5
-
-        self._DataRejectionRatio = 3.
-        self._MinValidRatio = 2
-
+        self._MinDetOmegaToSolve = 5e-7
+        self._MinDetGammaToSolve = 5e-7
         self._Tau = 0.05
 
-        self._d2Correction = 0 # Apparently changes nothing
+        self._d2Correction = 0.5**2 / 3
 
     def _InitializeModule(self, **kwargs):
         self.ScreenSize = np.array(self.Geometry[:2])
@@ -51,10 +46,7 @@ class VisualOdometer(Module):
         if self._DisparityRange[1] == np.inf:
             self._DisparityRange[1] = self.ScreenSize[0]
 
-        self.NInput = 0.
-        self.NValid = 0.
-
-        self.AverageNormDelta2 = 0.
+        self.N = 0.
 
         self.LastT = -np.inf
         self.InitComprehension()
@@ -79,17 +71,25 @@ class VisualOdometer(Module):
         return event
 
     def Update(self, t, location, f, disparity):
+
         X = (location - self.ScreenCenter) + 0.5 # Make it centered
         d = disparity
 
         decay = np.e**((self.LastT - t)/self._Tau)
         self.LastT = t
 
-        if not self.IsDataPointValid(X, f, d, decay):
-            return
-
+        self.N = self.N * decay + 1
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
+        if not self.FoundSolution and np.linalg.det(self.MOmega) > self._MinDetOmegaToSolve:
+            self.LogSuccess("Found a motion solution")
+            self.FoundSolution = True
+
+    @property
+    def MOmega(self):
+        M = np.zeros((6,6))
+        for nLine, Line in enumerate(self.MOmegaComp):
+            for nRow, Terms in enumerate(Line):
         if not self.FoundSolution and self.DetOmegaRatio >= self._MinDetOmegaRatioToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True
@@ -359,61 +359,6 @@ class VisualOdometer(Module):
 class SummationClass:
     # Input data will be the array (x, y, d, fx, fy, nx, ny)
     def __init__(self, Name):
-        self.Name = Name
-        print("Generating term {0}".format(Name))
-        if Name[0] == 'S':
-            self.Type = "Summation"
-        else:
-            self.Type = "Residual"
-        self.Exponents = [(np.zeros(7), +1)]
-        currentIndex = 0
-        currentExponent = 0
-
-        for letter in self.Name[1:]:
-            if letter == 'f':
-                self.Exponents[-1][0][currentIndex] += currentExponent
-                currentExponent = 0
-                currentIndex = 3
-                continue
-            elif letter == 'n':
-                self.Exponents[-1][0][currentIndex] += currentExponent
-                currentExponent = 0
-                currentIndex = 5
-                continue
-            if letter in ['x', 'y', 'd']:
-                if currentExponent:
-                    self.Exponents[-1][0][currentIndex] += currentExponent
-                    currentIndex = 0
-                    currentExponent = 0
-                currentIndex += int(letter == 'y') + 2 * int(letter == 'd')
-                currentExponent += 1
-                continue
-            if letter == '+':
-                self.Exponents[-1][0][currentIndex] += currentExponent
-                currentExponent = 0
-                currentIndex = 0
-                self.Exponents += [(np.zeros(7), +1)]
-                continue
-            if letter == '-':
-                self.Exponents[-1][0][currentIndex] += currentExponent
-                currentExponent = 0
-                currentIndex = 0
-                self.Exponents += [(np.zeros(7), -1)]
-                continue
-            currentExponent = int(letter)
-        self.Exponents[-1][0][currentIndex] += currentExponent
-
-        self.S = 0.
-        self.A = 0.
-
-    @property
-    def Value(self):
-        return self.S / max(0.00001, self.A)
-
-    @property
-    def ExpectedValue(self):
-        if self.Type == "Residual":
-            return 0.
         return self.Value
 
     def AddData(self, X, f, d, Lambda):

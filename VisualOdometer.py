@@ -81,15 +81,6 @@ class VisualOdometer(Module):
         self.N = self.N * decay + 1
         for Sum in self.Terms.values():
             Sum.AddData(X, f, d, decay)
-        if not self.FoundSolution and np.linalg.det(self.MOmega) > self._MinDetOmegaToSolve:
-            self.LogSuccess("Found a motion solution")
-            self.FoundSolution = True
-
-    @property
-    def MOmega(self):
-        M = np.zeros((6,6))
-        for nLine, Line in enumerate(self.MOmegaComp):
-            for nRow, Terms in enumerate(Line):
         if not self.FoundSolution and self.DetOmegaRatio >= self._MinDetOmegaRatioToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True

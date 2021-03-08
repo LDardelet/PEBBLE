@@ -62,6 +62,7 @@ class TrackerTRS(Module):
         self._TrackerMinDeathActivity = 0.1                                         # Float. Low boundary for a tracker to survive divided by _TrackerDiameter. Must be lower than _DetectorMinRelativeStartActivity. Default : 0.7
         self._OutOfBondsDistance = 0.                                               # Float. Distance to the screen edge to kill a tracker. Usually 0 or _TrackerDiameter/2
         self._DynamicsEstimatorTMRatio = 0.5                                        # Float. Factor for DynamicsEstimator time constant. Modifies inertia for correction.
+        self._ProjectFlow = True                                                    # Bool. Is the optical flow computed projected onto the local edge orthogonal vector
 
         self._ShapeMaxOccupancy = 0.3                                               # Float. Maximum occupancy of the tracker ROI
         self._TrackerMaxEventsBuffer = np.pi*(self._TrackerDiameter/2)**2 * self._EdgeBinRatio * self._ShapeMaxOccupancy
@@ -1103,6 +1104,14 @@ class TrackerClass:
         NEdge = np.linalg.norm(LocalEdge)
         if NEdge > 0:
             LocalEdge /= NEdge
+
+        if self.TM._ProjectFlow:
+            xy = (1+np.array([LocalEdge[0], -LocalEdge[0]]))/2
+            deltaxy = np.sqrt(abs(xy))
+            if LocalEdge[1] < 0:
+                deltaxy[0] *= -1
+            SpeedError = SpeedError - ((SpeedError*deltaxy).sum()) * deltaxy
+            DeltaPos = DeltaPos - ((DeltaPos*deltaxy).sum()) * deltaxy
 
         return True, SpeedError, DeltaPos, LocalEdge
 

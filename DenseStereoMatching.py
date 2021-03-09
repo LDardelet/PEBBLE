@@ -19,7 +19,7 @@ class DenseStereo(Module):
 
         self._ComparisonRadius = 10
         self._KeyPointsComparisonRadiusRatio = 0.2
-        self._Tau = 0.005
+        self._Tau = 0.05
         self._MaxSimultaneousPointsPerType = np.array([100, 100])
 
         self._MinCPAverageActivityRadiusRatio = 1.5 / 10

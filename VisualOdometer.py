@@ -16,6 +16,7 @@ class VisualOdometer(Module):
                                     ('omegaOmega', np.array),
                                     ('VGamma', np.array),
                                     ('omegaGamma', np.array),
+                                    ('PureOmega', np.array),
                                     ('KGamma', float),
                                     ('NInput', float),
                                     ('NValid', float),
@@ -30,16 +31,17 @@ class VisualOdometer(Module):
         self._MinDetOmegaRatioToSolve = 5e-5
         self._MinDetGammaRatioToSolve = 5e-5
 
-        self._DataRejectionRatio = 3.
+        self._DataRejectionRatio = 0
         self._MinValidRatio = 2
 
         self._Tau = 0.05
 
-        self._d2Correction = 0 # Apparently changes nothing
+        self._d2CorrectionValue = 0.5**2 / 3 # Apparently changes nothing
+        self._d2CorrectionBool = True
 
     def _InitializeModule(self, **kwargs):
         self.ScreenSize = np.array(self.Geometry[:2])
-        self.ScreenCenter = self.ScreenSize / 2
+        self.ScreenCenter = self.ScreenSize / 2 - 0.5
 
         self.FlowMap = np.zeros(tuple(self.ScreenSize) + (3,), dtype = float) # fx, fy, t
         self.DisparityMap = np.zeros(tuple(self.ScreenSize) + (2,), dtype = float) # d, t
@@ -47,6 +49,9 @@ class VisualOdometer(Module):
         self.DisparityMap[:,:,1] = -np.inf
 
         self.K = self._DefaultK
+
+        self.KGammaSum = 0.
+        self.KActivity = 0.
 
         if self._DisparityRange[1] == np.inf:
             self._DisparityRange[1] = self.ScreenSize[0]
@@ -79,7 +84,7 @@ class VisualOdometer(Module):
         return event
 
     def Update(self, t, location, f, disparity):
-        X = (location - self.ScreenCenter) + 0.5 # Make it centered
+        X = (location - self.ScreenCenter) # Make it centered
         d = disparity
 
         decay = np.e**((self.LastT - t)/self._Tau)
@@ -93,6 +98,9 @@ class VisualOdometer(Module):
         if not self.FoundSolution and self.DetOmegaRatio >= self._MinDetOmegaRatioToSolve:
             self.LogSuccess("Found a motion solution")
             self.FoundSolution = True
+        if self.DetGammaRatio >= self._MinDetGammaRatioToSolve:
+            self.KGammaSum += self.KGammaLocal
+            self.KActivity += 1
 
     def IsDataPointValid(self, X, f, d, decay):
 
@@ -110,8 +118,6 @@ class VisualOdometer(Module):
         if Valid:
             self.AverageNormDelta2 = self.AverageNormDelta2*decay + Delta2
             self.NValid = self.NValid*decay + 1
-
-        self.NInput = self.NInput*decay + 1
 
         return Valid
 
@@ -168,9 +174,9 @@ class VisualOdometer(Module):
 
     @property
     def Omega(self):
-        M = self.MOmega
         if self.DetOmegaRatio < self._MinDetOmegaRatioToSolve:
             return np.zeros(6)
+        M = self.MOmega
         return np.linalg.inv(M).dot(self.SigmaOmega)
     @property
     def MotionOmega(self):
@@ -183,16 +189,26 @@ class VisualOdometer(Module):
     def omegaOmega(self):
         return self.MotionOmega[3:]
     @property
+    def PureOmega(self):
+        if self.DetOmegaRatio < self._MinDetOmegaRatioToSolve:
+            return np.zeros(3)
+        M = np.array(self.MOmega)
+        MRestricted = np.array([[M[0,1], M[0,3], M[0,5]], 
+                                [M[2,1], M[2,3], M[2,5]],
+                                [M[5,1], M[5,3], M[5,5]]])
+        S = self.SigmaOmega
+        SigmaRestricted = np.array([S[0], S[2], S[5]])
+        return np.array([[0., -1., 0.],
+                         [1., 0., 0.],
+                         [0., 0., 1.]]).dot(np.linalg.inv(MRestricted).dot(SigmaRestricted))
+    @property
     def MotionGamma(self):
         M = self.MGamma
         if self.DetGammaRatio < self._MinDetGammaRatioToSolve:
             return np.zeros(6)
         Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
-        K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
-        if K2 < 0:
-            return np.zeros(6)
-        K = np.sqrt(K2)
-        return np.array([-Gamma[7]*K, Gamma[6]*K, Gamma[5], -self._Delta*Gamma[0], -self._Delta*Gamma[2], -self._Delta*Gamma[4]])
+        K = self.KGamma
+        return np.array([-(Gamma[7]*K+Gamma[3]/K)/2, (Gamma[6]*K+Gamma[1]/K)/2, Gamma[5], -self._Delta*Gamma[0], -self._Delta*Gamma[2], -self._Delta*Gamma[4]*K])
     @property
     def VGamma(self):
         return self.MotionGamma[:3]
@@ -200,20 +216,21 @@ class VisualOdometer(Module):
     def omegaGamma(self):
         return self.MotionGamma[3:]
     @property
-    def KGamma(self):
+    def KGammaLocal(self):
         M = self.MGamma
         if self.DetGammaRatio < self._MinDetGammaRatioToSolve:
             return 0.
         Gamma = np.linalg.inv(M).dot(self.SigmaGamma)
-        K2 = (Gamma[1] + Gamma[3])/(Gamma[6] + Gamma[7])
-        if K2 <= 0:
-            return 0
-        return np.sqrt(K2)
+        K2 = (Gamma[1]**2 + Gamma[3]**2)/(Gamma[6]**2 + Gamma[7]**2)
+        return K2**(1/4)
+    @property
+    def KGamma(self):
+        return self.KGammaSum / max(0.1, self.KActivity)
 
     def ExpectedFlowNorm(self, X, d, n):
         if self.DetOmegaRatio < self._MinDetOmegaRatioToSolve:
             return None
-        x, y = X - self.ScreenCenter + 0.5
+        x, y = X - self.ScreenCenter
         return np.array([n[0]*d, n[0]*self.K + (n[0]*x**2 + n[1]*x*y)/self.K, n[1]*d, n[1]*self.K + (n[0]*x*y + n[1]*y**2)/self.K, (n[0]*x + n[1]*y)*d/self.K, n[0]*y-n[1]*x]).dot(self.Omega)
 
     def InitComprehension(self):
@@ -322,11 +339,49 @@ class VisualOdometer(Module):
             {'Rnxnyy':self.K, 'Rny2x':-self.K, 'Rnx2xy2':1/self.K, 'Rnxnyy3':1/self.K, 'Rnxnyx2y':-1/self.K, 'Rny2xy2':-1/self.K},
             {'Rnx2xyd':1/self.K, 'Rnxnyy2d':1/self.K, 'Rnxnyx2d':-1/self.K, 'Rny2xyd':-1/self.K},
             {'Snx2y2':1, 'Sny2x2':1, 'Rnxnyxy':-2}])
+        self.MOmegaBisComp = []
+        self.SigmaOmegaBisComp = []
+        self._AddOmegaBisEquality("SfxD", [{'Snx2dD':1},
+            {'Rnx2D':self.K, 'Rnx2x2D':1/self.K, 'RnxnyxyD':1/self.K},
+            {'RnxnydD':1},
+            {'RnxnyD':self.K, 'Rnx2xyD':1/self.K, 'Rnxnyy2D':1/self.K},
+            {'Rnx2xdD':1/self.K, 'RnxnyydD':1/self.K},
+            {'Rnx2yD':1, 'RnxnyxD':-1}])
+        self._AddOmegaBisEquality("Sfyxy", [{'Rnxnyxyd':1},
+            {'Rnxnyxy':self.K,'Rnxnyxy':1/self.K,'Sny2x2y2':1/self.K},
+            {'Rny2xyd':1},
+            {'Rny2xy':self.K,'Rny2xy3':1/self.K,'Rnxnyx2y2':1/self.K},
+            {'Rnxnyx2yd':1/self.K,'Rny2xy2d':1/self.K},
+            {'Rnxnyxy2':1,'Rny2x2y':-1}])
+        self._AddOmegaBisEquality("SfyD", [{'Rnxnyd':1}, # Currently here
+            {'Rnxny':self.K,'Rnxny':1/self.K,'Rny2xy':1/self.K},
+            {'Sny2d':1},
+            {'Sny2':self.K,'Sny2y2':1/self.K,'Rnxnyxy':1/self.K},
+            {'Rnxnyxd':1/self.K,'Rny2yd':1/self.K},
+            {'Rnxnyy':1,'Rny2x':-1}])
+        self._AddOmegaBisEquality("Sfyd", [{'Rnxnyd2':1},
+            {'Rnxnyd':self.K,'Rnxnyd':1/self.K,'Rny2xyd':1/self.K},
+            {'Sny2d2':1},
+            {'Sny2d':self.K,'Sny2y2d':1/self.K,'Rnxnyxyd':1/self.K},
+            {'Rnxnyxd2':1/self.K,'Rny2yd2':1/self.K},
+            {'Rnxnyyd':1,'Rny2xd':-1}])
+        self._AddOmegaBisEquality("Sfxx+fyy", [{"Rnx2xd":1, "Rnxnyyd":1},
+            {"Rnx2x":self.K, "Rnxnyy":self.K, "Rnx2x3":1/self.K, "Rnxnyx2y": 2/self.K, "Rny2xy2":1/self.K},
+            {"Rnxnyxd":1, "Rny2yd":1},
+            {"Rnxnyx":self.K, "Rny2y":self.K, "Rnx2x2y":1/self.K, "Rnxnyxy2":2/self.K, "Rny2y3":1/self.K},
+            {"Snx2x2d":1/self.K, "Sny2y2d": 1/self.K, "Rnxnyxyd":2/self.K},
+            {"Rnx2xy":1, "Rnxnyy2":1, "Rnxnyx2":-1, "Rny2xy":-1}])
+        self._AddOmegaBisEquality("Sfxy-fyx", [{'Rnx2yd':1, 'Rnxnyxd':-1},
+            {'Rnx2y':self.K, 'Rnxnyx':-self.K, 'Rnx2x2y':1/self.K, 'Rnxnyxy2':1/self.K, 'Rnxnyx3':-1/self.K, 'Rny2x2y':-1/self.K},
+            {'Rnxnyyd':1, 'Rny2xd':-1},
+            {'Rnxnyy':self.K, 'Rny2x':-self.K, 'Rnx2xy2':1/self.K, 'Rnxnyy3':1/self.K, 'Rnxnyx2y':-1/self.K, 'Rny2xy2':-1/self.K},
+            {'Rnx2xyd':1/self.K, 'Rnxnyy2d':1/self.K, 'Rnxnyx2d':-1/self.K, 'Rny2xyd':-1/self.K},
+            {'Snx2y2':1, 'Sny2x2':1, 'Rnxnyxy':-2}])
 
         self._d2Compensate()
 
     def _d2Compensate(self):
-        if not self._d2Correction:
+        if not self._d2CorrectionBool:
             return
         for M in [self.MOmegaComp, self.MGammaComp]:
             for Row in M:
@@ -336,36 +391,35 @@ class VisualOdometer(Module):
                             NewTerm = Term.replace('d2', '')
                             if not NewTerm in self.Terms:
                                 self.Terms[NewTerm] = SummationClass(NewTerm)
-                            Cell[NewTerm] = -Cell[Term] * self._d2Correction
+                            Cell[NewTerm] = -Cell[Term] * self._d2CorrectionValue
         
-    def _AddOmegaEquality(self, SigmaTerm, MatrixTerm):
+    def _AddEquality(self, SigmaTerm, MatrixTerm, SigmaComp, MComp):
         self.Terms[SigmaTerm] = SummationClass(SigmaTerm)
         for Expression in MatrixTerm:
             for Term in Expression.keys():
                 if not Term in self.Terms:
                     self.Terms[Term] = SummationClass(Term)
-        self.SigmaOmegaComp += [SigmaTerm]
-        self.MOmegaComp += [MatrixTerm]
+        SigmaComp += [SigmaTerm]
+        MComp += [MatrixTerm]
+    
+    def _AddOmegaEquality(self, SigmaTerm, MatrixTerm):
+        self._AddEquality(SigmaTerm, MatrixTerm, self.MOmegaComp, self.SigmaOmegaComp)
+
+    def _AddOmegaBisEquality(self, SigmaTerm, MatrixTerm):
+        self._AddEquality(SigmaTerm, MatrixTerm, self.MOmegaBisComp, self.SigmaOmegaBisComp)
 
     def _AddGammaEquality(self, SigmaTerm, MatrixTerm):
-        self.Terms[SigmaTerm] = SummationClass(SigmaTerm)
-        for Expression in MatrixTerm:
-            for Term in Expression.keys():
-                if not Term in self.Terms:
-                    self.Terms[Term] = SummationClass(Term)
-        self.SigmaGammaComp += [SigmaTerm]
-        self.MGammaComp += [MatrixTerm]
+        self._AddEquality(SigmaTerm, MatrixTerm, self.MGammaComp, self.SigmaGammaComp)
 
 class SummationClass:
-    # Input data will be the array (x, y, d, fx, fy, nx, ny)
+    # Input data will be the array (x, y, d, D, fx, fy, nx, ny) D = d-<d>
     def __init__(self, Name):
         self.Name = Name
-        print("Generating term {0}".format(Name))
         if Name[0] == 'S':
             self.Type = "Summation"
         else:
             self.Type = "Residual"
-        self.Exponents = [(np.zeros(7), +1)]
+        self.Exponents = [(np.zeros(8), +1)]
         currentIndex = 0
         currentExponent = 0
 
@@ -373,32 +427,32 @@ class SummationClass:
             if letter == 'f':
                 self.Exponents[-1][0][currentIndex] += currentExponent
                 currentExponent = 0
-                currentIndex = 3
+                currentIndex = 4
                 continue
             elif letter == 'n':
                 self.Exponents[-1][0][currentIndex] += currentExponent
                 currentExponent = 0
-                currentIndex = 5
+                currentIndex = 6
                 continue
-            if letter in ['x', 'y', 'd']:
+            if letter in ['x', 'y', 'd', 'D']:
                 if currentExponent:
                     self.Exponents[-1][0][currentIndex] += currentExponent
                     currentIndex = 0
                     currentExponent = 0
-                currentIndex += int(letter == 'y') + 2 * int(letter == 'd')
+                currentIndex += int(letter == 'y') + 2 * int(letter == 'd') + 3 * int(letter == 'D')
                 currentExponent += 1
                 continue
             if letter == '+':
                 self.Exponents[-1][0][currentIndex] += currentExponent
                 currentExponent = 0
                 currentIndex = 0
-                self.Exponents += [(np.zeros(7), +1)]
+                self.Exponents += [(np.zeros(8), +1)]
                 continue
             if letter == '-':
                 self.Exponents[-1][0][currentIndex] += currentExponent
                 currentExponent = 0
                 currentIndex = 0
-                self.Exponents += [(np.zeros(7), -1)]
+                self.Exponents += [(np.zeros(8), -1)]
                 continue
             currentExponent = int(letter)
         self.Exponents[-1][0][currentIndex] += currentExponent
@@ -416,13 +470,13 @@ class SummationClass:
             return 0.
         return self.Value
 
-    def AddData(self, X, f, d, Lambda):
+    def AddData(self, X, f, d, D, Lambda):
         nf = np.linalg.norm(f)
         nx, ny = f / nf
         x, y = X
         self.S *= Lambda
         for Exponents, Sign in self.Exponents:
-            self.S += Sign * (np.array([x, y, d, f[0], f[1], nx, ny])**Exponents).prod()
+            self.S += Sign * (np.array([x, y, d, D, f[0], f[1], nx, ny])**Exponents).prod()
         self.A = self.A * Lambda + 1
 
     def __repr__(self):

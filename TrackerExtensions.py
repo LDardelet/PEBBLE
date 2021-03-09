@@ -81,7 +81,7 @@ class FeatureManagerClass:
         self.ComputationData = {'Delta': [], 'S':[], 'R2':[], 'Omega':[], 'N': []}
         PreviousIDsAndPositions = {}
         PreviousT = None
-        ScreenCenter = self.TrackerManager.Geometry[:2]/2
+        ScreenCenter = np.array(self.TrackerManager.Geometry[:2])/2
         def AddSnap(t, x, y, z):
             self.IMUData['t'] += [t]
             self.IMUData['x'] += [x]
@@ -103,9 +103,12 @@ class FeatureManagerClass:
                 ID, Status = ID_Status
                 if Status != (self.TrackerManager._StateClass._STATUS_LOCKED, 0): # If its either unlocked or is disengaged
                     continue
+                Position = Positions[nID][:2]
+                if Position[1] < 75 or Position[1] > 225:
+                    continue
                 if ID in PreviousIDsAndPositions.keys():
                     MatchingIDs.add(ID)
-                CurrentIDsAndPositions[ID] = Positions[nID][:2] - ScreenCenter
+                CurrentIDsAndPositions[ID] = Position - ScreenCenter
             if len(MatchingIDs) >= NPointsMin:
                 MeanPositions = np.array([(CurrentIDsAndPositions[ID] + PreviousIDsAndPositions[ID])/2 for ID in MatchingIDs])
                 Displacements = np.array([(CurrentIDsAndPositions[ID] - PreviousIDsAndPositions[ID]) for ID in MatchingIDs])

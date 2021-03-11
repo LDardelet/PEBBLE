@@ -104,8 +104,6 @@ class FeatureManagerClass:
                 if Status != (self.TrackerManager._StateClass._STATUS_LOCKED, 0): # If its either unlocked or is disengaged
                     continue
                 Position = Positions[nID][:2]
-                if Position[1] < 75 or Position[1] > 225:
-                    continue
                 if ID in PreviousIDsAndPositions.keys():
                     MatchingIDs.add(ID)
                 CurrentIDsAndPositions[ID] = Position - ScreenCenter
@@ -160,6 +158,50 @@ class FeatureManagerClass:
                     if SigmaError:
                         self.IMUError[Axis] = np.array(self.IMUError[Axis]) * Scaling
                     print("Axis {0} scaling : {1:.5f}".format(Axis, Scaling))
+
+    def GetCommonIDs(self, nSnapInitial, nSnapFinal = None, AimedStatus = (4,0)):
+        if nSnapFinal is None:
+            nSnapFinal = nSnapInitial+1
+        AvailableInitialIDs = self.TrackerManager.History['RecordedTrackers@ID'][nSnapInitial]
+        AvailableInitialStatuses = self.TrackerManager.History['RecordedTrackers@State.Value'][nSnapInitial]
+        AvailableFinalIDs = self.TrackerManager.History['RecordedTrackers@ID'][nSnapFinal]
+        AvailableFinalStatuses = self.TrackerManager.History['RecordedTrackers@State.Value'][nSnapFinal]
+        IDs = []
+        for ID, Status in zip(AvailableInitialIDs, AvailableInitialStatuses):
+            if Status == AimedStatus:
+                if ID in AvailableFinalIDs:
+                    if AvailableFinalStatuses[AvailableFinalIDs.index(ID)] == AimedStatus:
+                        IDs.append(ID)
+        return IDs
+
+    def GetArrayedPositions(self, nSnap, IDs):
+        Positions = []
+        for ID in IDs:
+            Positions += [self.TrackerManager.History['RecordedTrackers@Position'][nSnap][self.TrackerManager.History['RecordedTrackers@ID'][nSnap].index(ID)][:2]]
+        return np.array(Positions)
+
+    def GetRT(self, nSnapInitial, nSnapFinal = None):
+        if nSnapFinal is None:
+            nSnapFinal = nSnapInitial+1
+        IDs = self.GetCommonIDs(nSnapInitial, nSnapFinal)
+
+    def RTCompute(self, nSnapInitial, nSnapFinal, IDs):
+        InitialPositions = self.GetArrayedPositions(nSnapInitial, IDs)
+        FinalPositions = self.GetArrayedPositions(nSnapFinal, IDs)
+        CInitial = InitialPositions.mean(axis = 0)
+        CFinal = FinalPositions.mean(axis = 0)
+        InitialDeltas = InitialPositions - CInitial
+        FinalDeltas = FinalPositions - CFinal
+
+        H = FinalPositions.T.dot(FinalDeltas)
+        U, _, V = np.linalg.svd(H)
+        R = V.dot(U.T)
+
+        t = CFinal - R.dot(CInitial)
+        Reproj = InitialPositions.dot(R) + t
+        Errors = np.linalg.norm(Reproj - FinalPositions, axis = 1)
+        return R, t, Errors
+
 
     def GetSnapshot(self, t):
         self._ComputePoseInformation()

@@ -16,6 +16,7 @@ class FlowComputer(Module):
         self._R = 5
         self._Tau = 0.05
         self._MinDetRatio = 0.01
+        self._MaxNEdges = 4
         self._PolaritySeparation = False
         self._NeedsLogColumn = False
 
@@ -25,6 +26,8 @@ class FlowComputer(Module):
         self.CurrentShape = list(self.Geometry)
         self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.STContext = self._LinkedMemory.STContext
+
+        self.NEventsMax = int(2*self._R*self._MaxNEdges)
 
         self.N2Min = 1/self._MaxFlowValue**2
 
@@ -41,17 +44,23 @@ class FlowComputer(Module):
         else:
             Patch = Patch.max(axis = 2)
         
-        Positions = np.where(Patch > event.timestamp - self._Tau)
-        NEvents = Positions[0].shape[0]
+        xs, ys = np.where(Patch > event.timestamp - self._Tau)
+        NEvents = xs.shape[0]
         if NEvents >= 4*self._R:
-            Ts = Patch[Positions]
+            Ts = Patch[xs, ys]
+            if NEvents > self.NEventsMax:
+                SortedIndexes = Ts.argsort()
+                Ts = Ts[-NEvents:]
+                xs = xs[-NEvents:]
+                ys = ys[-NEvents:]
+
             tMean = Ts.mean()
             
-            xMean = Positions[0].mean()
-            yMean = Positions[1].mean()
+            xMean = xs.mean()
+            yMean = ys.mean()
             
-            xDeltas = Positions[0] - xMean
-            yDeltas = Positions[1] - yMean
+            xDeltas = xs - xMean
+            yDeltas = ys - yMean
             tDeltas = Ts - tMean
 
             Sx2 = (xDeltas **2).sum()

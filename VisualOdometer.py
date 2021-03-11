@@ -50,13 +50,13 @@ class VisualOdometer(Module):
         self.SigmaSum = np.zeros(6)
         self.A = 0.
         self.FoundSolution = False
-
-        self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
-                                             [0.          , 1., 0.          , 0. , 0.          , 0.],
-                                             [0.          , 0., 0.          , 0. , 0.          , 1.],
-                                             [-self._Delta, 0., 0.          , 0. , 0.          , 0.],
-                                             [0.          , 0., -self._Delta, 0. , 0.          , 0.],
-                                             [0.          , 0., 0.          , 0. , -self._Delta, 0.]])
+        D = self.Delta
+        self.OmegaToMotionMatrix = np.array([[0., 0., 0., -1., 0., 0.],
+                                             [0., 1., 0., 0. , 0., 0.],
+                                             [0., 0., 0., 0. , 0., 1.],
+                                             [-D, 0., 0., 0. , 0., 0.],
+                                             [0., 0., -D, 0. , 0., 0.],
+                                             [0., 0., 0., 0. , -D, 0.]])
 
         return True
 

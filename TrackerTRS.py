@@ -929,7 +929,7 @@ class TrackerClass:
     def ComputeCurrentStatus(self, t): # Cannot be called when DEAD or IDLE. Thus, we first check evolutions for aperture issue and lock properties, then update the status
         self.State.OffCentered = (not self.State.Locked) and (np.linalg.norm(self.DynamicsEstimator.X) > self.TM._TrackerOffCenterThreshold * self.Radius)
 
-        if not self.State.ApertureIssue and not self.State.Locked and self.ApertureEstimator.Value > self.TM._TrackerApertureIssueThreshold + self.TM._TrackerApertureIssueHysteresis:
+        if not self.State.ApertureIssue and self.ApertureEstimator.Value > self.TM._TrackerApertureIssueThreshold + self.TM._TrackerApertureIssueHysteresis:
             self.State.ApertureIssue = True
             Reason = "aperture issue"
         elif self.State.ApertureIssue and self.ApertureEstimator.Value < self.TM._TrackerApertureIssueThreshold - self.TM._TrackerApertureIssueHysteresis:

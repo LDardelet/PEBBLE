@@ -47,8 +47,9 @@ class FeatureManagerClass:
         self.PositionsLockVectorsDict[Tracker.ID] = Tracker.Position
 
     def RemoveLock(self, Tracker):
-        del self.SpeedsLockVectorsDict[Tracker.ID]
-        del self.PositionsLockVectorsDict[Tracker.ID]
+        #del self.SpeedsLockVectorsDict[Tracker.ID]
+        #del self.PositionsLockVectorsDict[Tracker.ID]
+        pass
 
     def FindAssociatedFeatureWith(self, Tracker):
         self._ComputePoseInformation()
@@ -185,8 +186,11 @@ class FeatureManagerClass:
             nSnapFinal = nSnapInitial+1
         IDs = self.GetCommonIDs(nSnapInitial, nSnapFinal)
 
-    def RTCompute(self, nSnapInitial, nSnapFinal, IDs):
-        InitialPositions = self.GetArrayedPositions(nSnapInitial, IDs)
+    def RTCompute(self, nSnapInitial, nSnapFinal, IDs, UseWorldPositions = False):
+        if UseWorldPositions:
+            InitialPositions = np.array([self.WorldLocations[ID] for ID in IDs])
+        else:
+            InitialPositions = self.GetArrayedPositions(nSnapInitial, IDs)
         FinalPositions = self.GetArrayedPositions(nSnapFinal, IDs)
         CInitial = InitialPositions.mean(axis = 0)
         CFinal = FinalPositions.mean(axis = 0)
@@ -202,6 +206,150 @@ class FeatureManagerClass:
         Errors = np.linalg.norm(Reproj - FinalPositions, axis = 1)
         return R, t, Errors
 
+    def CreateWorldRepresentation(self, NPointsMin = 5, AimedStatus = (4,0), MaximumError = np.inf, LocalAcceptFunction = None):
+        self.WorldLocations = {}
+        self.WorldTrackersSnapActive = {}
+        self.WorldTrackersDisabled = {}
+        self.WorldRejected = {}
+        self.SnapsToWorldRT = {}
+        self.WorldFirstSnap = None
+        self.WorldLastSnap = None
+        NAvailableTrackers = 0
+
+        if LocalAcceptFunction is None:
+            LocalAcceptFunction = lambda x: True
+
+        for nSnap, (t, IDs, Statuses, Positions) in enumerate(zip(self.TrackerManager.History['t'], self.TrackerManager.History['RecordedTrackers@ID'], self.TrackerManager.History['RecordedTrackers@State.Value'], self.TrackerManager.History['RecordedTrackers@Position'])):
+            PossibleLocalIDs = set()
+            for localID, Status in enumerate(Statuses):
+                if Status == AimedStatus and LocalAcceptFunction(Positions[localID][:2]):
+                    PossibleLocalIDs.add(localID)
+            if len(PossibleLocalIDs) < NPointsMin:
+                if not self.WorldFirstSnap is None:
+                    print("Snap {0}, only {1} valid trackers, ending here".format(nSnap, len(PossibleLocalIDs)))
+                    break
+                else:
+                    continue
+            if self.WorldFirstSnap is None:
+                self.WorldFirstSnap = nSnap
+                print("Started World Representation at snap {0}".format(nSnap))
+                self.SnapsToWorldRT[nSnap] = (np.identity(2), np.zeros(2))
+                NAvailableTrackers = len(PossibleLocalIDs)
+                for localID in PossibleLocalIDs:
+                    ID = IDs[localID]
+                    self.WorldLocations[ID] = np.array(Positions[localID][:2])
+                    self.WorldTrackersDisabled[ID] = None
+                    self.WorldTrackersSnapActive[ID] = nSnap
+                    self.WorldRejected[ID] = False
+                continue
+            MatchingIDs = []
+            NewIDs = []
+            for localID in PossibleLocalIDs:
+                ID = IDs[localID]
+                if ID in self.WorldTrackersSnapActive and self.WorldTrackersDisabled[ID] is None:
+                    MatchingIDs.append(ID)
+                elif ID not in self.WorldTrackersDisabled.keys():
+                    NewIDs.append((localID, ID))
+            for ID, Disabled in self.WorldTrackersDisabled.items():
+                if Disabled is None and not (ID in MatchingIDs):
+                    self.WorldTrackersDisabled[ID] = nSnap
+                    NAvailableTrackers -= 1
+            if len(MatchingIDs) >= NPointsMin:
+                R, t, Errors = self.RTCompute(self.WorldFirstSnap, nSnap, MatchingIDs, UseWorldPositions = True)
+                while Errors.max() > MaximumError and len(MatchingIDs) >= NPointsMin and NAvailableTrackers >= NPointsMin:
+                    RemovedID = MatchingIDs.pop(Errors.argmax())
+                    self.WorldTrackersDisabled[RemovedID] = nSnap
+                    R, t, Errors = self.RTCompute(self.WorldFirstSnap, nSnap, MatchingIDs, UseWorldPositions = True)
+                    NAvailableTrackers -= 1
+                    self.WorldRejected[RemovedID] = True
+                self.SnapsToWorldRT[nSnap] = (R,t)
+                for localID, ID in NewIDs:
+                    self.WorldLocations[ID] = R.T.dot(Positions[localID][:2] - t)
+                    self.WorldTrackersSnapActive[ID] = nSnap
+                    self.WorldTrackersDisabled[ID] = None
+                    self.WorldRejected[ID] = False
+                    NAvailableTrackers += 1
+                self.WorldLastSnap = nSnap
+            else:
+                print("Snap {0}, only {1} trackers previously found, ending here.".format(nSnap, len(MatchingIDs)))
+                break
+
+    def GeneratePanoramicView3D(self, Memory, Stabilizer = None, DefaultTau = 0.05, StabilizerTauRatio = 5, NSnaps = 5, AddContours = True, AddTrackers = True, WorldRepresentationArgs = (5, (4,0), np.inf, None), tMin = 0., tMax = np.inf, minDeltaT = 0., MapType = 'binary', DefaultMapValue = 0, Overlay = False):
+        self.CreateWorldRepresentation(*WorldRepresentationArgs)
+        Ts = self.TrackerManager.History['t']
+        tMin = max(tMin, Ts[self.WorldFirstSnap])
+        tMax = min(tMax, Ts[self.WorldLastSnap])
+        if minDeltaT > 0:
+            NSnaps = max(2, min(NSnaps, int((tMax - tMin)/minDeltaT)))
+        print("{0} snaps over {1:.3f}s, dt = {2:.3f}".format(NSnaps, tMax - tMin, (tMax - tMin)/NSnaps))
+        TsChoosen = np.linspace(tMin, tMax, NSnaps)
+
+        if not Stabilizer is None:
+            tsStab, TauStab = array(F.Stabilizer.History['t']), array(F.Stabilizer.History['Tau'])
+            Taus = [TauStab[(abs(tsStab - tSnap)).argmin()]/StabilizerTauRatio for tSnap in TsChoosen]
+        else:
+            Taus = [DefaultTau for tSnap in TsChoosen]
+        tsMem = np.array(Memory.History['t'])
+        STContexts = [Memory.History['STContext'][(abs(tsMem - tSnap)).argmin()] for tSnap in TsChoosen]
+
+        tsManager = np.array(self.TrackerManager.History['t'])
+        RTs = [self.SnapsToWorldRT[(abs(tsManager - tSnap)).argmin()] for tSnap in TsChoosen]
+
+        f, ax = plt.subplots(1,1)
+        ax.tick_params('both', labelleft = False, left = False, labelbottom = False, bottom = False)
+        Corners = np.array([[0,0], [346,0], [346,260], [0,260]])
+        Canvas = np.zeros((0, 0))
+        WorldCanvasOffset = np.array([0, 0])
+        for nSnap, (Tau, STContext, (R,t)) in enumerate(zip(Taus, STContexts, RTs)):
+            if MapType == 'ts':
+                Map = np.e**((STContext.max(axis = 2) - STContext.max())/Tau)
+            elif MapType == 'binary':
+                Map = ((STContext.max() - STContext.max(axis=2)) < Tau) * (2*STContext.argmax(axis = 2)-1) + 0.1
+            xs, ys = np.where(Map != 0)
+            alphas = Map[xs, ys]
+            wXs = np.array((np.array([xs, ys]).T+0.5 - t).dot(R), dtype = int)
+            WMin = wXs.min(axis = 0)
+            WMax = wXs.max(axis = 0)
+            AddOffset = np.array([0, 0])
+            print("Boudaried are min = {0}, max = {1}".format(WMin, WMax))
+            if (WMin + WorldCanvasOffset < 0).any():
+                AddOffset = -np.minimum((WMin+WorldCanvasOffset), np.array([0, 0]))
+                WorldCanvasOffset += AddOffset
+                print("Offset is now {0}".format(WorldCanvasOffset))
+            if (WMax + WorldCanvasOffset >= np.array(Canvas.shape)-1).any():
+                NewCanvasShape = np.array(Canvas.shape) + np.maximum(np.array([0,0]), np.maximum(WMax + WorldCanvasOffset - (np.array(Canvas.shape)-1), AddOffset))
+                print("Canvas shape is now {0}".format(NewCanvasShape))
+                if MapType == 'ts':
+                    NewCanvas = np.zeros(NewCanvasShape)
+                elif MapType == 'binary':
+                    NewCanvas = DefaultMapValue*np.ones(NewCanvasShape)
+                xsCanvas, ysCanvas = np.where(Canvas)
+                NewCanvas[xsCanvas + AddOffset[0], ysCanvas + AddOffset[1]] = Canvas[xsCanvas, ysCanvas]
+                Canvas = NewCanvas
+            if Overlay:
+                Canvas[wXs[:,0]+WorldCanvasOffset[0], wXs[:,1]+WorldCanvasOffset[1]] += alphas
+            else:
+                NwXs = wXs[:,0]+WorldCanvasOffset[0]
+                NwYs = wXs[:,1]+WorldCanvasOffset[1]
+                PreviousValues = Canvas[NwXs, NwYs]
+                alphas = alphas * (PreviousValues == DefaultMapValue)
+                Canvas[NwXs, NwYs] += alphas
+        if AddContours:
+            for nSnap, (R,t) in enumerate(RTs):
+                WCorners = (Corners - t).dot(R)
+                for nCorner in range(4):
+                    CornerA = np.array(WCorners[nCorner, :] + WorldCanvasOffset, dtype = int)
+                    CornerB = np.array(WCorners[(nCorner+1)%4, :] + WorldCanvasOffset, dtype = int)
+                    ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], 'g--', linewidth = 1, zorder = 10)
+        ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary')
+        if AddTrackers:
+            for ID, WLocation in self.WorldLocations.items():
+                CanvasLocation = WLocation + WorldCanvasOffset
+                if self.WorldRejected[ID]:
+                    Color = 'r'
+                else:
+                    Color = 'g'
+                ax.plot(CanvasLocation[0], CanvasLocation[1], marker = 'o', color = Color)
 
     def GetSnapshot(self, t):
         self._ComputePoseInformation()

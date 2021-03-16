@@ -285,7 +285,7 @@ class FeatureManagerClass:
         TsChoosen = np.linspace(tMin, tMax, NSnaps)
 
         if not Stabilizer is None:
-            tsStab, TauStab = array(F.Stabilizer.History['t']), array(F.Stabilizer.History['Tau'])
+            tsStab, TauStab = np.array(Stabilizer.History['t']), np.array(Stabilizer.History['Tau'])
             Taus = [TauStab[(abs(tsStab - tSnap)).argmin()]/StabilizerTauRatio for tSnap in TsChoosen]
         else:
             Taus = [DefaultTau for tSnap in TsChoosen]
@@ -301,11 +301,12 @@ class FeatureManagerClass:
         Canvas = np.zeros((0, 0))
         WorldCanvasOffset = np.array([0, 0])
         for nSnap, (Tau, STContext, (R,t)) in enumerate(zip(Taus, STContexts, RTs)):
+            print(TsChoosen[nSnap], R, t)
             if MapType == 'ts':
                 Map = np.e**((STContext.max(axis = 2) - STContext.max())/Tau)
             elif MapType == 'binary':
-                Map = ((STContext.max() - STContext.max(axis=2)) < Tau) * (2*STContext.argmax(axis = 2)-1) + 0.1
-            xs, ys = np.where(Map != 0)
+                Map = ((STContext.max() - STContext.max(axis=2)) < Tau) * (2*STContext.argmax(axis = 2)-1)
+            xs, ys = np.where(Map >= -1)
             alphas = Map[xs, ys]
             wXs = np.array((np.array([xs, ys]).T+0.5 - t).dot(R), dtype = int)
             WMin = wXs.min(axis = 0)
@@ -316,14 +317,14 @@ class FeatureManagerClass:
                 AddOffset = -np.minimum((WMin+WorldCanvasOffset), np.array([0, 0]))
                 WorldCanvasOffset += AddOffset
                 print("Offset is now {0}".format(WorldCanvasOffset))
-            if (WMax + WorldCanvasOffset >= np.array(Canvas.shape)-1).any():
+            if (WMax + WorldCanvasOffset - np.array(Canvas.shape)-1 > 0).any() or (AddOffset > 0).any():
                 NewCanvasShape = np.array(Canvas.shape) + np.maximum(np.array([0,0]), np.maximum(WMax + WorldCanvasOffset - (np.array(Canvas.shape)-1), AddOffset))
                 print("Canvas shape is now {0}".format(NewCanvasShape))
                 if MapType == 'ts':
                     NewCanvas = np.zeros(NewCanvasShape)
                 elif MapType == 'binary':
                     NewCanvas = DefaultMapValue*np.ones(NewCanvasShape)
-                xsCanvas, ysCanvas = np.where(Canvas)
+                xsCanvas, ysCanvas = np.where(Canvas != DefaultMapValue)
                 NewCanvas[xsCanvas + AddOffset[0], ysCanvas + AddOffset[1]] = Canvas[xsCanvas, ysCanvas]
                 Canvas = NewCanvas
             if Overlay:
@@ -332,8 +333,7 @@ class FeatureManagerClass:
                 NwXs = wXs[:,0]+WorldCanvasOffset[0]
                 NwYs = wXs[:,1]+WorldCanvasOffset[1]
                 PreviousValues = Canvas[NwXs, NwYs]
-                alphas = alphas * (PreviousValues == DefaultMapValue)
-                Canvas[NwXs, NwYs] += alphas
+                Canvas[NwXs, NwYs] = alphas
         if AddContours:
             for nSnap, (R,t) in enumerate(RTs):
                 WCorners = (Corners - t).dot(R)
@@ -341,7 +341,7 @@ class FeatureManagerClass:
                     CornerA = np.array(WCorners[nCorner, :] + WorldCanvasOffset, dtype = int)
                     CornerB = np.array(WCorners[(nCorner+1)%4, :] + WorldCanvasOffset, dtype = int)
                     ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], 'g--', linewidth = 1, zorder = 10)
-        ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary')
+        ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary', vmin = -1, vmax = 1)
         if AddTrackers:
             for ID, WLocation in self.WorldLocations.items():
                 CanvasLocation = WLocation + WorldCanvasOffset

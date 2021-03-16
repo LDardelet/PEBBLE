@@ -1,4 +1,4 @@
-from PEBBLE import Module, OdometryEvent
+from PEBBLE import Module, Event, OdometryEvent
 import numpy as np
 
 import random
@@ -21,10 +21,12 @@ class OdometerMixer(Module):
         self._ReferenceIndex = 0
 
         self._AddVirtualFrame = True
-        self._VirtualReferenceFrameDisparity = 5.
+        self._VirtualReferenceFrameDisparity = 10.
         self._VirtualReferenceFrameLength = 1.
         self._StereoBaseDistance = 0.1
-        
+        self._MaxCamToCamRotationSpeedError = 0.3
+        self._ValidTimespanForStart = 0.02
+
         self._K = 432
 
     def _InitializeModule(self, **kwargs):
@@ -41,11 +43,13 @@ class OdometerMixer(Module):
         self.IdleCams = [True, True]
         self.LastT = -np.inf
 
+        self.StartAfter = np.inf
+
         self.ScreenSize = np.array(self.Geometry)[:2]
 
         self.StereoBaseVector = np.array([self._StereoBaseDistance, 0., 0.])
-        self.KMat = np.array([[self._K, 0., self.ScreenSize[0]/2], 
-                              [0., self._K, self.ScreenSize[1]/2],
+        self.KMat = np.array([[-self._K, 0., self.ScreenSize[0]/2], 
+                              [0., -self._K, self.ScreenSize[1]/2],
                               [0., 0., 1.]])
         
         self.VirtualFrameCornersLocations = [np.array([self._StereoBaseDistance/2, 0., -self._StereoBaseDistance * self._K / self._VirtualReferenceFrameDisparity, 1.]),
@@ -63,16 +67,27 @@ class OdometerMixer(Module):
             else:
                 self.StereoV = np.array(event.v)
                 self.StereoOmega = np.array(event.omega)
-            self.IdleCams[event.cameraIndex] = False
             if not self.Started:
-                self.LastT = event.timestamp
                 self.IdleCams[event.cameraIndex] = False
                 if not True in self.IdleCams:
-                    self.Started = True
+                    if abs(self.ReferenceOmega - self.StereoOmega).max() <= self._MaxCamToCamRotationSpeedError:
+                        if event.timestamp > self.StartAfter:
+                            self.LogSuccess("Started virtual frame")
+                            self.LastT = event.timestamp
+                            self.Started = event.timestamp
+                        elif self.StartAfter == np.inf:
+                            self.StartAfter = event.timestamp + self._ValidTimespanForStart
+                            self.LogSuccess("Planning to start at {0:.3f}".format(self.StartAfter))
+                    else:
+                        if self.StartAfter != np.inf:
+                            self.LogWarning("Cancelled start planned")
+                            self.StartAfter = np.inf
 
         if self.Started:
-            pass
-            
+            self.UpdateFrame(event.timestamp)
+            VirtualFrameLocation = self.GenerateVirtualEvent(event.cameraIndex)
+            if not VirtualFrameLocation is None:
+                event.Attach(Event, location = VirtualFrameLocation, polarity = 0)
         return event
 
     @property
@@ -104,22 +119,24 @@ class OdometerMixer(Module):
         R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
         self.R = self.R.dot(R)
 
-    def GenerateVirtualEvent(self, CameraIndex):
-        T = self.T
+    def GenerateVirtualEvent(self, CameraIndex, Point3D = None):
+        T = np.array(self.T)
         if CameraIndex != self._ReferenceIndex:
             T += self.R.T.dot(self.StereoBaseVector)
-
-        nDim = random.randint(1,3)
-        u = random.random()
-        Point3D = u * self.VirtualFrameCornersLocations[0] + (1-u) * self.VirtualFrameCornersLocations[nDim]
-
+    
+        if Point3D is None:
+            nDim = random.randint(1,3)
+            u = random.random()
+            Point3D = u * self.VirtualFrameCornersLocations[0] + (1-u) * self.VirtualFrameCornersLocations[nDim]
+    
         RT = np.concatenate((self.R.T, T.reshape((1,3)))).T
         X = RT.dot(Point3D)
-        x = self.KMat.dot(X)
-        if x[2] != 0:
-            x = np.array(x[:2]/x[2], dtype = int)
+        if X[2] < 0: # with these corrdinates, Z looks at the back of the camera
+            xproj = self.KMat.dot(X)
+            x = np.array(xproj[:2]/xproj[2]+0.5, dtype = int)
+            if (x>=0).all() and (x<self.ScreenSize).all():
+                return x
+            else:
+                return None
         else:
             return None
-        if (x<0).any() or (x>=self.ScreenSize).any():
-            return None
-        return x

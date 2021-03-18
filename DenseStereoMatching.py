@@ -4,9 +4,6 @@ import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
 
-# Last Run:
-# F.RunStream({'RightReader':'davis.right.events@'+DLS+'1_data.hdf5', 'LeftReader':'davis.left.events@'+DLS+'1_data.hdf5'}, _CalibrationInput={'0x':DLS+'_right_x_map.txt', '0y':DLS+'_right_y_map.txt', '1x':DLS+'_left_x_map.txt', '1y':DLS+'_left_y_map.txt'}, _TxtDefaultGeometry = [346,260,2], _DisparityRange = [0, 50], _MatchThreshold = 0.8, DenseStereo_MonitorDt = 0.05, start_at=10, stop_at=30, _ComparisonRadius = 10, DenseStereo_Tau = 0.05) 
-
 class DenseStereo(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
@@ -15,7 +12,7 @@ class DenseStereo(Module):
         '''
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Computation'
-        self.__ReferencesAsked__ = []
+        self.__ReferencesAsked__ = ['LeftMemory', 'RightMemory']
 
         self._ComparisonRadius = 10
         self._KeyPointsComparisonRadiusRatio = 0.2
@@ -34,7 +31,8 @@ class DenseStereo(Module):
 
         self._AverageRadius = 0
 
-        self._NDisparitiesStored = 200
+        self._ConfirmViaTS = True
+
         self._DisparityPatchRadius = 2
         self._DisparitySearchRadius = 1
 
@@ -51,6 +49,8 @@ class DenseStereo(Module):
         self.UsedGeometry = np.array(self.Geometry)[:2]
 
         self.MetricThreshold = self._MatchThreshold ** np.sum(self._SignaturesExponents)
+        self.RightMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
+        self.LeftMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
 
         self._KeyPointsComparisonRadius = self._ComparisonRadius * self._KeyPointsComparisonRadiusRatio
         self._MinCPAverageActivity = self._ComparisonRadius * self._MinCPAverageActivityRadiusRatio
@@ -60,7 +60,6 @@ class DenseStereo(Module):
 
         self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius))
         self.ComparisonPoints = ([],[])
-        self.DisparitiesStored = ([],[])
         self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (2,2)) # 0 default value seems legit as it pushes all points to infinity
         self.DisparityMap[:,:,1,:] = -np.inf
         self.ComparedPoints = np.array([[0,0],[0,0]], dtype = int)
@@ -405,8 +404,6 @@ class DenseStereo(Module):
             Distance = np.array([event.location[0], event.location[1], 1]).dot(CP[3]) # Compute distance from this point to the compared point epipolar line
             if abs(Distance) <= self._KeyPointsComparisonRadius:
                 ProjectedEvent = (event.location - Distance * CP[3][:2]).astype(int) # Recover the location of point on the epipolar line that corresponds to this event
-                #if ProjectedEvent[0] == CP[0][0]: # We just want to avoid infinite disparity values
-                #    continue
 
                 EventSignatures = self.Maps[event.cameraIndex].GetSignatures(ProjectedEvent, event.timestamp) # Recover specific signatures of the map on that epipolar line for that CP on the other camera
                 CPSignatures = self.Maps[1-event.cameraIndex].GetSignatures(CP[0], event.timestamp)
@@ -418,9 +415,6 @@ class DenseStereo(Module):
                     if GlobalMatch:
                         Offset = Location - CP[0][0]
                         self.LogSuccess("Matched y = {0}, x[0] = {{{1}}} & x[1] = {{{2}}}, offset = {3}".format(ProjectedEvent[1], 1-event.cameraIndex, str(event.cameraIndex), Offset).format(CP[0][0], Location))
-                        if len(self.DisparitiesStored[event.cameraIndex]) == self._NDisparitiesStored:
-                            self.DisparitiesStored[event.cameraIndex].pop(0)
-                        self.DisparitiesStored[event.cameraIndex].append((np.array(CP[0]), event.timestamp, Offset))
                         self.DisparityMap[CP[0][0],CP[0][1],:,1-event.cameraIndex] = np.array([-Offset, event.timestamp])
                         self.DisparityMap[Location,CP[0][1],:,event.cameraIndex] = np.array([Offset, event.timestamp])
                         event.Attach(DisparityEvent, disparity = abs(Offset), sign = np.sign(Offset), location = np.array(event.location))

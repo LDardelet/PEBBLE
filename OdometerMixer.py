@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event, OdometryEvent
+from PEBBLE import Module, Event, OdometryEvent, DisparityEvent
 import numpy as np
 
 import random
@@ -21,11 +21,13 @@ class OdometerMixer(Module):
         self._ReferenceIndex = 0
 
         self._AddVirtualFrame = True
-        self._VirtualReferenceFrameDisparity = 10.
+        self._VirtualReferenceFrameDepth = 3.
         self._VirtualReferenceFrameLength = 1.
         self._StereoBaseDistance = 0.1
         self._MaxCamToCamRotationSpeedError = 0.3
         self._ValidTimespanForStart = 0.02
+
+        self._KMat = [None, None]
 
         self._K = 432
 
@@ -48,14 +50,22 @@ class OdometerMixer(Module):
         self.ScreenSize = np.array(self.Geometry)[:2]
 
         self.StereoBaseVector = np.array([self._StereoBaseDistance, 0., 0.])
-        self.KMat = np.array([[-self._K, 0., self.ScreenSize[0]/2], 
+        for nCam in range(2):
+            if self._KMat[nCam] is None:
+                self._KMat[nCam] = np.array([[-self._K, 0., self.ScreenSize[0]/2], 
                               [0., -self._K, self.ScreenSize[1]/2],
                               [0., 0., 1.]])
+            else:
+                self._KMat[nCam][:,0] *= -1
+                self._KMat[nCam][:,1] *= -1
         
-        self.VirtualFrameCornersLocations = [np.array([self._StereoBaseDistance/2, 0., -self._StereoBaseDistance * self._K / self._VirtualReferenceFrameDisparity, 1.]),
-                                      np.array([self._StereoBaseDistance/2 + 1, 0., -self._StereoBaseDistance * self._K / self._VirtualReferenceFrameDisparity, 1.]),
-                                      np.array([self._StereoBaseDistance/2, +1, -self._StereoBaseDistance * self._K / self._VirtualReferenceFrameDisparity, 1.]),
-                                      np.array([self._StereoBaseDistance/2, 0., -self._StereoBaseDistance * self._K / self._VirtualReferenceFrameDisparity + 1, 1.])]
+        Z = -self._VirtualReferenceFrameDepth
+        X = 0
+        Y = 0.
+        self.VirtualFrameCornersLocations = [np.array([X, Y, Z, 1.]),
+                                             np.array([X+1, Y, Z, 1.]),
+                                             np.array([X, Y+1, Z, 1.]),
+                                             np.array([X, Y, Z+1, 1.])]
 
         return True
 
@@ -85,9 +95,10 @@ class OdometerMixer(Module):
 
         if self.Started:
             self.UpdateFrame(event.timestamp)
-            VirtualFrameLocation = self.GenerateVirtualEvent(event.cameraIndex)
+            VirtualFrameLocation, disparity = self.GenerateVirtualEvent(event.cameraIndex)
             if not VirtualFrameLocation is None:
                 event.Attach(Event, location = VirtualFrameLocation, polarity = 0)
+                event.Attach(DisparityEvent, location = VirtualFrameLocation, disparity = disparity, sign = 2*event.cameraIndex - 1)
         return event
 
     @property
@@ -95,7 +106,8 @@ class OdometerMixer(Module):
         return (self.ReferenceOmega + self.StereoOmega)/2
     @property
     def V(self):
-        return (self.ReferenceV + self.StereoV - np.cross(self.Omega, self.StereoBaseVector))/2
+        #return (self.ReferenceV + self.StereoV - np.cross(self.Omega, self.StereoBaseVector))/2
+        return self.ReferenceV
 
     @property
     def D(self):
@@ -109,8 +121,8 @@ class OdometerMixer(Module):
         InstantRotation = Delta * self.Omega
         theta = np.linalg.norm(InstantRotation)
         self.LastT = t
-        self.T += self.R.T.dot(self.V * Delta)
         if theta == 0:
+            self.T -= self.V * Delta
             return
         u = InstantRotation / theta
         u_x = np.array([[0., -u[2], u[1]],
@@ -118,25 +130,27 @@ class OdometerMixer(Module):
                         [-u[1], u[0], 0.]])
         R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
         self.R = self.R.dot(R)
+        self.T = -self.V * Delta + R.dot(self.T)
 
     def GenerateVirtualEvent(self, CameraIndex, Point3D = None):
         T = np.array(self.T)
         if CameraIndex != self._ReferenceIndex:
-            T += self.R.T.dot(self.StereoBaseVector)
+            T = self.R.T.dot(self.StereoBaseVector)
     
         if Point3D is None:
             nDim = random.randint(1,3)
             u = random.random()
             Point3D = u * self.VirtualFrameCornersLocations[0] + (1-u) * self.VirtualFrameCornersLocations[nDim]
     
-        RT = np.concatenate((self.R.T, T.reshape((1,3)))).T
+        RT = np.concatenate((self.R, T.reshape((1,3)))).T
         X = RT.dot(Point3D)
+        d = int(abs(self._StereoBaseDistance * self._KMat[CameraIndex][0,0] / self._KMat[CameraIndex][-1,-1] / X[2]) + 0.5)
         if X[2] < 0: # with these corrdinates, Z looks at the back of the camera
-            xproj = self.KMat.dot(X)
+            xproj = self._KMat[CameraIndex].dot(X)
             x = np.array(xproj[:2]/xproj[2]+0.5, dtype = int)
             if (x>=0).all() and (x<self.ScreenSize).all():
-                return x
+                return x, d
             else:
-                return None
+                return None, None
         else:
-            return None
+            return None, None

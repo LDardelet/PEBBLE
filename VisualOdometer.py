@@ -14,6 +14,7 @@ class VisualOdometer(Module):
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('V', np.array),
                                     ('omega', np.array),
+                                    ('PureOmega', np.array),
                                     ('A', float),
                                     ('Det', float)]
 
@@ -47,8 +48,11 @@ class VisualOdometer(Module):
 
         self.LastT = -np.inf
         self.MSum = np.zeros((6,6))
+        self.MWSum = np.zeros((3,3))
         self.SigmaSum = np.zeros(6)
+        self.SigmaWSum = np.zeros(3)
         self.A = 0.
+        self.AW = 0.
         self.FoundSolution = False
 
         self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
@@ -57,6 +61,9 @@ class VisualOdometer(Module):
                                              [-self._Delta, 0., 0.          , 0. , 0.          , 0.],
                                              [0.          , 0., -self._Delta, 0. , 0.          , 0.],
                                              [0.          , 0., 0.          , 0. , -self._Delta, 0.]])
+        self.omegaMatrix = np.array([[0., -1., 0.],
+                                     [1., 0. , 0.],
+                                     [0., 0. , 1.]])
 
         return True
 
@@ -64,6 +71,8 @@ class VisualOdometer(Module):
         IsValidEvent = False
         if event.Has(FlowEvent):
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
+            self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
+            event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau:
                 IsValidEvent = True
         if event.Has(DisparityEvent):
@@ -73,7 +82,7 @@ class VisualOdometer(Module):
         
         if IsValidEvent:
             self.Update(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2], self.DisparityMap[event.location[0], event.location[1], 0])
-            event.Attach(OdometryEvent, v = self.V, omega = self.omega)
+            #event.Attach(OdometryEvent, v = self.V, omega = self.omega)
         return event
 
     def Update(self, t, location, f, disparity):
@@ -99,6 +108,26 @@ class VisualOdometer(Module):
         self.MSum = self.MSum * decay + M_i
         self.SigmaSum = self.SigmaSum * decay + Sigma_i
         self.A = self.A * decay + 1.
+
+    def UpdateW(self, t, location, f):
+        decay = np.e**((self.LastT - t)/self._Tau)
+        self.LastT = t
+
+        Nf = np.linalg.norm(f)
+        nx, ny = f / Nf
+        x, y = (location - self.ScreenCenter) # Make it centered
+
+        Q_i = np.array([nx*self.K + (nx*x**2 + ny*x*y)/self.K,
+                      ny*self.K + (ny*y**2 + nx*x*y)/self.K,
+                      (nx*y - ny*x)])
+        MW_i = np.zeros((3,3))
+        for k in range(3):
+            MW_i[:,k] = Q_i*Q_i[k]
+        SigmaW_i = Q_i * Nf
+
+        self.MWSum = self.MWSum * decay + MW_i
+        self.SigmaWSum = self.SigmaWSum * decay + SigmaW_i
+        self.AW = self.AW * decay + 1.
 
     @property
     def M(self):
@@ -128,6 +157,18 @@ class VisualOdometer(Module):
     @property
     def V(self):
         return self.Motion[3:]
+    @property
+    def MW(self):
+        return self.MWSum / max(0.1, self.AW)
+    @property
+    def SigmaW(self):
+        return self.SigmaWSum /  max(0.1, self.AW)
+    @property
+    def PureOmega(self):
+        M = self.MW
+        if np.linalg.det(M) == 0:
+            return np.zeros(3)
+        return self.omegaMatrix.dot(np.linalg.inv(M).dot(self.SigmaW))
 
 class Quat:
     def __init__(self, w, x=None, y=None, z=None):

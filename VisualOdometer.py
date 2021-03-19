@@ -72,7 +72,7 @@ class VisualOdometer(Module):
         if event.Has(FlowEvent):
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
-            event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
+            #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau:
                 IsValidEvent = True
         if event.Has(DisparityEvent):
@@ -82,7 +82,7 @@ class VisualOdometer(Module):
         
         if IsValidEvent:
             self.Update(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2], self.DisparityMap[event.location[0], event.location[1], 0])
-            #event.Attach(OdometryEvent, v = self.V, omega = self.omega)
+            event.Attach(OdometryEvent, v = self.V, omega = self.omega)
         return event
 
     def Update(self, t, location, f, disparity):

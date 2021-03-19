@@ -15,21 +15,23 @@ class DenseStereo(Module):
         self.__ReferencesAsked__ = ['LeftMemory', 'RightMemory']
 
         self._ComparisonRadius = 10
-        self._KeyPointsComparisonRadiusRatio = 0.2
+        self._OfflineRadiusRatio = 0.
         self._Tau = 0.05
-        self._MaxSimultaneousPointsPerType = np.array([100, 100])
+        self._MaxSimultaneousPointsPerType = {'Seed':100, 'Unmatched':100}
 
         self._MinCPAverageActivityRadiusRatio = 1.5 / 10
         self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
         self._CleanupTauRatio = 0.5 
-        self._SignaturesExponents = [1,1,1,0]
+        self._ValidDisparityTauRatio = 0.5
+        self._SignaturesExponents = [1,1,1]
         self._yAverageSignatureNullAverage = True
 
         self._MatchThreshold = 0.9
-        self._MaxDistanceCluster = 0
         self._MinMatchMargin = 0.9
 
         self._AverageRadius = 0
+
+        self._BestMatchesTolerance = 1
 
         self._ConfirmViaTS = True
 
@@ -38,42 +40,37 @@ class DenseStereo(Module):
 
         self._DisparityRange = [0, np.inf]
 
-        self._EpipolarMatrix = [[0., 0., 0.], [0., 0., 1.], [0., -1., 0.]]
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._MonitoredVariables = [('DisparityMap', np.array),
                                     ('InputEvents', float),
-                                    ('MatchedEvents', float)]
+                                    ('MatchedEvents', float),
+                                    ('UnmatchedEvents', float)]
 
     def _InitializeModule(self, **kwargs):
-        self._EpipolarMatrix = np.array(self._EpipolarMatrix)
         self.UsedGeometry = np.array(self.Geometry)[:2]
 
         self.MetricThreshold = self._MatchThreshold ** np.sum(self._SignaturesExponents)
         self.RightMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
         self.LeftMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
 
-        self._KeyPointsComparisonRadius = self._ComparisonRadius * self._KeyPointsComparisonRadiusRatio
-        self._MinCPAverageActivity = self._ComparisonRadius * self._MinCPAverageActivityRadiusRatio
+        self.OfflineRadius = int(self._ComparisonRadius * self._OfflineRadiusRatio)
+        self.MinAverageActivity = self._ComparisonRadius * self._MinCPAverageActivityRadiusRatio
 
         self.CPLifespan = self._Tau * self._LifespanTauRatio
         self.CleanupDt = self._Tau * self._CleanupTauRatio
 
         self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius))
-        self.ComparisonPoints = ([],[])
-        self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (2,2)) # 0 default value seems legit as it pushes all points to infinity
+        self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (3,2)) # 0 default value seems legit as it pushes all points to infinity. Third dimension is respectively (disparity, time and if it should be sent for the stereo camera)
         self.DisparityMap[:,:,1,:] = -np.inf
-        self.ComparedPoints = np.array([[0,0],[0,0]], dtype = int)
 
-        self.EventsAge = []
-
-        self.MatchedCPs = np.array([0,0])
+        self.MatchedCPs = {'Seed':0, 'Unmatched':0}
         self.InputEvents = 0
         self.MatchedEvents = 0
-        self.CPEvents = 0
+        self.UnmatchedEvents = 0
         self.LastTDecay = -np.inf
 
-        self._DisparityRanges = [[-self._DisparityRange[1], -self._DisparityRange[0]], [self._DisparityRange[0], self._DisparityRange[1]]]
-        
+        self.DisparityRanges = [[self._DisparityRange[0], self._DisparityRange[1]], [-self._DisparityRange[1], -self._DisparityRange[0]]]
+
         return True
 
     def _OnEventModule(self, event):
@@ -81,31 +78,167 @@ class DenseStereo(Module):
         if (event.location < self._ComparisonRadius).any() or (event.location >= self.UsedGeometry - self._ComparisonRadius).any(): # This event cannot be set as CP, nor can it be matched to anything as its outside the borders
             return event
 
+        if self.Maps[event.cameraIndex].GetAverageActivity(event.location, event.timestamp) < self.MinAverageActivity:
+            return event
 
-        #self.ConsiderAddingCP(event, CPType = 0)
-        
         Decay = np.e**((self.LastTDecay - event.timestamp)/self._Tau)
         self.InputEvents *= Decay
         self.MatchedEvents *= Decay
-        self.CPEvents *= Decay
+        self.UnmatchedEvents *= Decay
         self.LastTDecay = event.timestamp
 
-        self.InputEvents += 1
-        Match = self.TryMatchingEventToStereoCPs(event)
-        self.CPEvents += int(Match)
-
-        if not Match:
-            Match = self.GetDisparityEvent(event)
-            self.MatchedEvents += int(Match)
+        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.cameraIndex)] < self._Tau * self._ValidDisparityTauRatio: # We assume the disparity here still valid and dont update it
+            if self.DisparityMap[tuple(event.location) +(2,event.cameraIndex)]:
+                self.SendMatch(event, self.DisparityMap[tuple(event.location) +(0,event.cameraIndex)], Store = False)
+        else:
+            self.InputEvents += 1
+            if self.RunMatch(event):
+                self.MatchedEvents += 1
+            else:
+                self.UnmatchedEvents += 1
 
         return event
 
-    def KeepCP(self, t, CP):
-        if t - CP[2] > self.CPLifespan:
-            self.LogWarning("Removed CP at {0} as its still unmatched".format(CP[0]))
-            return False
+    def RunMatch(self, event, TryLocal = True):
+        if TryLocal:
+            DisparitiesSearched = self.GetLocalDisparities(event.cameraIndex, event.location[0], event.location[1], event.timestamp)
+            if len(DisparitiesSearched) == 0:
+                DisparitiesSearched = self.GetGlobalDisparities(event.cameraIndex, event.location[0])
+                Type = 'global'
+            else:
+                DisparitiesSearched = np.array(list(DisparitiesSearched))
+                Type = 'local'
         else:
-            return True
+            DisparitiesSearched = self.GetGlobalDisparities(event.cameraIndex, event.location[0])
+            Type = 'global'
+        
+        MatchValues = self.GetDisparitiesMatches(DisparitiesSearched, event.location, event.cameraIndex, event.timestamp)
+        NValidDisparities = (MatchValues >= self.MetricThreshold).sum()
+
+        if NValidDisparities == 0:
+            if Type == 'global':
+                return False
+            else:
+                return self.RunMatch(event, TryLocal = False)
+        if NValidDisparities == 1:
+            return self.SendMatch(event, DisparitiesSearched[MatchValues.argmax()])
+
+        if Type == 'local':
+            SecondBestLocalIndex, BestLocalIndex = MatchValues.argsort()[-2:]
+            if MatchValues[SecondBestLocalIndex] <= MatchValues[BestLocalIndex] * self._MinMatchMargin:
+                self.SendMatch(event, DisparitiesSearched[BestLocalIndex])
+                return True
+            else:
+                return self.RunMatch(event, TryLocal = False)
+
+        NValidDisparities = min(NValidDisparities, self._BestMatchesTolerance)
+        for nLocalIndex, BestLocalIndex in enumerate(reversed(MatchValues.argsort()[-NValidDisparities:])):
+            InitialMatchValue = MatchValues[BestLocalIndex]
+            locationStereo = event.location + np.array([DisparitiesSearched[BestLocalIndex], 0])
+            StereoDisparitySearched = self.GetGlobalDisparities(1-event.cameraIndex, locationStereo[0])
+            StereoMatchValues = self.GetDisparitiesMatches(StereoDisparitySearched, locationStereo, 1-event.cameraIndex, event.timestamp)
+            if abs(StereoMatchValues - InitialMatchValue).min() > 0.001:
+                self.LogWarning("Weird, as stereo confirmation didn't find corresponding match value")
+                print(DisparitiesSearched[MatchValues.argsort()])
+                print(StereoDisparitySearched[StereoMatchValues.argsort()])
+                print(np.sort(MatchValues))
+                print(np.sort(StereoMatchValues))
+            if (StereoMatchValues > InitialMatchValue).sum() < self._BestMatchesTolerance: # strict inequality removes the initial match, which vaue should be present within this array. Maybe check that its the case at some point ?
+                # So this conditions tells how many locations - apart from event.location match better than event.location for the initially matched disparity
+                self.SendMatch(event, DisparitiesSearched[BestLocalIndex])
+                return True
+        return False
+
+    def GetDisparitiesMatches(self, DisparitiesSearched, location, cameraIndex, t):
+        MatchValues = np.zeros(len(DisparitiesSearched))
+        EventSignatures = self.Maps[cameraIndex].GetSignatures(location, t)
+        for nDisparity, disparity in enumerate(DisparitiesSearched):
+            xStereo = location[0] + disparity
+            for offlineOffset in range(-self.OfflineRadius,self.OfflineRadius+1):
+                yStereo = location[1] + offlineOffset
+                if yStereo < self._ComparisonRadius or yStereo >= self.UsedGeometry[1] - self._ComparisonRadius:
+                    continue
+                if t - self.DisparityMap[xStereo,yStereo,1,1-cameraIndex] <= self._Tau * self._ValidDisparityTauRatio:
+                    continue
+                StereoSignatures = self.Maps[1-cameraIndex].GetSignatures(np.array([xStereo,yStereo]), t)
+                MatchValues[nDisparity] = max(MatchValues[nDisparity], self.Match(EventSignatures, StereoSignatures))
+        return MatchValues
+
+    def GetGlobalDisparities(self, cameraIndex, x):
+        DisparitiesSearched = []
+        for disparity in range(self.DisparityRanges[cameraIndex][0], self.DisparityRanges[cameraIndex][1]+1):
+            if x + disparity < self._ComparisonRadius or x + disparity >= self.UsedGeometry[0]-self._ComparisonRadius:
+                continue
+            DisparitiesSearched.append(disparity)
+        return np.array(DisparitiesSearched)
+    def GetLocalDisparities(self, cameraIndex, x, y, t):
+        DisparitiesSearched = set()
+        LocalPatch = self.DisparityMap[x-self._DisparityPatchRadius:x+self._DisparityPatchRadius+1,y-self._DisparityPatchRadius:y+self._DisparityPatchRadius+1,:2,cameraIndex]
+        EarliestMoment = t - 3 * self._Tau
+        for Disparity, tDisp in LocalPatch.reshape(((self._DisparityPatchRadius*2 + 1)**2 , 2)):
+            if tDisp >= EarliestMoment:
+                for disparity in range(int(Disparity)-self._DisparitySearchRadius, int(Disparity)+self._DisparitySearchRadius+1):
+                    if disparity < self.DisparityRanges[cameraIndex][0] or disparity > self.DisparityRanges[cameraIndex][1]:
+                        continue
+                    if x + disparity < self._ComparisonRadius or x + disparity >= self.UsedGeometry[0]-self._ComparisonRadius:
+                        continue
+                    DisparitiesSearched.add(disparity)
+        return DisparitiesSearched
+
+    def SendMatch(self, event, d, Store = True):
+        if Store:
+            self.DisparityMap[event.location[0], event.location[1],:,event.cameraIndex] = np.array([d, event.timestamp, 0])
+            self.DisparityMap[event.location[0]+d, event.location[1],:,1-event.cameraIndex] = np.array([-d, event.timestamp, 1])
+        else:
+            self.DisparityMap[event.location[0], event.location[1],2,event.cameraIndex] = 0
+        event.Attach(DisparityEvent, disparity = abs(d), sign = np.sign(d), location = np.array(event.location))
+
+    def Match(self, SigsA, SigsB, LocalExponents = None):
+        if LocalExponents is None:
+            LocalExponents = self._SignaturesExponents
+        MatchValue = 1.
+        for nMetric, Exponent in enumerate(LocalExponents):
+            NA, NB = np.linalg.norm(SigsA[nMetric]), np.linalg.norm(SigsB[nMetric])
+            if NA == 0 or NB == 0:
+                return False
+            if nMetric == 1: # If this is the y distance metric
+                MatchValue *= ((1+(SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB)))/2)**Exponent
+            elif nMetric == 3:
+                PatchMatch = (1+(SigsA[nMetric] * SigsB[nMetric]).sum(axis = 1))/2
+                MatchValue *= (PatchMatch.sum() / PatchMatch.shape[0])
+            else:
+                MatchValue *= (SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB))**Exponent
+        return MatchValue
+
+    def FullMapping(self, yOffset = 0, AutoMatch = False, UsedRanges = None, UsedExponents = None):
+        t = self.__Framework__.t
+        DisparityMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = int)
+        CertaintyMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = float)
+        for y in range(self._ComparisonRadius + max(0, yOffset), self.UsedGeometry[1]-self._ComparisonRadius + min(0, yOffset)):
+            print("y = {0}/{1}".format(y - self._ComparisonRadius - max(0, yOffset), self.UsedGeometry[1]-2*self._ComparisonRadius - abs(yOffset)))
+            for nCam in range(2):
+                if UsedRanges is None:
+                    minOffset, maxOffset = self.DisparityRanges[nCam]
+                else:
+                    minOffset, maxOffset = UsedRanges
+                if AutoMatch:
+                    nOpp = nCam
+                else:
+                    nOpp = 1-nCam
+                for xPoint in range(self._ComparisonRadius, self.UsedGeometry[0]-self._ComparisonRadius):
+                    DBest = 0
+                    PointSigs = self.Maps[nCam].GetSignatures((xPoint, y), t)
+                    if PointSigs[0].mean() < 1:
+                        continue
+                    for xMatch in range(max(self._ComparisonRadius, xPoint + minOffset), min(self.UsedGeometry[0]-self._ComparisonRadius, xPoint + maxOffset)):
+                        MatchSigs = self.Maps[nOpp].GetSignatures((xMatch, y - yOffset), t)
+                        V = self.Match(PointSigs, MatchSigs, UsedExponents)
+                        if V > DBest:
+                            DBest, CertaintyMaps[xPoint, y, nCam] = V, V - DBest
+                            DisparityMaps[xPoint, y, nCam] = xMatch - xPoint
+                        else:
+                            CertaintyMaps[xPoint, y, nCam] = min(CertaintyMaps[xPoint, y, nCam], DBest - V)
+        return DisparityMaps, CertaintyMaps
 
     def PlotDisparitiesMaps(self, PastIndex = None, f_axs_images = None, Tau = None, MinDispInput = None, MaxDispInput = None, origin = 'lower', loop = True, BiCamera = False, AddSTContext = False, SaveLocationPrefix = '', blurrSigma = 0):
         if SaveLocationPrefix and loop:
@@ -373,187 +506,44 @@ class DenseStereo(Module):
             axs[0].set_title('Depth = {0:.3f}, Disp. = {1:.1f}'.format(CurrentDepth, 1/CurrentDepth))
             plt.pause(0.1)
 
-    def ConsiderAddingCP(self, event, CPType):
-        if self.ComparedPoints[event.cameraIndex, CPType] < self._MaxSimultaneousPointsPerType[CPType]:
-            AverageActivity = self.Maps[event.cameraIndex].GetAverageActivity(event.location, event.timestamp)
-            if AverageActivity >= self._MinCPAverageActivity:
-                Add = True
-                for CP in self.ComparisonPoints[event.cameraIndex]:
-                    if CPType != CP[1]:
-                        continue
-                    if abs(event.location - CP[0]).max() <= self._ComparisonRadius:
-                        Add = False
-                        break
-                if Add:
-                    self.AddCP(event, CPType)
+class ComparisonPointClass:
+    def __init__(self, location, Type, t, MetricThreshold, MinMatchMargin):
+        self.MetricThreshold = MetricThreshold
+        self.MinMatchMargin = MinMatchMargin
 
-    def TryMatchingEventToStereoCPs(self, event):
-        MatchedAndRemoved = []
-        Matched = False
-        for nCP, CP in enumerate(self.ComparisonPoints[1-event.cameraIndex]):
-            if event.timestamp - CP[2] < self.Maps[1-event.cameraIndex].Tau: # No match can be trusted under 1 Tau
-                continue
-            delta = event.location[0] - CP[0][0]
-            if not self.KeepCP(event.timestamp, CP):
-                MatchedAndRemoved += [nCP]
-                continue
-            if Matched:
-                continue
-            if delta < self._DisparityRanges[event.cameraIndex][0] or delta > self._DisparityRanges[event.cameraIndex][1]:
-                continue
-            Distance = np.array([event.location[0], event.location[1], 1]).dot(CP[3]) # Compute distance from this point to the compared point epipolar line
-            if abs(Distance) <= self._KeyPointsComparisonRadius:
-                ProjectedEvent = (event.location - Distance * CP[3][:2]).astype(int) # Recover the location of point on the epipolar line that corresponds to this event
+        self.location = location
+        self.Type = Type
+        self.t = t
+        self.BestMatch = (None, 0)
+        self.SecondBestMatch = (None, 0)
 
-                EventSignatures = self.Maps[event.cameraIndex].GetSignatures(ProjectedEvent, event.timestamp) # Recover specific signatures of the map on that epipolar line for that CP on the other camera
-                CPSignatures = self.Maps[1-event.cameraIndex].GetSignatures(CP[0], event.timestamp)
-
-                M = self.Match(EventSignatures, CPSignatures)
-                if M >= self.MetricThreshold * self._MinMatchMargin:
-                    GlobalMatch, Location = self.AddLocalMatch(event.location[0], CP, M)
-                if M >= self.MetricThreshold:
-                    if GlobalMatch:
-                        Offset = Location - CP[0][0]
-                        self.LogSuccess("Matched y = {0}, x[0] = {{{1}}} & x[1] = {{{2}}}, offset = {3}".format(ProjectedEvent[1], 1-event.cameraIndex, str(event.cameraIndex), Offset).format(CP[0][0], Location))
-                        self.DisparityMap[CP[0][0],CP[0][1],:,1-event.cameraIndex] = np.array([-Offset, event.timestamp])
-                        self.DisparityMap[Location,CP[0][1],:,event.cameraIndex] = np.array([Offset, event.timestamp])
-                        event.Attach(DisparityEvent, disparity = abs(Offset), sign = np.sign(Offset), location = np.array(event.location))
-                        MatchedAndRemoved += [nCP]
-                        self.MatchedCPs[CP[1]] += 1
-                        Matched = True
-        for nCP in reversed(MatchedAndRemoved):
-            self.ComparedPoints[1-event.cameraIndex,self.ComparisonPoints[1-event.cameraIndex][nCP][1]] -= 1
-            self.ComparisonPoints[1-event.cameraIndex].pop(nCP)
-        return bool(Matched)
-
-    def GetDisparityEvent(self, event):
-        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.cameraIndex)] < self._Tau / 2: # We assume the disparity here still valid and dont update it
-            return True
-        LocalPatch = self.DisparityMap[event.location[0]-self._DisparityPatchRadius:event.location[0]+self._DisparityPatchRadius+1,event.location[1]-self._DisparityPatchRadius:event.location[1]+self._DisparityPatchRadius+1,:,event.cameraIndex]
-        DisparitiesSearched = set()
-        EarliestMoment = event.timestamp - 3 * self._Tau
-        for Disparity, t in LocalPatch.reshape(((self._DisparityPatchRadius*2 + 1)**2 , 2)):
-            if t >= EarliestMoment:
-                for delta in range(int(Disparity)-self._DisparitySearchRadius, int(Disparity)+self._DisparitySearchRadius+1):
-                    if delta < self._DisparityRanges[event.cameraIndex][0] or delta > self._DisparityRanges[event.cameraIndex][1]:
-                        continue
-                    DisparitiesSearched.add(delta)
-        if len(DisparitiesSearched) == 0:
-            self.ConsiderAddingCP(event, 0)
+    def HasGlobalMatch(self, X, Value):
+        if self.BestMatch[0] is None:
+            self.BestMatch = (X, Value)
+            return False
+        if self.SecondBestMatch[0] is None:
+            self.SecondBestMatch = (X, Value)
+            if Value > self.BestMatch[1]:
+                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
             return False
 
-        EventSignatures = self.Maps[event.cameraIndex].GetSignatures(event.location, event.timestamp)
-        BestMatch = [0, None, 0]
-        for Disparity in DisparitiesSearched:
-            XLocation = event.location[0] - Disparity
-            if XLocation < self._ComparisonRadius or XLocation >= self.UsedGeometry[0] - self._ComparisonRadius:
-                continue
-            t = self.Maps[1-event.cameraIndex].GetLastEventTimestamp(XLocation, event.location[1])
-            if t < EarliestMoment: # If the last event that affected here is too old, then probably its not here
-                continue
-            if self.DisparityMap[XLocation, event.location[1],1,1-event.cameraIndex] > event.timestamp - 0.8 * self._Tau: # If the last disparity found here is too recent, then that can't be here neither.
-                continue
-            StereoSignatures = self.Maps[1-event.cameraIndex].GetSignatures(np.array([XLocation, event.location[1]]), event.timestamp)
-            MatchValue = self.Match(EventSignatures, StereoSignatures)
-            if MatchValue > BestMatch[0]:
-                BestMatch = [MatchValue, Disparity, BestMatch[0]]
-            else:
-                BestMatch[2] = max(BestMatch[2], MatchValue)
-        if BestMatch[0] > self.MetricThreshold and BestMatch[0] * self._MinMatchMargin > BestMatch[2]:
-            Disparity = BestMatch[1]
-            XLocation = event.location[0] - Disparity
-            event.Attach(DisparityEvent, disparity = abs(Disparity), sign = np.sign(Disparity), location = np.array(event.location))
-            self.DisparityMap[event.location[0], event.location[1],:,event.cameraIndex] = np.array([Disparity, event.timestamp])
-            self.DisparityMap[XLocation, event.location[1],:,1-event.cameraIndex] = np.array([-Disparity, event.timestamp])
-
-            self.EventsAge = self.EventsAge[-10000:] + [event.timestamp - max(0, self.Maps[1-event.cameraIndex].LastUpdateMap[XLocation,event.location[1]-self._ComparisonRadius])]
-            return True
-        else:
-            self.ConsiderAddingCP(event, 1)
+        if (X - self.BestMatch[0]) == 0: # If we match again the best one
+            self.BestMatch = (self.BestMatch[0], max(self.BestMatch[1], Value))
+            if self.BestMatch[1] >= self.MetricThreshold and self.SecondBestMatch[1] <= self.BestMatch[1] * self.MinMatchMargin:
+                return True
             return False
-
-    def AddCP(self, event, CPType):
-        EpipolarEquation = self._EpipolarMatrix.dot(np.array([event.location[0], event.location[1], 1]))
-        EpipolarEquation /= np.linalg.norm(EpipolarEquation[:2])
-        self.ComparedPoints[event.cameraIndex, CPType] += 1
-        self.ComparisonPoints[event.cameraIndex].append((np.array(event.location), CPType, event.timestamp, EpipolarEquation, ([None, 0], [None, 0])))
-        event.Attach(TrackerEvent, TrackerLocation = np.array(event.location))
-        self.Log("Added CPType {0} for camera {1} at {2}".format(CPType, event.cameraIndex, event.location))
-
-    def AddLocalMatch(self, X, CP, Value):
-        if CP[4][0][0] is None:
-            CP[4][0][:] = [X, Value]
-            return False, None
-        if CP[4][1][0] is None:
-            CP[4][1][:] = [X, Value]
-            if Value > CP[4][0][1]:
-                CP[4][0][:], CP[4][1][:] = CP[4][1][:], CP[4][0][:]
-            return False, None
-
-        if abs(X - CP[4][0][0]) <= self._MaxDistanceCluster: # If we match again the best one
-            CP[4][0][1] = max(CP[4][0][1], Value)
-            if CP[4][0][1] >= self.MetricThreshold and CP[4][1][1] <= CP[4][0][1] * self._MinMatchMargin:
-                return True, X
-            return False, None
-        if abs(X - CP[4][1][0]) <= self._MaxDistanceCluster:
-            CP[4][1][1] = max(CP[4][1][1], Value)
-            if CP[4][1][1] > CP[4][0][1]:
-                CP[4][0][:], CP[4][1][:] = CP[4][1][:], CP[4][0][:]
-            if CP[4][0][1] >= self.MetricThreshold and CP[4][1][1] <= CP[4][0][1] * self._MinMatchMargin:
-                return True, X
-            return False, None
-        if Value >= CP[4][1][1]:
-            CP[4][1][:] = [X, Value]
-            if Value > CP[4][0][1]:
-                CP[4][0][:], CP[4][1][:] = CP[4][1][:], CP[4][0][:]
-        return False, None
-
-    def Match(self, SigsA, SigsB, LocalExponents = None):
-        if LocalExponents is None:
-            LocalExponents = self._SignaturesExponents
-        MatchValue = 1.
-        for nMetric, Exponent in enumerate(LocalExponents):
-            NA, NB = np.linalg.norm(SigsA[nMetric]), np.linalg.norm(SigsB[nMetric])
-            if NA == 0 or NB == 0:
-                return False
-            if nMetric == 1: # If this is the y distance metric
-                MatchValue *= ((1+(SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB)))/2)**Exponent
-            elif nMetric == 3:
-                PatchMatch = (1+(SigsA[nMetric] * SigsB[nMetric]).sum(axis = 1))/2
-                MatchValue *= (PatchMatch.sum() / PatchMatch.shape[0])
-            else:
-                MatchValue *= (SigsA[nMetric].dot(SigsB[nMetric]) / (NA * NB))**Exponent
-        return MatchValue
-
-    def FullMapping(self, yOffset = 0, AutoMatch = False, UsedRanges = None, UsedExponents = None):
-        t = self.__Framework__.t
-        DisparityMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = int)
-        CertaintyMaps = np.inf * np.ones(tuple(self.UsedGeometry) + (2,), dtype = float)
-        for y in range(self._ComparisonRadius + max(0, yOffset), self.UsedGeometry[1]-self._ComparisonRadius + min(0, yOffset)):
-            print("y = {0}/{1}".format(y - self._ComparisonRadius - max(0, yOffset), self.UsedGeometry[1]-2*self._ComparisonRadius - abs(yOffset)))
-            for nCam in range(2):
-                if UsedRanges is None:
-                    minOffset, maxOffset = self._DisparityRanges[nCam]
-                else:
-                    minOffset, maxOffset = UsedRanges
-                if AutoMatch:
-                    nOpp = nCam
-                else:
-                    nOpp = 1-nCam
-                for xPoint in range(self._ComparisonRadius, self.UsedGeometry[0]-self._ComparisonRadius):
-                    DBest = 0
-                    PointSigs = self.Maps[nCam].GetSignatures((xPoint, y), t)
-                    if PointSigs[0].mean() < 1:
-                        continue
-                    for xMatch in range(max(self._ComparisonRadius, xPoint + minOffset), min(self.UsedGeometry[0]-self._ComparisonRadius, xPoint + maxOffset)):
-                        MatchSigs = self.Maps[nOpp].GetSignatures((xMatch, y - yOffset), t)
-                        V = self.Match(PointSigs, MatchSigs, UsedExponents)
-                        if V > DBest:
-                            DBest, CertaintyMaps[xPoint, y, nCam] = V, V - DBest
-                            DisparityMaps[xPoint, y, nCam] = xMatch - xPoint
-                        else:
-                            CertaintyMaps[xPoint, y, nCam] = min(CertaintyMaps[xPoint, y, nCam], DBest - V)
-        return DisparityMaps, CertaintyMaps
+        if (X - self.SecondBestMatch[0]) == 0:
+            self.SecondBestMatch = (self.SecondBestMatch[0], max(self.SecondBestMatch[1], Value))
+            if self.SecondBestMatch[1] > self.BestMatch[1]:
+                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
+            if self.BestMatch[1] >= self.MetricThreshold and self.SecondBestMatch[1] <= self.BestMatch[1] * self.MinMatchMargin:
+                return True
+            return False
+        if Value >= self.SecondBestMatch[1]:
+            self.SecondBestMatch = (X, Value)
+            if Value > self.BestMatch[1]:
+                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
+        return False
 
 class AnalysisMapClass:
     def __init__(self, Geometry, Radius, Tau, ySigNullMean, AveragingRadius = 0):
@@ -570,8 +560,6 @@ class AnalysisMapClass:
         self.ActivityMap = np.zeros(self.UsableGeometry)
         self.DistanceMap = np.zeros(self.UsableGeometry)
         self.SigmaMap = np.zeros(self.UsableGeometry)
-        self.FlowMap = np.zeros(tuple(self.UsableGeometry) + (2,))
-        self.FlowActivityMap = np.zeros(self.UsableGeometry)
         self.LastUpdateMap = -np.inf * np.ones(self.UsableGeometry)
 
     def OnEvent(self, event):
@@ -586,25 +574,6 @@ class AnalysisMapClass:
         self.ActivityMap[event.location[0],YMin:YMax] = self.ActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
         self.DistanceMap[event.location[0],YMin:YMax] = self.DistanceMap[event.location[0],YMin:YMax] * DecayColumn + Offset
         self.SigmaMap[event.location[0],YMin:YMax] = self.SigmaMap[event.location[0],YMin:YMax] * DecayColumn + (Offset - self.DistanceMap[event.location[0],YMin:YMax] / self.ActivityMap[event.location[0],YMin:YMax])**2
-
-        if event.Has(FlowEvent):
-            flow = event.flow
-            N = np.linalg.norm(flow)
-            if N == 0:
-                self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn
-                self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn
-                self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn
-            else:
-                direction = flow / N
-                ox, oy = direction[0]**2 - direction[1]**2, 2 * direction[0] * direction[1]
-                self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn + ox
-                self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn + oy
-                self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn + 1
-        else:
-            self.FlowMap[event.location[0],YMin:YMax,0] = self.FlowMap[event.location[0],YMin:YMax,0] * DecayColumn
-            self.FlowMap[event.location[0],YMin:YMax,1] = self.FlowMap[event.location[0],YMin:YMax,1] * DecayColumn
-            self.FlowActivityMap[event.location[0],YMin:YMax] = self.FlowActivityMap[event.location[0],YMin:YMax] * DecayColumn
-
 
     def GetLastEventTimestamp(self, x, y):
         return self.LastUpdateMap[x,y-self.Radius]
@@ -631,15 +600,13 @@ class AnalysisMapClass:
         YUsed = location[1] - self.Radius
         DeltaRow = self.LastUpdateMap[XMin:XMax,YUsed] - t
         DecayRow = np.e**(DeltaRow / self.Tau)
-        FAPatch = np.maximum(0.001, self.FlowActivityMap[XMin:XMax,YUsed])
-        FlowPatch = np.array([self.FlowMap[XMin:XMax,YUsed,0] / FAPatch, self.FlowMap[XMin:XMax,YUsed,1] / FAPatch])
-        Signatures = self._SignaturesCreation(self.ActivityMap[XMin:XMax,YUsed], self.DistanceMap[XMin:XMax,YUsed], self.SigmaMap[XMin:XMax,YUsed], FlowPatch, DecayRow)
+        Signatures = self._SignaturesCreation(self.ActivityMap[XMin:XMax,YUsed], self.DistanceMap[XMin:XMax,YUsed], self.SigmaMap[XMin:XMax,YUsed], DecayRow)
 
         return Signatures
 
-    def _SignaturesCreation(self, AMap, DMap, SMap, FMap, DecayMap):
+    def _SignaturesCreation(self, AMap, DMap, SMap, DecayMap):
         MaxedAMap = np.maximum(0.001, AMap)
-        Signatures = [AMap * DecayMap, DMap / MaxedAMap, SMap / MaxedAMap, FMap]
+        Signatures = [AMap * DecayMap, DMap / MaxedAMap, SMap / MaxedAMap]
         if self.ySigNullMean:
             Signatures[1] -= Signatures[1].mean()
         for nAverage in range(self.AveragingRadius):

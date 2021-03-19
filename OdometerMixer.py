@@ -27,6 +27,8 @@ class OdometerMixer(Module):
         self._MaxCamToCamRotationSpeedError = 0.3
         self._ValidTimespanForStart = 0.02
 
+        self._VirtualFrameDefaultRotation = np.zeros(3)
+
         self._KMat = [None, None]
 
         self._K = 432
@@ -62,10 +64,21 @@ class OdometerMixer(Module):
         Z = -self._VirtualReferenceFrameDepth
         X = 0
         Y = 0.
-        self.VirtualFrameCornersLocations = [np.array([X, Y, Z, 1.]),
-                                             np.array([X+1, Y, Z, 1.]),
-                                             np.array([X, Y+1, Z, 1.]),
-                                             np.array([X, Y, Z+1, 1.])]
+        self.VirtualFrameCornersLocations = [np.array([0, 0, 0, 1.]),
+                                             np.array([1, 0, 0, 1.]),
+                                             np.array([0, 1, 0, 1.]),
+                                             np.array([0, 0, 1, 1.])]
+        theta = np.linalg.norm(self._VirtualFrameDefaultRotation)
+        if theta:
+            u = self._VirtualFrameDefaultRotation / theta
+            u_x = np.array([[0., -u[2], u[1]],
+                            [u[2], 0., -u[0]],
+                            [-u[1], u[0], 0.]])
+            R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
+        else:
+            R = np.identity(3)
+        for nCorner, Corner in enumerate(self.VirtualFrameCornersLocations):
+            self.VirtualFrameCornersLocations[nCorner][:3] = R.dot(Corner[:3]) + np.array([X,Y,Z])
 
         return True
 
@@ -106,15 +119,16 @@ class OdometerMixer(Module):
         return (self.ReferenceOmega + self.StereoOmega)/2
     @property
     def V(self):
-        #return (self.ReferenceV + self.StereoV - np.cross(self.Omega, self.StereoBaseVector))/2
-        return self.ReferenceV
+        return (self.ReferenceV + self.StereoV - np.cross(self.Omega, self.StereoBaseVector))/2
+        #return self.ReferenceV
 
     @property
     def D(self):
         Omega = self.Omega
         if np.linalg.norm(self.Omega[1:]) == 0:
             return 0
-        return -(Omega[2] * (self.ReferenceV[1] - self.StereoV[1]) - Omega[1] * (self.ReferenceV[2] - self.StereoV[2])) / (Omega[1]**2 + Omega[2]**2)
+        #return -(Omega[2] * (self.ReferenceV[1] - self.StereoV[1]) - Omega[1] * (self.ReferenceV[2] - self.StereoV[2])) / (Omega[1]**2 + Omega[2]**2)
+        return np.sqrt((((self.ReferenceV[1] - self.StereoV[1]) * np.array([0,1,1]))**2).sum() / (Omega[1]**2 + Omega[2]**2))
 
     def UpdateFrame(self, t):
         Delta = (t - self.LastT)

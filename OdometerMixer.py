@@ -27,6 +27,8 @@ class OdometerMixer(Module):
         self._MaxCamToCamRotationSpeedError = 0.3
         self._ValidTimespanForStart = 0.02
 
+        self._Tau = 0.1
+
         self._VirtualFrameDefaultRotation = np.zeros(3)
 
         self._KMat = [None, None]
@@ -80,6 +82,10 @@ class OdometerMixer(Module):
         for nCorner, Corner in enumerate(self.VirtualFrameCornersLocations):
             self.VirtualFrameCornersLocations[nCorner][:3] = R.dot(Corner[:3]) + np.array([X,Y,Z])
 
+        self.ASum = 0.
+        self.DSum = 0.
+        self.LastDUpdateT = -np.inf
+
         return True
 
     def _OnEventModule(self, event):
@@ -95,7 +101,7 @@ class OdometerMixer(Module):
                 if not True in self.IdleCams:
                     if abs(self.ReferenceOmega - self.StereoOmega).max() <= self._MaxCamToCamRotationSpeedError:
                         if event.timestamp > self.StartAfter:
-                            self.LogSuccess("Started virtual frame")
+                            self.LogSuccess("Started odometry")
                             self.LastT = event.timestamp
                             self.Started = event.timestamp
                         elif self.StartAfter == np.inf:
@@ -108,10 +114,12 @@ class OdometerMixer(Module):
 
         if self.Started:
             self.UpdateFrame(event.timestamp)
-            VirtualFrameLocation, disparity = self.GenerateVirtualEvent(event.cameraIndex)
-            if not VirtualFrameLocation is None:
-                event.Attach(Event, location = VirtualFrameLocation, polarity = 0)
-                event.Attach(DisparityEvent, location = VirtualFrameLocation, disparity = disparity, sign = 2*event.cameraIndex - 1)
+            self.UpdateD(event.timestamp)
+            if self._AddVirtualFrame:
+                VirtualFrameLocation, disparity = self.GenerateVirtualEvent(event.cameraIndex)
+                if not VirtualFrameLocation is None:
+                    event.Attach(Event, location = VirtualFrameLocation, polarity = 0)
+                    event.Attach(DisparityEvent, location = VirtualFrameLocation, disparity = disparity, sign = 2*event.cameraIndex - 1)
         return event
 
     @property
@@ -124,11 +132,16 @@ class OdometerMixer(Module):
 
     @property
     def D(self):
+        return self.DSum / max(0.01, self.ASum)
+    @property
+    def DComp(self):
         Omega = self.Omega
         if np.linalg.norm(self.Omega[1:]) == 0:
-            return 0
+            return None
         #return -(Omega[2] * (self.ReferenceV[1] - self.StereoV[1]) - Omega[1] * (self.ReferenceV[2] - self.StereoV[2])) / (Omega[1]**2 + Omega[2]**2)
         return np.sqrt((((self.ReferenceV[1] - self.StereoV[1]) * np.array([0,1,1]))**2).sum() / (Omega[1]**2 + Omega[2]**2))
+
+
 
     def UpdateFrame(self, t):
         Delta = (t - self.LastT)
@@ -145,6 +158,15 @@ class OdometerMixer(Module):
         R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
         self.R = self.R.dot(R)
         self.T = -self.V * Delta + R.dot(self.T)
+
+    def UpdateD(self, t):
+        DComp = self.DComp
+        if DComp is None:
+            return
+        decay = np.e**((self.LastDUpdateT - t)/self._Tau)
+        self.ASum = self.ASum * decay + 1
+        self.DSum = self.DSum * decay + DComp
+        self.LastDUpdateT = t
 
     def GenerateVirtualEvent(self, CameraIndex, Point3D = None):
         T = np.array(self.T)

@@ -33,7 +33,7 @@ class DenseStereo(Module):
 
         self._BestMatchesTolerance = 1
 
-        self._ConfirmViaTS = True
+        self._WinnerTakeAllRadius = 0
 
         self._DisparityPatchRadius = 2
         self._DisparitySearchRadius = 1
@@ -191,7 +191,22 @@ class DenseStereo(Module):
             self.DisparityMap[event.location[0]+d, event.location[1],:,1-event.cameraIndex] = np.array([-d, event.timestamp, 1])
         else:
             self.DisparityMap[event.location[0], event.location[1],2,event.cameraIndex] = 0
-        event.Attach(DisparityEvent, disparity = abs(d), sign = np.sign(d), location = np.array(event.location))
+
+        if self._WinnerTakeAllRadius:
+            LocalPatch = self.DisparityMap[event.location[0]-self._WinnerTakeAllRadius:event.location[0]+self._WinnerTakeAllRadius+1,event.location[1]-self._WinnerTakeAllRadius:event.location[1]+self._WinnerTakeAllRadius+1,:2,event.cameraIndex]
+            xs, ys = np.where(event.timestamp - LocalPatch[:,:,1] < self._Tau * self._ValidDisparityTauRatio)
+            ds = LocalPatch[xs, ys, 0]
+            dMax, NMax = None, 0
+            for dPoss in np.unique(ds):
+                N = (ds == dPoss).sum()
+                if N > NMax:
+                    dMax, NMax = dPoss, N
+                elif N == NMax:
+                    if dPoss == d: # Incase of equality, we send by default the found value
+                        dMax, NMax = dPoss, N
+        else:
+            dMax = d
+        event.Attach(DisparityEvent, disparity = abs(dMax), sign = np.sign(dMax), location = np.array(event.location))
 
     def Match(self, SigsA, SigsB, LocalExponents = None):
         if LocalExponents is None:

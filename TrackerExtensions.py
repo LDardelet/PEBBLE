@@ -274,7 +274,7 @@ class FeatureManagerClass:
                 print("Snap {0}, only {1} trackers previously found, ending here.".format(nSnap, len(MatchingIDs)))
                 break
 
-    def GeneratePanoramicView3D(self, Memory, Stabilizer = None, DefaultTau = 0.05, StabilizerTauRatio = 5, NSnaps = 5, AddContours = True, AddTrackers = True, WorldRepresentationArgs = (5, (4,0), np.inf, None), tMin = 0., tMax = np.inf, minDeltaT = 0., MapType = 'binary', DefaultMapValue = 0, Overlay = False):
+    def GeneratePanoramicView3D(self, Memory, Stabilizer = None, DefaultTau = 0.05, StabilizerTauRatio = 5, NSnaps = 5, AddContours = (4,'k'), AddTrackers = 'Valid', WorldRepresentationArgs = (5, (4,0), np.inf, None), tMin = 0., tMax = np.inf, minDeltaT = 0., MapType = 'binary', DefaultMapValue = 0, Overlay = False):
         self.CreateWorldRepresentation(*WorldRepresentationArgs)
         Ts = self.TrackerManager.History['t']
         tMin = max(tMin, Ts[self.WorldFirstSnap])
@@ -340,12 +340,17 @@ class FeatureManagerClass:
                 for nCorner in range(4):
                     CornerA = np.array(WCorners[nCorner, :] + WorldCanvasOffset, dtype = int)
                     CornerB = np.array(WCorners[(nCorner+1)%4, :] + WorldCanvasOffset, dtype = int)
-                    ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], 'g--', linewidth = 1, zorder = 10)
+                    ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], AddContours[1], linewidth = AddContours[0], zorder = 10)
         ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary', vmin = -1, vmax = 1)
-        if AddTrackers:
+        if not AddTrackers == 'None':
             for ID, WLocation in self.WorldLocations.items():
+                tTracker = self.TrackerManager.History['t'][self.WorldTrackersSnapActive[ID]]
+                if (not self.WorldTrackersDisabled[ID] is None and self.TrackerManager.History['t'][self.WorldTrackersDisabled[ID]] < TsChoosen[0]) or self.TrackerManager.History['t'][self.WorldTrackersSnapActive[ID]] > TsChoosen[-1]:
+                    continue
                 CanvasLocation = WLocation + WorldCanvasOffset
                 if self.WorldRejected[ID]:
+                    if AddTrackers == 'Valid':
+                        continue
                     Color = 'r'
                 else:
                     Color = 'g'

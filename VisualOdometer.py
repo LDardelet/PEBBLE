@@ -14,6 +14,8 @@ class VisualOdometer(Module):
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('V', np.array),
                                     ('omega', np.array),
+                                    ('dV', np.array),
+                                    ('domega', np.array),
                                     ('PureOmega', np.array),
                                     ('A', float),
                                     ('Det', float)]
@@ -48,6 +50,7 @@ class VisualOdometer(Module):
 
         self.LastT = -np.inf
         self.MSum = np.zeros((6,6))
+        self.dMSum = np.zeros((6,6))
         self.MWSum = np.zeros((3,3))
         self.SigmaSum = np.zeros(6)
         self.SigmaWSum = np.zeros(3)
@@ -100,12 +103,21 @@ class VisualOdometer(Module):
                       ny*self.K + (ny*y**2 + nx*x*y)/self.K,
                       d*(nx*x + ny*y)/self.K,
                       (nx*y - ny*x)])
+        dP_i = np.array([nx,
+                         0,
+                         ny,
+                         0,
+                         (nx*x + ny*y)/self.K,
+                         0])
         M_i = np.zeros((6,6))
+        dM_i = np.zeros((6,6))
         for k in range(6):
             M_i[:,k] = P_i*P_i[k]
+            dM_i[:,k] = P_i*dP_i[k] + dP_i*P_i[k]
         Sigma_i = P_i * Nf
 
         self.MSum = self.MSum * decay + M_i
+        self.dMSum = self.dMSum * decay + dM_i
         self.SigmaSum = self.SigmaSum * decay + Sigma_i
         self.A = self.A * decay + 1.
 
@@ -133,6 +145,9 @@ class VisualOdometer(Module):
     def M(self):
         return self.MSum / max(0.1, self.A)
     @property
+    def dM(self):
+        return self.dMSum / max(0.1, self.A)
+    @property
     def Sigma(self):
         return self.SigmaSum / max(0.1, self.A)
 
@@ -149,14 +164,30 @@ class VisualOdometer(Module):
             return np.zeros(6)
         return np.linalg.inv(self.M).dot(self.Sigma)
     @property
+    def dOmega(self):
+        Det = self.DetRatio
+        if Det == 0 or (self._MinDetRatioToSolve != np.inf and Det < self._MinDetRatioToSolve):
+            return np.zeros(6)
+        Minv = np.linalg.inv(self.M)
+        return Minv.dot(self.dM.dot(Minv.dot(self.Sigma)))
+    @property
     def Motion(self):
         return self.OmegaToMotionMatrix.dot(self.Omega)
+    @property
+    def dMotion(self):
+        return abs(self.OmegaToMotionMatrix.dot(self.dOmega))
     @property
     def omega(self):
         return self.Motion[:3]
     @property
     def V(self):
         return self.Motion[3:]
+    @property
+    def domega(self):
+        return self.dMotion[:3]
+    @property
+    def dV(self):
+        return self.dMotion[3:]
     @property
     def MW(self):
         return self.MWSum / max(0.1, self.AW)

@@ -75,6 +75,24 @@ class FeatureManagerClass:
         f.close()
         return Data
 
+    def PlotShapes(self):
+        self.PlotShapesData = {'fax': plt.subplots(1,1), 'N':0, 'IDs':[ID for ID, Rejected in self.WorldRejected.items() if not Rejected]}
+        from functools import partial
+        import types
+        def Next(event, self):
+            if event.key == 'right': 
+                self.PlotShapesData['N'] = (self.PlotShapesData['N']+1)%len(IDs) 
+            elif event.key == 'left': 
+                self.PlotShapesData['N'] = (self.PlotShapesData['N']-1)%len(IDs) 
+            self.PlotShapesData['fax'][1].cla() 
+            ID = self.PlotShapesData['IDs'][self.PlotShapesData['N']] 
+            T = self.TrackerManager.Trackers[ID] 
+            T.PlotShape(fax = self.PlotShapesData['fax'], OnlyReferenceShape = True)
+            self.PlotShapesData['fax'][0].show()
+            
+        self.PlotShapesData['fax'][0].canvas.mpl_connect('key_press_event', partial(Next, self = self))
+        self.TrackerManager.Trackers[self.PlotShapesData['IDs'][0]].PlotShape(fax = self.PlotShapesData['fax'], OnlyReferenceShape = True)
+
     def GenerateIMUData(self, NPointsMin = 5, fillVoid = False, IMUGTFunction = None, AutoScaleToGT = True, SigmaError = 2.):
         self.IMUData = {'t':[], 'x':[], 'y':[], 'z':[]}
         if SigmaError:
@@ -206,11 +224,12 @@ class FeatureManagerClass:
         Errors = np.linalg.norm(Reproj - FinalPositions, axis = 1)
         return R, t, Errors
 
-    def CreateWorldRepresentation(self, NPointsMin = 5, AimedStatus = (4,0), MaximumError = np.inf, LocalAcceptFunction = None):
+    def ComputeWorldRepresentation(self, NPointsMin = 5, AimedStatus = (4,0), MaximumError = np.inf, LocalAcceptFunction = None):
         self.WorldLocations = {}
         self.WorldTrackersSnapActive = {}
         self.WorldTrackersDisabled = {}
         self.WorldRejected = {}
+        self.WorldReconstructionErrors = {}
         self.SnapsToWorldRT = {}
         self.WorldFirstSnap = None
         self.WorldLastSnap = None
@@ -241,6 +260,7 @@ class FeatureManagerClass:
                     self.WorldTrackersDisabled[ID] = None
                     self.WorldTrackersSnapActive[ID] = nSnap
                     self.WorldRejected[ID] = False
+                    self.WorldReconstructionErrors[ID] = {nSnap:0.}
                 continue
             MatchingIDs = []
             NewIDs = []
@@ -261,21 +281,24 @@ class FeatureManagerClass:
                     self.WorldTrackersDisabled[RemovedID] = nSnap
                     R, t, Errors = self.RTCompute(self.WorldFirstSnap, nSnap, MatchingIDs, UseWorldPositions = True)
                     NAvailableTrackers -= 1
-                    self.WorldRejected[RemovedID] = True
+                    self.WorldRejected[RemovedID] = nSnap
+                for ID, Error in zip(MatchingIDs, Errors):
+                    self.WorldReconstructionErrors[ID][nSnap] = Error
                 self.SnapsToWorldRT[nSnap] = (R,t)
                 for localID, ID in NewIDs:
                     self.WorldLocations[ID] = R.T.dot(Positions[localID][:2] - t)
                     self.WorldTrackersSnapActive[ID] = nSnap
                     self.WorldTrackersDisabled[ID] = None
                     self.WorldRejected[ID] = False
+                    self.WorldReconstructionErrors[ID] = {nSnap:0.}
                     NAvailableTrackers += 1
                 self.WorldLastSnap = nSnap
             else:
                 print("Snap {0}, only {1} trackers previously found, ending here.".format(nSnap, len(MatchingIDs)))
                 break
 
-    def GeneratePanoramicView3D(self, Memory, Stabilizer = None, DefaultTau = 0.05, StabilizerTauRatio = 5, NSnaps = 5, AddContours = (4,'k'), AddTrackers = 'Valid', WorldRepresentationArgs = (5, (4,0), np.inf, None), tMin = 0., tMax = np.inf, minDeltaT = 0., MapType = 'binary', DefaultMapValue = 0, Overlay = False):
-        self.CreateWorldRepresentation(*WorldRepresentationArgs)
+    def GeneratePanoramicView3D(self, Memory, Stabilizer = None, DefaultTau = 0.05, StabilizerTauRatio = 5, NSnaps = 5, AddContours = (4,'k'), AddTrackers = 'Valid', WorldRepresentationArgs = (5, (4,0), np.inf, None), tMin = 0., tMax = np.inf, minDeltaT = 0., MapType = 'binary', DefaultMapValue = 0, Overlay = False, OnlyIDs = [], HighlightIDs = [], AlphaDots = 1., AddIDs = 0, AddInfo = True, ColorDots = {'Valid':'g', 'Rejected':'r'}, HighlightColorCycle = None, NMarginRatio = 0.3, SizeRatio = 0.7, DotMs = 1):
+        self.ComputeWorldRepresentation(*WorldRepresentationArgs)
         Ts = self.TrackerManager.History['t']
         tMin = max(tMin, Ts[self.WorldFirstSnap])
         tMax = min(tMax, Ts[self.WorldLastSnap])
@@ -295,8 +318,6 @@ class FeatureManagerClass:
         tsManager = np.array(self.TrackerManager.History['t'])
         RTs = [self.SnapsToWorldRT[(abs(tsManager - tSnap)).argmin()] for tSnap in TsChoosen]
 
-        f, ax = plt.subplots(1,1)
-        ax.tick_params('both', labelleft = False, left = False, labelbottom = False, bottom = False)
         Corners = np.array([[0,0], [346,0], [346,260], [0,260]])
         Canvas = np.zeros((0, 0))
         WorldCanvasOffset = np.array([0, 0])
@@ -334,27 +355,84 @@ class FeatureManagerClass:
                 NwYs = wXs[:,1]+WorldCanvasOffset[1]
                 PreviousValues = Canvas[NwXs, NwYs]
                 Canvas[NwXs, NwYs] = alphas
+        f, ax = plt.subplots(1,1)
+        ax.set_aspect('equal')
+        ax.tick_params('both', labelleft = False, left = False, labelbottom = False, bottom = False)
+        ax.axis('off')
+        ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary', vmin = -1, vmax = 1)
+        XMin = np.array([0, 0])
+        XMax = XMin + np.array(NewCanvasShape)
+        N = len(HighlightIDs)
+        NPrepared = int(N*(1+NMarginRatio))
+        NLeft = (NPrepared - N)//2
+        XsFeatures = np.linspace(XMin[0], XMax[0], NPrepared+2)[NLeft+1:NLeft + N + 1]
+        xDelta = XsFeatures[1] - XsFeatures[0]
+        yDelta = np.sqrt(3)/2 * xDelta * 2 * 1.1
+        r = xDelta * SizeRatio
+        yBaseline = -1.3 * r
+        YsFeatures = yBaseline - yDelta * (np.arange(N)%2)
+        FeatureRatio = r / (S._TrackerDiameter / 2)
+
         if AddContours:
             for nSnap, (R,t) in enumerate(RTs):
                 WCorners = (Corners - t).dot(R)
                 for nCorner in range(4):
                     CornerA = np.array(WCorners[nCorner, :] + WorldCanvasOffset, dtype = int)
                     CornerB = np.array(WCorners[(nCorner+1)%4, :] + WorldCanvasOffset, dtype = int)
-                    ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], AddContours[1], linewidth = AddContours[0], zorder = 10)
-        ax.imshow(np.transpose(Canvas), origin = 'lower', cmap = 'binary', vmin = -1, vmax = 1)
-        if not AddTrackers == 'None':
+                    ax.plot([CornerA[0], CornerB[0]], [CornerA[1], CornerB[1]], AddContours[1], linewidth = AddContours[0], zorder = 2)
+        if not AddTrackers == 'None' or HighlightIDs:
             for ID, WLocation in self.WorldLocations.items():
+                if OnlyIDs and ID not in OnlyIDs:
+                    continue
                 tTracker = self.TrackerManager.History['t'][self.WorldTrackersSnapActive[ID]]
                 if (not self.WorldTrackersDisabled[ID] is None and self.TrackerManager.History['t'][self.WorldTrackersDisabled[ID]] < TsChoosen[0]) or self.TrackerManager.History['t'][self.WorldTrackersSnapActive[ID]] > TsChoosen[-1]:
                     continue
                 CanvasLocation = WLocation + WorldCanvasOffset
-                if self.WorldRejected[ID]:
-                    if AddTrackers == 'Valid':
-                        continue
-                    Color = 'r'
+                if ID not in HighlightIDs:
+                    if self.WorldRejected[ID]:
+                        if AddTrackers == 'Valid':
+                            continue
+                        Color = ColorDots['Rejected']
+                    else:
+                        Color = ColorDots['Valid']
+                    ax.plot(CanvasLocation[0], CanvasLocation[1], marker = 'o', color = Color, alpha = AlphaDots, zorder = 3)
                 else:
-                    Color = 'g'
-                ax.plot(CanvasLocation[0], CanvasLocation[1], marker = 'o', color = Color)
+                    nID = HighlightIDs.index(ID)
+                    if HighlightColorCycle is None:
+                        Dot = ax.plot(CanvasLocation[0], CanvasLocation[1], marker = 'o', alpha = 1, zorder = 3)[0]
+                        Color = Dot.get_color()
+                        print(Color, nID)
+                    else:
+                        Color = HighlightColorCycle[nID%len(HighlightColorCycle)]
+                        Dot = ax.plot(CanvasLocation[0], CanvasLocation[1], marker = 'o', alpha = 1, zorder = 3, color = Color)[0]
+                    C = Circle(CanvasLocation, radius = S._TrackerDiameter / 2, color = Color, fill = False, linewidth = 2, zorder = 3)
+                    ax.add_artist(C)
+                    T = self.TrackerManager.Trackers[ID]
+                    T.PlotShape(fax = (f, ax), Center = np.array([XsFeatures[nID], YsFeatures[nID]]), Ratio = FeatureRatio, OnlyReferenceShape = True, AddText = False, CircleColor = Color, Interactive = False, ms = DotMs)
+                    FeatureEnd = np.array([XsFeatures[nID], YsFeatures[nID] + r])
+                    CanvasEnd = CanvasLocation + S._TrackerDiameter / 2 * np.array([np.sign(XsFeatures[nID] - CanvasLocation[0]), -1]) / np.sqrt(2)
+                    MidPoint = np.array([XsFeatures[nID], CanvasEnd[1] - abs(XsFeatures[nID] - CanvasLocation[0])])
+                    if MidPoint[1] < 0:
+                        MidPoint[1] = 0
+                        CanvasEnd = CanvasLocation + np.array([np.sign(XsFeatures[nID] - CanvasLocation[0]), 0]) * S._TrackerDiameter / 2 
+                        SecondPoint = CanvasEnd + np.array([np.sign(XsFeatures[nID] - CanvasLocation[0]), 0]) * (abs(XsFeatures[nID] - CanvasLocation[0]) - CanvasEnd[1])
+                        ax.plot([CanvasEnd[0], SecondPoint[0]], [CanvasEnd[1], SecondPoint[1]], color = Color, linewidth = 2)
+                        CanvasEnd = SecondPoint
+                    ax.plot([FeatureEnd[0], MidPoint[0]], [FeatureEnd[1], MidPoint[1]], color = Color, linewidth = 2)
+                    ax.plot([CanvasEnd[0], MidPoint[0]], [CanvasEnd[1], MidPoint[1]], color = Color, linewidth = 2)
+                    if AddInfo:
+                        Errors = self.WorldReconstructionErrors[ID]
+                        MeanError = np.mean([Error for nSnap, Error in Errors.items()])
+                        Lock = self.TrackerManager.Trackers[ID].LocksSaves[0]
+                        if Lock.ReleaseTime is None:
+                            LifeSpan = self.TrackerManager.History['t'][-1] - Lock.Time
+                        else:
+                            LifeSpan = Lock.ReleaseTime - Lock.Time
+                        DataStr = "$\epsilon = {0:.1f}px$\n$\Delta_t = {1}ms$".format(MeanError, int(LifeSpan*1000))
+                        ax.text(XsFeatures[nID], YsFeatures[nID] - r * 1.1, s = DataStr, color = 'k', ha = 'center', va = 'top')
+                if AddIDs:
+                    ax.text(CanvasLocation[0], CanvasLocation[1], s = str(ID), color = 'k', fontsize = AddIDs, ha = 'center', va = 'top')
+
 
     def GetSnapshot(self, t):
         self._ComputePoseInformation()

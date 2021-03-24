@@ -1161,17 +1161,22 @@ class TrackerClass:
         SpeedError = DeltaPos / (CurrentProjectedEvent[0] - MeanTS)
         return SpeedError, DeltaPos
 
-    def PlotShape(self, LockSave = -1, OnlyReferenceShape = False, MinAlpha = 0., AddText = True):
-        f, ax = plt.subplots(1,1)
+    def PlotShape(self, LockSave = -1, Center = np.array([0., 0.]), Ratio = 1., OnlyReferenceShape = False, MinAlpha = 0., AddText = True, fax = None, CircleColor = 'g', Interactive = True, ms = 1):
+        if fax is None:
+            f, ax = plt.subplots(1,1)
+        else:
+            f, ax = fax
         ax.set_aspect('equal')
-        ax.set_xlim(-self.Radius, self.Radius)
-        ax.set_ylim(-self.Radius, self.Radius)
-        Zone = plt.Circle((0, 0), self.Radius, color='g', fill=False, linewidth = 2)
-        EventZone = plt.Circle((-100, -100), self.TM._ClosestEventProximity, color='k', fill=False, linestyle = '--')
-        OffsetUsed = plt.plot(-100, -100, 'vg', zorder = 10)[0]
-        FlowUsed = plt.plot([-100, -101], [-100, -101], 'r')[0]
+        if (Center == 0).all() and Ratio == 1:
+            ax.set_xlim(-self.Radius*1.02*Ratio + Center[0], self.Radius*1.02*Ratio + Center[0])
+            ax.set_ylim(-self.Radius*1.02*Ratio + Center[1], self.Radius*1.02*Ratio + Center[1])
+        Zone = plt.Circle(Center, self.Radius * Ratio, color=CircleColor, fill=False, linewidth = 2)
+        if Interactive:
+            EventZone = plt.Circle((-100, -100), self.TM._ClosestEventProximity, color='k', fill=False, linestyle = '--')
+            OffsetUsed = plt.plot(-100, -100, 'vg', zorder = 10)[0]
+            FlowUsed = plt.plot([-100, -101], [-100, -101], 'r')[0]
+            ax.add_artist(EventZone)
         ax.add_artist(Zone)
-        ax.add_artist(EventZone)
         title = "Tracker {0}, Current time : t = {1:.3f}".format(self.ID, self.LastUpdate)
         if not LockSave is None and self.LocksSaves:
             Lock = self.LocksSaves[LockSave]
@@ -1191,14 +1196,16 @@ class TrackerClass:
                 alpha = np.e**((E[0]-self.ProjectedEvents[-1][0])/self.TimeConstant)
                 if alpha < MinAlpha:
                     continue
-                ax.plot(E[1], E[2], 'ob', alpha = alpha)
+                ax.plot(Center[0] + E[1]*Ratio, Center[1] + E[2]*Ratio, 'ob', alpha = alpha, markersize = ms)
         if Lock:
             PlottedList += Lock.Events[:-1]
             for E in Lock.Events[:-1]:
                 alpha = np.e**((E[0]-Lock.Time)/self.TimeConstant)
                 if alpha < MinAlpha:
                     continue
-                ax.plot(E[1], E[2], 'og', alpha = alpha)
+                ax.plot(Center[0] + E[1]*Ratio, Center[1] + E[2]*Ratio, 'og', alpha = alpha, markersize = ms)
+        if not Interactive:
+            return f, ax
         PlottedList = np.array(PlottedList)
         def onclick(event):
             EventConsidered = np.linalg.norm(PlottedList[:,1:] - np.array([event.xdata, event.ydata]), axis = 1).argmin()

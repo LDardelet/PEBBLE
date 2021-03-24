@@ -119,7 +119,7 @@ class OdometerMixer(Module):
                 VirtualFrameLocation, disparity = self.GenerateVirtualEvent(event.cameraIndex)
                 if not VirtualFrameLocation is None:
                     event.Attach(Event, location = VirtualFrameLocation, polarity = 0)
-                    event.Attach(DisparityEvent, location = VirtualFrameLocation, disparity = disparity, sign = 2*event.cameraIndex - 1)
+                    event.Attach(DisparityEvent, location = VirtualFrameLocation, disparity = disparity, sign = 1-2*event.cameraIndex)
         return event
 
     @property

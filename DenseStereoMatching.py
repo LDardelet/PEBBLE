@@ -19,14 +19,12 @@ class DenseStereo(Module):
         self._Tau = 0.05
         self._MaxSimultaneousPointsPerType = {'Seed':100, 'Unmatched':100}
 
-        self._MinCPAverageActivityRadiusRatio = 1.5 / 10
-        self._LifespanTauRatio = 2 #After N tau, we consider no match as a failure and remove that comparison point
-        self._CleanupTauRatio = 0.5 
+        self._MinAverageActivityRadiusRatio = 0.2
         self._ValidDisparityTauRatio = 0.5
         self._SignaturesExponents = [1,1,1]
         self._yAverageSignatureNullAverage = True
 
-        self._MatchThreshold = 0.9
+        self._MatchThresholds = {'global': 0.70, 'local':0.65}
         self._MinMatchMargin = 0.9
 
         self._AverageRadius = 0
@@ -39,6 +37,7 @@ class DenseStereo(Module):
         self._DisparitySearchRadius = 1
 
         self._DisparityRange = [0, np.inf]
+        self._WinnerPatchMinRatio = 0.1
 
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._MonitoredVariables = [('DisparityMap', np.array),
@@ -49,15 +48,12 @@ class DenseStereo(Module):
     def _InitializeModule(self, **kwargs):
         self.UsedGeometry = np.array(self.Geometry)[:2]
 
-        self.MetricThreshold = self._MatchThreshold ** np.sum(self._SignaturesExponents)
+        self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}
         self.RightMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
         self.LeftMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
 
         self.OfflineRadius = int(self._ComparisonRadius * self._OfflineRadiusRatio)
-        self.MinAverageActivity = self._ComparisonRadius * self._MinCPAverageActivityRadiusRatio
-
-        self.CPLifespan = self._Tau * self._LifespanTauRatio
-        self.CleanupDt = self._Tau * self._CleanupTauRatio
+        self.MinAverageActivity = self._ComparisonRadius * self._MinAverageActivityRadiusRatio
 
         self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius))
         self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (3,2)) # 0 default value seems legit as it pushes all points to infinity. Third dimension is respectively (disparity, time and if it should be sent for the stereo camera)
@@ -113,7 +109,9 @@ class DenseStereo(Module):
             Type = 'global'
         
         MatchValues = self.GetDisparitiesMatches(DisparitiesSearched, event.location, event.cameraIndex, event.timestamp)
-        NValidDisparities = (MatchValues >= self.MetricThreshold).sum()
+        ValidDisparities = (MatchValues >= self.MetricThreshold[Type])
+        NValidDisparities = ValidDisparities.sum()
+        MatchValues *= ValidDisparities
 
         if NValidDisparities == 0:
             if Type == 'global':
@@ -195,6 +193,8 @@ class DenseStereo(Module):
         if self._WinnerTakeAllRadius:
             LocalPatch = self.DisparityMap[event.location[0]-self._WinnerTakeAllRadius:event.location[0]+self._WinnerTakeAllRadius+1,event.location[1]-self._WinnerTakeAllRadius:event.location[1]+self._WinnerTakeAllRadius+1,:2,event.cameraIndex]
             xs, ys = np.where(event.timestamp - LocalPatch[:,:,1] < self._Tau * self._ValidDisparityTauRatio)
+            if xs.shape[0] < self._WinnerPatchMinRatio * (self._WinnerTakeAllRadius*2+1)**2:
+                return
             ds = LocalPatch[xs, ys, 0]
             dMax, NMax = None, 0
             for dPoss in np.unique(ds):
@@ -206,7 +206,10 @@ class DenseStereo(Module):
                         dMax, NMax = dPoss, N
         else:
             dMax = d
-        event.Attach(DisparityEvent, disparity = abs(dMax), sign = np.sign(dMax), location = np.array(event.location))
+        if abs(d-dMax) > 1:
+            event.Attach(DisparityEvent, disparity = abs(dMax), sign = int(np.sign(dMax)), location = np.array(event.location))
+        else:
+            event.Attach(DisparityEvent, disparity = abs(d), sign = int(np.sign(d)), location = np.array(event.location))
 
     def Match(self, SigsA, SigsB, LocalExponents = None):
         if LocalExponents is None:
@@ -520,45 +523,6 @@ class DenseStereo(Module):
                 Images[i].set_data(Maps[i])
             axs[0].set_title('Depth = {0:.3f}, Disp. = {1:.1f}'.format(CurrentDepth, 1/CurrentDepth))
             plt.pause(0.1)
-
-class ComparisonPointClass:
-    def __init__(self, location, Type, t, MetricThreshold, MinMatchMargin):
-        self.MetricThreshold = MetricThreshold
-        self.MinMatchMargin = MinMatchMargin
-
-        self.location = location
-        self.Type = Type
-        self.t = t
-        self.BestMatch = (None, 0)
-        self.SecondBestMatch = (None, 0)
-
-    def HasGlobalMatch(self, X, Value):
-        if self.BestMatch[0] is None:
-            self.BestMatch = (X, Value)
-            return False
-        if self.SecondBestMatch[0] is None:
-            self.SecondBestMatch = (X, Value)
-            if Value > self.BestMatch[1]:
-                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
-            return False
-
-        if (X - self.BestMatch[0]) == 0: # If we match again the best one
-            self.BestMatch = (self.BestMatch[0], max(self.BestMatch[1], Value))
-            if self.BestMatch[1] >= self.MetricThreshold and self.SecondBestMatch[1] <= self.BestMatch[1] * self.MinMatchMargin:
-                return True
-            return False
-        if (X - self.SecondBestMatch[0]) == 0:
-            self.SecondBestMatch = (self.SecondBestMatch[0], max(self.SecondBestMatch[1], Value))
-            if self.SecondBestMatch[1] > self.BestMatch[1]:
-                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
-            if self.BestMatch[1] >= self.MetricThreshold and self.SecondBestMatch[1] <= self.BestMatch[1] * self.MinMatchMargin:
-                return True
-            return False
-        if Value >= self.SecondBestMatch[1]:
-            self.SecondBestMatch = (X, Value)
-            if Value > self.BestMatch[1]:
-                self.BestMatch, self.SecondBestMatch = self.SecondBestMatch, self.BestMatch
-        return False
 
 class AnalysisMapClass:
     def __init__(self, Geometry, Radius, Tau, ySigNullMean, AveragingRadius = 0):

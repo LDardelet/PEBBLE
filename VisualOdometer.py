@@ -17,7 +17,11 @@ class VisualOdometer(Module):
                                     ('dV', np.array),
                                     ('domega', np.array),
                                     ('PureOmega', np.array),
+                                    ('ExpectedFlow', float),
+                                    ('ReceivedFlow', float),
+                                    ('ErrorFlow', float),
                                     ('A', float),
+                                    ('AFlow', float),
                                     ('Det', float)]
 
         self._DisparityRange = [0, np.inf]
@@ -56,6 +60,10 @@ class VisualOdometer(Module):
         self.SigmaWSum = np.zeros(3)
         self.A = 0.
         self.AW = 0.
+        self.ExpectedFlowSum = 0.
+        self.ReceivedFlowSum = 0.
+        self.ErrorFlowSum = 0.
+        self.AFlow = 0.
         self.FoundSolution = False
 
         self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
@@ -84,7 +92,9 @@ class VisualOdometer(Module):
                 IsValidEvent = True
         
         if IsValidEvent:
-            self.Update(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2], self.DisparityMap[event.location[0], event.location[1], 0])
+            f = self.FlowMap[event.location[0], event.location[1], :2]
+            disparity = self.DisparityMap[event.location[0], event.location[1], 0]
+            self.Update(event.timestamp, event.location, f, disparity)
             event.Attach(OdometryEvent, v = self.V, omega = self.omega)
         return event
 
@@ -92,22 +102,28 @@ class VisualOdometer(Module):
         decay = np.e**((self.LastT - t)/self._Tau)
         self.LastT = t
 
+
         Nf = np.linalg.norm(f)
         nx, ny = f / Nf
-        x, y = (location - self.ScreenCenter) # Make it centered
+        dx, dy = (location - self.ScreenCenter) # Make it centered
         d = disparity
 
-        P_i = np.array([nx*d, 
-                      nx*self.K + (nx*x**2 + ny*x*y)/self.K,
-                      ny*d,
-                      ny*self.K + (ny*y**2 + nx*x*y)/self.K,
-                      d*(nx*x + ny*y)/self.K,
-                      (nx*y - ny*x)])
+        P_i = self.P(dx, dy, nx, ny, d)
+
+        ExpectedFlowNorm = abs(P_i.dot(self.Omega))
+        self.ExpectedFlowSum = self.ExpectedFlowSum * decay + ExpectedFlowNorm
+        self.ReceivedFlowSum = self.ReceivedFlowSum * decay + Nf
+        Error = abs(ExpectedFlowNorm - Nf)
+        self.ErrorFlowSum = self.ErrorFlowSum * decay + Error
+        self.AFlow = self.AFlow * decay + 1.
+        if self.FoundSolution and Error > self.ErrorFlow/2:
+            return
+
         dP_i = np.array([nx,
                          0,
                          ny,
                          0,
-                         (nx*x + ny*y)/self.K,
+                         (nx*dx + ny*dy)/self.K,
                          0])
         M_i = np.zeros((6,6))
         dM_i = np.zeros((6,6))
@@ -120,6 +136,14 @@ class VisualOdometer(Module):
         self.dMSum = self.dMSum * decay + dM_i
         self.SigmaSum = self.SigmaSum * decay + Sigma_i
         self.A = self.A * decay + 1.
+
+    def P(self, dx, dy, nx, ny, d):
+        return np.array([nx*d,
+            nx*self.K + (nx*dx**2 + ny*dx*dy)/self.K,
+            ny*d,
+            ny*self.K + (ny*dy**2 + nx*dx*dy)/self.K,
+            d*(nx*dx + ny*dy)/self.K,
+            (nx*dy - ny*dx)])
 
     def UpdateW(self, t, location, f):
         decay = np.e**((self.LastT - t)/self._Tau)
@@ -162,6 +186,7 @@ class VisualOdometer(Module):
         Det = self.DetRatio
         if Det == 0 or (self._MinDetRatioToSolve != np.inf and Det < self._MinDetRatioToSolve):
             return np.zeros(6)
+        self.FoundSolution = True
         return np.linalg.inv(self.M).dot(self.Sigma)
     @property
     def dOmega(self):
@@ -200,6 +225,16 @@ class VisualOdometer(Module):
         if np.linalg.det(M) == 0:
             return np.zeros(3)
         return self.omegaMatrix.dot(np.linalg.inv(M).dot(self.SigmaW))
+
+    @property
+    def ExpectedFlow(self):
+        return self.ExpectedFlowSum / max(0.1, self.AFlow)
+    @property
+    def ReceivedFlow(self):
+        return self.ReceivedFlowSum / max(0.1, self.AFlow)
+    @property
+    def ErrorFlow(self):
+        return self.ErrorFlowSum / max(0.1, self.AFlow)
 
 class Quat:
     def __init__(self, w, x=None, y=None, z=None):

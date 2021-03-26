@@ -14,9 +14,10 @@ class FlowComputer(Module):
         self.__Type__ = 'Computation'
 
         self._R = 5
-        self._Tau = 0.05
-        self._MinDetRatio = 0.01
-        self._MaxNEdges = 4
+        self._Tau = 0.2
+        self._MinDetRatio = 0.000001
+        self._MinNEdges = 2
+        self._MaxNEdges = 5
         self._PolaritySeparation = False
         self._NeedsLogColumn = False
 
@@ -27,7 +28,7 @@ class FlowComputer(Module):
         self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.STContext = self._LinkedMemory.STContext
 
-        self.NEventsMax = int(2*self._R*self._MaxNEdges)
+        self.NEventsMax = int((2*self._R+1)*self._MaxNEdges)
 
         self.N2Min = 1/self._MaxFlowValue**2
 
@@ -46,13 +47,14 @@ class FlowComputer(Module):
         
         xs, ys = np.where(Patch > event.timestamp - self._Tau)
         NEvents = xs.shape[0]
-        if NEvents >= 4*self._R:
+        if NEvents >= self._MinNEdges*(2*self._R+1):
             Ts = Patch[xs, ys]
             if NEvents > self.NEventsMax:
                 SortedIndexes = Ts.argsort()
-                Ts = Ts[-NEvents:]
-                xs = xs[-NEvents:]
-                ys = ys[-NEvents:]
+                Ts = Ts[-self.NEventsMax:]
+                xs = xs[-self.NEventsMax:]
+                ys = ys[-self.NEventsMax:]
+                NEvents = self.NEventsMax
 
             tMean = Ts.mean()
             
@@ -65,15 +67,21 @@ class FlowComputer(Module):
 
             Sx2 = (xDeltas **2).sum()
             Sy2 = (yDeltas **2).sum()
+            if np.sqrt(Sx2 / NEvents) > self._R/2 and np.sqrt(Sy2 / NEvents) > self._R/2:
+                return
             Sxy = (xDeltas*yDeltas).sum()
             Stx = (tDeltas*xDeltas).sum()
             Sty = (tDeltas*yDeltas).sum()
 
             Det = Sx2*Sy2 - Sxy**2
             if Det > self._MinDetRatio * (NEvents**2 * self._R ** 4):
-                F = np.array([(Sy2*Stx - Sxy*Sty), (Sx2*Sty - Sxy*Stx)]) / Det
+                V = np.array([(Sy2*Stx - Sxy*Sty), (Sx2*Sty - Sxy*Stx)]) / Det
+                n = V/np.linalg.norm(V)
+                if (xDeltas * n[0] + yDeltas * n[1]).var() > self._MaxNEdges**2 / 3:
+                    return
 
-                N2 = (F**2).sum()
+                N2 = (V**2).sum()
+
                 if N2 > self.N2Min:
-                    F /= N2
-                    event.Attach(FlowEvent, location = np.array(event.location), flow = F)
+                    F = V/N2
+                    event.Attach(FlowEvent, location = np.array(event.location), flow = V/N2)

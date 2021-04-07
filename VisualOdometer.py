@@ -26,12 +26,11 @@ class VisualOdometer(Module):
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
-        self._Delta = 0.1
+        self._StereoBaseDistance = 0.1
+
+        self._DelayStart = 0.
 
         self._MinDetRatioToSolve = np.inf
-
-        self._DataRejectionRatio = 0
-        self._MinValidRatio = 2
 
         self._Tau = 0.05
 
@@ -53,6 +52,7 @@ class VisualOdometer(Module):
         self.NValid = 0.
 
         self.LastT = -np.inf
+        self.LastWT = -np.inf
         self.MSum = np.zeros((6,6))
         self.dMSum = np.zeros((6,6))
         self.MWSum = np.zeros((3,3))
@@ -66,12 +66,20 @@ class VisualOdometer(Module):
         self.AFlow = 0.
         self.FoundSolution = False
 
+        self._RejectMaxErrorRatio = np.inf
+
+        if self._DelayStart == 0:
+            self.Started = True
+        else:
+            self.Started = False
+            self.tFirstEvents = np.array([np.inf, np.inf], dtype = float)
+
         self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
                                              [0.          , 1., 0.          , 0. , 0.          , 0.],
                                              [0.          , 0., 0.          , 0. , 0.          , 1.],
-                                             [-self._Delta, 0., 0.          , 0. , 0.          , 0.],
-                                             [0.          , 0., -self._Delta, 0. , 0.          , 0.],
-                                             [0.          , 0., 0.          , 0. , -self._Delta, 0.]])
+                                             [-self._StereoBaseDistance, 0., 0.          , 0. , 0.          , 0.],
+                                             [0.          , 0., -self._StereoBaseDistance, 0. , 0.          , 0.],
+                                             [0.          , 0., 0.          , 0. , -self._StereoBaseDistance, 0.]])
         self.omegaMatrix = np.array([[0., -1., 0.],
                                      [1., 0. , 0.],
                                      [0., 0. , 1.]])
@@ -81,12 +89,30 @@ class VisualOdometer(Module):
     def _OnEventModule(self, event):
         IsValidEvent = False
         if event.Has(FlowEvent):
+            if not self.Started:
+                if self.tFirstEvents[0] == np.inf:
+                    self.tFirstEvents[0] = event.timestamp
+                if (event.timestamp - self.tFirstEvents >= self._DelayStart).all():
+                    self.Started = True
+                    self.LogSuccess("Started")
+                    del self.__dict__['tFirstEvents']
+                else:
+                    return event
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
             #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau:
                 IsValidEvent = True
         if event.Has(DisparityEvent):
+            if not self.Started:
+                if self.tFirstEvents[1] == np.inf:
+                    self.tFirstEvents[1] = event.timestamp
+                if (event.timestamp - self.tFirstEvents >= self._DelayStart).all():
+                    self.Started = True
+                    self.LogSuccess("Started")
+                    del self.__dict__['tFirstEvents']
+                else:
+                    return event
             self.DisparityMap[event.location[0], event.location[1], :] = np.array([event.disparity, event.timestamp])
             if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self._Tau:
                 IsValidEvent = True
@@ -116,7 +142,7 @@ class VisualOdometer(Module):
         Error = abs(ExpectedFlowNorm - Nf)
         self.ErrorFlowSum = self.ErrorFlowSum * decay + Error
         self.AFlow = self.AFlow * decay + 1.
-        if self.FoundSolution and Error > self.ErrorFlow/2:
+        if self.FoundSolution and Error > self.ErrorFlow * self._RejectMaxErrorRatio:
             return
 
         dP_i = np.array([nx,
@@ -146,8 +172,8 @@ class VisualOdometer(Module):
             (nx*dy - ny*dx)])
 
     def UpdateW(self, t, location, f):
-        decay = np.e**((self.LastT - t)/self._Tau)
-        self.LastT = t
+        decay = np.e**((self.LastWT - t)/self._Tau)
+        self.LastWT = t
 
         Nf = np.linalg.norm(f)
         nx, ny = f / Nf

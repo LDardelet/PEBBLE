@@ -21,7 +21,8 @@ class OdometerMixer(Module):
         self._ReferenceIndex = 0
 
         self._AddVirtualFrame = True
-        self._VirtualReferenceFrameDepth = 3.
+        self._VirtualReferenceFrameDepth = None
+        self._VirtualReferenceFrameDisparity = None
         self._VirtualReferenceFrameLength = 1.
         self._StereoBaseDistance = 0.1
         self._MaxCamToCamRotationSpeedError = 0.3
@@ -63,24 +64,33 @@ class OdometerMixer(Module):
                 self._KMat[nCam][:,0] *= -1
                 self._KMat[nCam][:,1] *= -1
         
-        Z = -self._VirtualReferenceFrameDepth
-        X = 0
-        Y = 0.
-        self.VirtualFrameCornersLocations = [np.array([0, 0, 0, 1.]),
-                                             np.array([1, 0, 0, 1.]),
-                                             np.array([0, 1, 0, 1.]),
-                                             np.array([0, 0, 1, 1.])]
-        theta = np.linalg.norm(self._VirtualFrameDefaultRotation)
-        if theta:
-            u = self._VirtualFrameDefaultRotation / theta
-            u_x = np.array([[0., -u[2], u[1]],
-                            [u[2], 0., -u[0]],
-                            [-u[1], u[0], 0.]])
-            R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
-        else:
-            R = np.identity(3)
-        for nCorner, Corner in enumerate(self.VirtualFrameCornersLocations):
-            self.VirtualFrameCornersLocations[nCorner][:3] = R.dot(Corner[:3]) + np.array([X,Y,Z])
+        if self._VirtualReferenceFrameDepth is None and self._VirtualReferenceFrameDisparity is None:
+            self._AddVirtualFrame = False
+            self.LogWarning("Not adding virtual frame : no depth nor disparity specified")
+        elif not self._VirtualReferenceFrameDepth is None and not self._VirtualReferenceFrameDisparity is None:
+            self._AddVirtualFrame = False
+            self.LogWarning("Not adding virtual frame : both depth and disparity were specified")
+        if self._AddVirtualFrame:
+            if self._VirtualReferenceFrameDepth is None:
+                self._VirtualReferenceFrameDepth = int(abs(self._StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDisparity) + 0.5)
+            Z = -self._VirtualReferenceFrameDepth
+            X = 0
+            Y = 0.
+            self.VirtualFrameCornersLocations = [np.array([0, 0, 0, 1.]),
+                                                 np.array([1, 0, 0, 1.]),
+                                                 np.array([0, 1, 0, 1.]),
+                                                 np.array([0, 0, 1, 1.])]
+            theta = np.linalg.norm(self._VirtualFrameDefaultRotation)
+            if theta:
+                u = self._VirtualFrameDefaultRotation / theta
+                u_x = np.array([[0., -u[2], u[1]],
+                                [u[2], 0., -u[0]],
+                                [-u[1], u[0], 0.]])
+                R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
+            else:
+                R = np.identity(3)
+            for nCorner, Corner in enumerate(self.VirtualFrameCornersLocations):
+                self.VirtualFrameCornersLocations[nCorner][:3] = R.dot(Corner[:3]) + np.array([X,Y,Z])
 
         self.ASum = 0.
         self.DSum = 0.

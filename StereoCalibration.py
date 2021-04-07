@@ -75,7 +75,7 @@ class StereoCalibration(Module):
 
     def MatrixRectification(self, location, index):
         XProj = self.CalibrationMatrix[index].dot(np.array([location[0], location[1], 1]))
-        return np.rint(XProj[:2] / XProj[-1] + 0.5).astype(int)
+        return np.rint(XProj[:2] / XProj[-1]).astype(int)
     def MappingRectification(self, location, index):
         return self.Maps[index][location[0], location[1],:]
 

@@ -386,11 +386,14 @@ class Framework:
             return None
         t = self.PropagatedEvent.timestamp
         for RunMethod in self._RunToolsMethodTuple:
+            if not AtEventMethod is None:
+                AtEventMethod(self.PropagatedEvent)
             self.PropagatedEvent = RunMethod(self.PropagatedEvent)
             if self.PropagatedEvent is None:
                 break
-            if not self.PropagatedEvent is None and not AtEventMethod is None:
-                AtEventMethod(self.PropagatedEvent)
+        if not AtEventMethod is None and not self.PropagatedEvent is None:
+            AtEventMethod(self.PropagatedEvent)
+
         return t
 
     def _SingleInputModuleNextInputEventMethod(self):

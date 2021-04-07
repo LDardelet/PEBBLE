@@ -371,7 +371,7 @@ class FeatureManagerClass:
         r = xDelta * SizeRatio
         yBaseline = -1.3 * r
         YsFeatures = yBaseline - yDelta * (np.arange(N)%2)
-        FeatureRatio = r / (S._TrackerDiameter / 2)
+        FeatureRatio = r / (self.TrackerManager._TrackerDiameter / 2)
 
         if AddContours:
             for nSnap, (R,t) in enumerate(RTs):

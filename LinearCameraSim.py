@@ -3,7 +3,7 @@ import random
 
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, Event, TrackerEvent
+from PEBBLE import Module, CameraEvent, TrackerEvent
 
 _SPACE_DIM = 2
 _VOXEL_SIZE = 0.01
@@ -249,6 +249,7 @@ class MovementSimulatorClass(Module):
         self._Geometry = value
 
     def _InitializeModule(self, **kwargs):
+        self.LogError("Events handling not updated with containers. Will not work as such")
 
         self.BiCameraSystem = BiCameraClass(self, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
         self.BaseMap = Map2DClass(self._MapType, self.BiCameraSystem)
@@ -270,7 +271,7 @@ class MovementSimulatorClass(Module):
 
         return True
 
-    def _OnEventModule(self, event):
+    def _OnEventModule(self, BareEvent):
 
         NoEventsSteps = 0
         while self.T < _MAX_T and not self.BiCameraSystem.Events and NoEventsSteps < self._MaxStepsNoEvents:
@@ -436,7 +437,7 @@ class BiCameraClass: # Allows to emulate events from events generator
     def AddEvent2D(self, BiCameraFrame2DLocation):
         self.Events2D += [BiCameraFrame2DLocation]
     def AddEvent(self, EventOnCameraLocation, CameraIndex, EGOnCameraLocation = None, EGID = None):
-        NewEvent = Event(timestamp = None, location = self.Definition - 1 - EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
+        NewEvent = Event(timestamp = None, location = self.Definition - 1 - EventOnCameraLocation, polarity = 0, SubStreamIndex = CameraIndex)#BiCameraSystem doesn't know the time.
         if self.CreateTrackerEvents:
             TrackerLocation = np.array([EGOnCameraLocation, 0.]) + np.array([np.random.normal(0, self.TrackersLocationGaussianNoise), 0.])
             if not ((TrackerLocation < 0).any() or (TrackerLocation >= self.Definition).any()):

@@ -17,5 +17,5 @@ class ModuleTemplate(Module):
         return True
 
     def _OnEventModule(self, event):
-        return event
+        return
 

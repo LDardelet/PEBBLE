@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event, TrackerEvent, TauEvent
+from PEBBLE import Module, CameraEvent, TrackerEvent, TauEvent
 
 import numpy as np
 
@@ -63,11 +63,14 @@ class Stabilizer(Module):
         if event.Has(TauEvent):
             self.UpdateTau(event.timestamp, event.tau)
 
+        if not event.Has(CameraEvent):
+            return
+
         if self.Started:
             eventStabilizedLocation = np.array(self.ComputeStaticLocationFrom(event.location)+0.5, dtype = int)
             if (eventStabilizedLocation >= 0).all() and (eventStabilizedLocation < self.ScreenSize).all():
-                event.Attach(Event, location = eventStabilizedLocation, polarity = event.polarity, cameraIndex = self._OutputEventsCameraIndex)
-        return event
+                event.Join(CameraEvent, location = eventStabilizedLocation, polarity = event.polarity, SubStreamIndex = self._OutputEventsCameraIndex)
+        return
 
     def AnalyzeTrackerData(self, event):
         for _ in event.Get(TrackerEvent):

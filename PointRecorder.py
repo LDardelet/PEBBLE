@@ -82,7 +82,7 @@ class Clicker(Module):
             self.Figure.canvas.mpl_disconnect(self.CurrentCIDButt)
             self.Figure.canvas.mpl_disconnect(self.CurrentCIDKey)
 
-        return event
+        return
 
     def _NextID(self):
         if not self.WasActive:

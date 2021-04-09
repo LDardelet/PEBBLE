@@ -38,8 +38,7 @@ class ROI(Module):
     def _OnEventModule(self, event):
         if (event.location < self.MinX).any() or (event.location >= self.MaxX).any():
             self.FilteredEvents += 1
-            return None
+            event.Filter()
         else:
             self.AllowedEvents += 1
             event.location[:] -= self.MinX
-            return event

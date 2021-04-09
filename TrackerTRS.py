@@ -252,7 +252,7 @@ class TrackerTRS(Module):
         if self._TrackerStopIfAllDead and not self.AliveTrackers:
             self.__Framework__.Paused = self.__Name__
             
-        return event
+        return
 
     def _OnTrackerLock(self, Tracker):
         for SubscriberMethod in self.LocksSubscribers:

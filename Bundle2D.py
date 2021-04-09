@@ -118,13 +118,11 @@ class BundleAdjustmentWarp(Module):
 
     def _OnEventModule(self, event):
         if not event.Has(TrackerEvent):
-            return event
+            return
         if self._RandomizeEvents and np.random.rand() > self._EventsConsideredRatio:
-            return event
+            return
 
-        for SubEvent in event.Get(TrackerEvent):
-            self.OnTrackerEvent(SubEvent)
-        return event
+        self.OnTrackerEvent(event)
     
     def OnTrackerEvent(self, event):
         self.LastTs = event.timestamp

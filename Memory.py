@@ -1,6 +1,6 @@
 import numpy as np
 
-from PEBBLE import Module, Event
+from PEBBLE import Module
 
 class Memory(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -17,7 +17,7 @@ class Memory(Module):
     def _InitializeModule(self, **kwargs):
 
         self.STContext = -np.inf*np.ones(self.Geometry)
-        self.LastEvent = Event(timestamp = -np.inf, location = np.array([0,0]), polarity = 0)
+        self.LastEvent = None
 
         return True
 
@@ -27,7 +27,7 @@ class Memory(Module):
 
         self.STContext[position] = self.LastEvent.timestamp
 
-        return event
+        return
 
     def CreateSnapshot(self):
         return np.array(self.STContext)

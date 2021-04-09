@@ -1,5 +1,5 @@
 import numpy as np
-from PEBBLE import Module, Event, TrackerEvent
+from PEBBLE import Module, CameraEvent, TrackerEvent
 
 class StereoPatternMatcher(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -32,11 +32,10 @@ class StereoPatternMatcher(Module):
         return True
 
     def _OnEventModule(self, event):
-        if event.cameraIndex == self._CameraTrackersIndex:
+        if event.SubStreamIndex == self._CameraTrackersIndex:
             self.OnEventTracker(event)
-        if event.cameraIndex == self._MatchedCameraIndex:
+        if event.SubStreamIndex == self._MatchedCameraIndex:
             self.OnEventMatched(event)
-        return event
 
     def OnEventTracker(self, event):
         if event.Has(TrackerEvent):

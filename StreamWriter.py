@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event, DisparityEvent, TrackerEvent
+from PEBBLE import Module, CameraEvent, DisparityEvent, TrackerEvent
 import numpy as np
 import atexit
 
@@ -48,7 +48,7 @@ class StreamWriter(Module):
 
     def _OnEventModule(self, event):
         if not self.Write:
-            return event
+            return 
         if self.Offset is None:
             if self._ResetTsToZero:
                 self.Offset = event.timestamp
@@ -59,10 +59,10 @@ class StreamWriter(Module):
             #self.CurrentFile.write("# " + self.StreamName + "\n")
         if event.Has(self._EventType):
             self.WriteEvent(event)
-        return event
+        return 
 
     def WriteEvent(self, event):
-        EventList = event._AsList(self._EventType._Key)
+        EventList = event.AsList(self._EventType._Key)
         Values = ["{0:.6f}".format(EventList.pop(0)-self.Offset)]
         for Data in EventList:
             if type(Data) in (tuple, list, np.ndarray):

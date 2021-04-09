@@ -93,14 +93,14 @@ class DisplayHandler(Module):
             self._PostService = PostServiceClass(self.Socket, self._PostBoxLimit, self.PostBox)
             self._PostService.start()
             def RCV(self, event):
-                self.PostBox.put(event._AsList())
+                self.PostBox.put(event.AsDict())
             def Check(self):
                 pass
         else:
             self.MainUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
             self.PostBox = []
             def RCV(self, event):
-                self.PostBox.append(event._AsList())
+                self.PostBox.append(event.AsDict())
             def Check(self):
                 if len(self.PostBox) >= self._PostBoxLimit:
                     self._SendPackage()
@@ -127,7 +127,6 @@ class DisplayHandler(Module):
         if self.__Started__:
             self.RCV(event)
             self.Check()
-        return event
 
     def EndTransmission(self):
         if self._MultiThread and not self._PostService is None:

@@ -8,7 +8,7 @@ import mpl_toolkits.mplot3d.art3d as art3d
 from matplotlib.text import TextPath
 from matplotlib.transforms import Affine2D
 
-from PEBBLE import Module, Event, TrackerEvent
+from PEBBLE import Module, CameraEvent, TrackerEvent
 
 _SPACE_DIM = 3
 _VOXEL_SIZE = 0.1
@@ -256,6 +256,7 @@ class MovementSimulatorClass(Module):
         self._AddAxes = False
 
     def _InitializeModule(self, **kwargs):
+        self.LogError("Events handling not updated to containers. Unable to proceed")
 
         if self._AddAxes:
             self.PoseGraphs, self.PoseAxs = plt.subplots(2,1)
@@ -503,7 +504,7 @@ class BiCameraClass: # Allows to emulate events from events generator
     def AddEvent3D(self, CameraFrame3DLocation):
         self.Events3D += [CameraFrame3DLocation]
     def AddEvent(self, EventOnCameraLocation, CameraIndex, EGOnCameraLocation = None, EGID = None):
-        NewEvent = Event(timestamp = None, location = EventOnCameraLocation, polarity = 0, cameraIndex = CameraIndex)#BiCameraSystem doesn't know the time.
+        NewEvent = Event(timestamp = None, location = EventOnCameraLocation, polarity = 0, SubStreamIndex = CameraIndex)#BiCameraSystem doesn't know the time.
         if self.CreateTrackerEvents:
             TrackerLocation = EGOnCameraLocation + np.random.normal(0, self.TrackersLocationGaussianNoise, size = 2)
             if not ((TrackerLocation < 0).any() or (TrackerLocation >= self.Definition).any()):

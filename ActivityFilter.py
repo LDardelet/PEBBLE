@@ -46,7 +46,7 @@ class ActivityFilter(Module):
 
         if count > self._MinNeighbors: # allow event if enough neighboors.
             self.AllowedEvents += 1
-            return event
         else:
             self.FilteredEvents += 1
-            return None
+            event.Filter()
+

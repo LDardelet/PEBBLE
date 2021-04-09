@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event, DisparityEvent, FlowEvent, OdometryEvent
+from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
 import numpy as np
 
 class VisualOdometer(Module):
@@ -26,7 +26,7 @@ class VisualOdometer(Module):
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
-        self._StereoBaseDistance = 0.1
+        self._StereoBaseVector = np.array([0.1, 0., 0.])
 
         self._DelayStart = 0.
 
@@ -44,6 +44,7 @@ class VisualOdometer(Module):
         self.DisparityMap[:,:,1] = -np.inf
 
         self.K = self._DefaultK
+        self.StereoBaseDistance = np.linalg.norm(self._StereoBaseVector)
 
         if self._DisparityRange[1] == np.inf:
             self._DisparityRange[1] = self.ScreenSize[0]
@@ -75,14 +76,14 @@ class VisualOdometer(Module):
             self.tFirstEvents = np.array([np.inf, np.inf], dtype = float)
 
         self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
-                                             [0.          , 1., 0.          , 0. , 0.          , 0.],
-                                             [0.          , 0., 0.          , 0. , 0.          , 1.],
-                                             [-self._StereoBaseDistance, 0., 0.          , 0. , 0.          , 0.],
-                                             [0.          , 0., -self._StereoBaseDistance, 0. , 0.          , 0.],
-                                             [0.          , 0., 0.          , 0. , -self._StereoBaseDistance, 0.]])
+                                             [0.          , -1., 0.          , 0. , 0.          , 0.],
+                                             [0.          , 0., 0.          , 0. , 0.          , -1.],
+                                             [-self.StereoBaseDistance, 0., 0.          , 0. , 0.          , 0.],
+                                             [0.          , 0., self.StereoBaseDistance, 0. , 0.          , 0.],
+                                             [0.          , 0., 0.          , 0. , self.StereoBaseDistance, 0.]])
         self.omegaMatrix = np.array([[0., -1., 0.],
-                                     [1., 0. , 0.],
-                                     [0., 0. , 1.]])
+                                     [-1., 0. , 0.],
+                                     [0., 0. , -1.]])
 
         return True
 
@@ -97,13 +98,13 @@ class VisualOdometer(Module):
                     self.LogSuccess("Started")
                     del self.__dict__['tFirstEvents']
                 else:
-                    return event
+                    return
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
             #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau:
                 IsValidEvent = True
-        if event.Has(DisparityEvent):
+        if event.Has(DisparityEvent): # We assume here that there is a CameraEvent, since we have a Disparity event.
             if not self.Started:
                 if self.tFirstEvents[1] == np.inf:
                     self.tFirstEvents[1] = event.timestamp
@@ -112,7 +113,7 @@ class VisualOdometer(Module):
                     self.LogSuccess("Started")
                     del self.__dict__['tFirstEvents']
                 else:
-                    return event
+                    return
             self.DisparityMap[event.location[0], event.location[1], :] = np.array([event.disparity, event.timestamp])
             if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self._Tau:
                 IsValidEvent = True
@@ -122,7 +123,7 @@ class VisualOdometer(Module):
             disparity = self.DisparityMap[event.location[0], event.location[1], 0]
             self.Update(event.timestamp, event.location, f, disparity)
             event.Attach(OdometryEvent, v = self.V, omega = self.omega)
-        return event
+        return
 
     def Update(self, t, location, f, disparity):
         decay = np.e**((self.LastT - t)/self._Tau)

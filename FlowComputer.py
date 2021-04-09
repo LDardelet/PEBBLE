@@ -2,7 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, FlowEvent
+from PEBBLE import Module, CameraEvent, FlowEvent
 
 class FlowComputer(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -64,11 +64,11 @@ class FlowComputer(Module):
 
     def _OnEventModule(self, event):
         if (event.location < self._R).any() or (event.location >= self.ScreenSize - self._R).any():
-            return event
+            return
         Flow = self.ComputeGradientFlow(event)
         if not Flow is None:
-            event.Attach(FlowEvent, location = np.array(event.location), flow = Flow)
-        return event
+            event.Attach(FlowEvent, flow = Flow)
+        return
 
     def ComputeGradientFlow(self, event):
         Patch = self._LinkedMemory.GetSquarePatch(event.location, self._R)

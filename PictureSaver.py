@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event, DisparityEvent, FlowEvent
+from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent
 import matplotlib.pyplot as plt
 import numpy as np
 import datetime
@@ -18,7 +18,7 @@ class PictureSaver(Module):
         self._NeedsLogColumn = False
 
         self._FramesDt = 0.01
-        self._Outputs = ['Events', 'Events+Flows', 'Disparities']
+        self._Outputs = ['Events', 'Disparities']
         self._Tau = 0.005
 
     def _InitializeModule(self, **kwargs):
@@ -65,12 +65,12 @@ class PictureSaver(Module):
 
     def _OnEventModule(self, event):
         if not self.Active:
-            return event
-        for Container in self.StreamsContainers[event.cameraIndex].values():
+            return
+        for Container in self.StreamsContainers[event.SubStreamIndex].values():
             Container.OnEvent(event)
-        if event.timestamp > self.StreamsLastFrames[event.cameraIndex][0] + self._Tau:
-            self.Draw(event.cameraIndex, event.timestamp)
-        return event
+        if event.timestamp > self.StreamsLastFrames[event.SubStreamIndex][0] + self._Tau:
+            self.Draw(event.SubStreamIndex, event.timestamp)
+        return
 
     def AddSubStreamData(self, subStreamIndex):
         self.StreamsContainers[subStreamIndex] = {Container:self.TemplateContainers[Container](self.ScreenSize) for Container in self.UsedContainers}
@@ -97,7 +97,8 @@ class EventsContainer:
         self.STContext = np.zeros(ScreenSize + (2,))
 
     def OnEvent(self, event):
-        self.STContext[event.location[0], event.location[1], event.polarity] = event.timestamp
+        if event.Has(CameraEvent):
+            self.STContext[event.location[0], event.location[1], event.polarity] = event.timestamp
 
     def Draw(self, t, Tau, ax):
         Map = np.zeros(self.STContext.shape[:2])

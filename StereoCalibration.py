@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event
+from PEBBLE import Module, CameraEvent
 import cv2
 import json
 import numpy as np
@@ -81,27 +81,25 @@ class StereoCalibration(Module):
 
     def _OnEventModule(self, event):
         if self.Calibrated:
-            event.location[:] = self.RectifyFunction(event.location, event.cameraIndex)
+            event.location[:] = self.RectifyFunction(event.location, event.SubStreamIndex)
             if (event.location < 0).any() or (event.location >= self.UsedGeometry).any():
-                return None
-            return event
+                event.Filter()
+            return 
         else:
 
             self.LastEvent = event.Copy()
-            position = tuple(self.LastEvent.location.tolist() + [event.cameraIndex])
+            position = tuple(self.LastEvent.location.tolist() + [event.SubStreamIndex])
             
             self.STContext[position] = event.timestamp
-            self.EventsReceived[event.cameraIndex] += 1
+            self.EventsReceived[event.SubStreamIndex] += 1
             if (self.EventsReceived >= self.MinEventsForCalibration).all():
                 self.Calibrate(self.STContext, True)
                 delattr(self, 'LastEvent')
                 delattr(self, 'STContext')
                 delattr(self, 'EventsReceived')
                 
-            if self._SendUncalibratedEvents:
-                return event
-            else:
-                return None
+            if not self._SendUncalibratedEvents:
+                event.Filter()
 
     def Calibrate(self, Data, AutoEnhance, StoredPoints=[[],[]]):
         self.Calibrating = True
@@ -110,6 +108,57 @@ class StereoCalibration(Module):
             plt.pause(0.01)
         delattr(self, 'Calibrating')
         self.Calibrated = True
+
+    def GenerateCalibrationDataFromFolder(self, Folder, ReferenceCamera, yInvert = True, yMax = None, MetricFactor = 1e-3):
+        if yInvert and yMax is None:
+            raise Exception("Cannot invert the homographies towards bottom-left origin without screen height")
+        if yInvert:
+            RyInvert = np.array([[1., 0., 0.],
+                      [0., -1, yMax-1],
+                      [0., 0., 1.]])
+            RyInvertInv = np.linalg.inv(RyInvert)
+        else:
+            RyInvert = np.identity(3)
+            RyInvertInv = np.identity(3)
+        CamerasNames = [None, None]
+        for ToolName, Tool in self.__Framework__.Tools.items():
+            if not Tool.__Type__ == 'Input':
+                continue
+            UsedIndex = Tool.__CameraInputRestriction__[0]
+            if 'right' in ToolName.lower():
+                CamerasNames[UsedIndex] = 'right'
+            elif 'left' in ToolName.lower():
+                CamerasNames[UsedIndex] = 'left'
+            else:
+                raise Exception("Unable to automatically set camera indexes to camera names")
+        def ExtractArrayFromFile(FileName, NLines, NCols):
+            with open(FileName, 'r') as f:
+                Data = np.zeros((NLines, NCols))
+                for nLine, Line in enumerate(f.readlines()):
+                    if ',' in Line:
+                        Terms = [Term.strip() for Term in Line.strip().split(',')]
+                    else:
+                        Terms = Line.strip().split()
+                    for nCol, Term in enumerate(Terms):
+                        Data[nLine, nCol] = float(Term)
+            return Data
+        RFileName = 'Rotation_camera2.txt'
+        R = ExtractArrayFromFile(Folder+RFileName, 3, 3)
+        TFileName = 'Translation_camera2.txt'
+        T = ExtractArrayFromFile(Folder+TFileName, 3, 1).reshape(3) * MetricFactor
+
+        CalibrationData = {'H:Phy->Used':[None, None], 'K:SB->Used':[None, None], 'T:Ref->Stereo':np.array(T), 'R:Ref->Stereo':np.array(R), 'Delta':np.linalg.norm(T), 'refName':ReferenceCamera, 'refIndex': CamerasNames.index(ReferenceCamera)}
+
+        for CameraIndex, CameraName in enumerate(CamerasNames):
+            HFileName = 'H'+CameraName+'.txt'
+            H = ExtractArrayFromFile(Folder+HFileName, 3, 3)
+            CalibrationData['H:Phy->Used'][CameraIndex] = RyInvert.dot(H.dot(RyInvertInv))
+
+            KFileName = 'K'+CameraName+'.txt'
+            K = ExtractArrayFromFile(Folder+KFileName, 3, 3)
+            CalibrationData['K:SB->Used'][CameraIndex] = RyInvert.dot(H).dot(K)
+        return CalibrationData 
+            
 
 class CalibrationSystem:
     def __init__(self, Module, Data, AutoEnhancePictures, StoredPoints = [[],[]]):

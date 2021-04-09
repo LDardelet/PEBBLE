@@ -89,13 +89,11 @@ class BundleAdjustment(Module):
 
     def _OnEventModule(self, event):
         if event.Has(TrackerEvent):
-            return event
+            return
         if self._RandomizeEvents and np.random.rand() > self._EventsConsideredRatio:
-            return event
+            return
         
-        for SubEvent in event.Get(TrackerEvent):
-            self.OnTrackerEvent(SubEvent)
-        return event
+        self.OnTrackerEvent(event)
 
     def OnTrackerEvent(self, event):
         PreviousPose = np.array(self.CameraSpaceWarp.Vectors[0])
@@ -136,7 +134,6 @@ class BundleAdjustment(Module):
 
         if np.random.rand() < 0.01:
             self.Log("Point {0:3d} FLR : {1:.3f}, Pose FLR : {2:.3f}, Pose Trace : {3:.3f}".format(event.TrackerID, self.Point3DSpaceWarps[event.TrackerID].FirstLambdaRatio, self.CameraSpaceWarp.FirstLambdaRatio, self.CameraSpaceWarp.C.trace()))
-        return event
 
     def _Point3DNormalizationMethod(self, X_i):
         if X_i[-1] == 0:

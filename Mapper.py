@@ -1,4 +1,4 @@
-from PEBBLE import Module, TrackerEvent, CameraPoseEvent
+from PEBBLE import Module, CameraEvent, TrackerEvent, PoseEvent
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
@@ -49,32 +49,30 @@ class Mapper(Module):
 
     def _OnEventModule(self, event):
         if event.Has(TrackerEvent):
-            for TrackerAttached in event.Get(TrackerEvent):
-                if event.TrackerColor == 'g' and event.TrackerMarker == 'o':
-                    if event.TrackerID in self.ActiveTrackers:
-                        self.Trackers[event.TrackerID].Update(event.TrackerLocation)
-                        if self.IsComputing and self.Trackers[event.TrackerID].TrustWorthy:
-                            self.ComputeNewPose()
-                            self.AttachCentralPointPose(event)
-                    else:
-                        self.Trackers[event.TrackerID] = ControlPointClass(event.TrackerLocation, event.TrackerID, self)
-                        if not self.IsComputing and len(self.TrustedTrackers) >= self._MinActiveTrackers:
-                            self.StartMap(event)
-                        elif self.IsComputing:
-                            self.Trackers[event.TrackerID].Activate()
-                elif event.TrackerColor == 'k' and event.TrackerID in self.ActiveTrackers:
-                    self.Trackers[event.TrackerID].Disable()
-                    if self.IsComputing and len(self.TrustedTrackers) < self._MinActiveTrackers:
-                        self.StopMap(event)
+            if event.TrackerColor == 'g' and event.TrackerMarker == 'o':
+                if event.TrackerID in self.ActiveTrackers:
+                    self.Trackers[event.TrackerID].Update(event.TrackerLocation)
+                    if self.IsComputing and self.Trackers[event.TrackerID].TrustWorthy:
+                        self.ComputeNewPose()
+                        self.AttachCentralPointPose(event)
+                else:
+                    self.Trackers[event.TrackerID] = ControlPointClass(event.TrackerLocation, event.TrackerID, self)
+                    if not self.IsComputing and len(self.TrustedTrackers) >= self._MinActiveTrackers:
+                        self.StartMap(event)
+                    elif self.IsComputing:
+                        self.Trackers[event.TrackerID].Activate()
+            elif event.TrackerColor == 'k' and event.TrackerID in self.ActiveTrackers:
+                self.Trackers[event.TrackerID].Disable()
+                if self.IsComputing and len(self.TrustedTrackers) < self._MinActiveTrackers:
+                    self.StopMap(event)
 
-        if self.IsComputing:
+        if event.Has(CameraEvent) and self.IsComputing:
             self.CurrentMap.OnEvent(event.location)
-        return event
 
     def AttachCentralPointPose(self, event):
         Pose = np.array(self.Pose.Pose)
         event.Attach(TrackerEvent, TrackerLocation = Pose[:2], TrackerID = 'C', TrackerAngle = Pose[2], TrackerScaling = Pose[3], TrackerColor = 'g', TrackerMarker = 'o')
-        event.Attach(CameraPoseEvent, poseHomography = self.WToCamH, reprojectionError = self.TrustedAverageErrorNorm)
+        event.Attach(CameraPoseEvent, poseHomography = self.WToCamH, reprojectionError = self.TrustedAverageErrorNorm, worldHomography = None)
 
     def StartMap(self, event):
         self.LogSuccess("Starting central point tracking")

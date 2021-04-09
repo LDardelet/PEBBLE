@@ -49,7 +49,7 @@ class HoughCD(Module):
             self.Edges += [edges]
             self.Grays += [np.array(self.gray_image)]
             if Corners is None:
-                return event
+                return
 
             NewPoints = []
 
@@ -71,7 +71,7 @@ class HoughCD(Module):
 
             self.UnsavedData = True
 
-        return event
+        return
 
     def SaveRecordedData(self):
         DataDict = {}

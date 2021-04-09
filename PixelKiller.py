@@ -23,7 +23,5 @@ class PixelKiller(Module):
         return True
 
     def _OnEventModule(self, event):
-        if not self._Active or event.timestamp < self.PixelsLifeMap[event.location[0], event.location[1]]:
-            return event
-        else:
-            return None
+        if self._Active and event.timestamp > self.PixelsLifeMap[event.location[0], event.location[1]]:
+            event.Filter()

@@ -4,7 +4,7 @@ from sys import stdout
 import atexit
 import h5py
 
-from PEBBLE import Module, Event
+from PEBBLE import Module, CameraEvent
 
 _ES_HEADER_SIZE = 15
 
@@ -33,7 +33,7 @@ class Reader(Module):
         self._SaveStream = False
         self._BatchEventSize = 1000
         self._TryUseDefaultGeometry = True
-        self._AutoZeroOffset = True
+        self._AutoZeroOffset = False
         self._yInvert = True
 
         self._InputTsFactor = 1
@@ -45,7 +45,6 @@ class Reader(Module):
 
         self._Rewinded = False
         self._NeedsLogColumn = False
-        self.CurrentFile = None
 
     @property
     def Geometry(self):
@@ -99,34 +98,14 @@ class Reader(Module):
             self.LogWarning("Invalid filename.")
             return False
 
-    def _OnEventModule(self, event):
+    def _OnEventModule(self, BareEvent):
         self.nEvent += 1
-
-        if not self._Rewinded:
-            self.NextOwnEvent = self._NextEvent()
-        else:
-            if self.nEvent < len(self.CurrentStream):
-                self.NextOwnEvent = self.CurrentStream[self.nEvent]
-            else:
-                self._Rewinded = False
-                self.NextOwnEvent = self._NextEvent()
-        if not self.NextOwnEvent is None:
-            self.NextOwnEvent.timestamp *= self._InputTsFactor
-        if not self._Rewinded:
-            # Possibly save the event
-            self._StorageFunction(self.NextOwnEvent)
-        
-        if self.__Framework__.Running:
-            return self.NextOwnEvent
-        else:
-            return None
-
-    def _NextEvent(self):
         Data = self._NextEventData()
         if Data is None:
             return None
         t, X, p = Data
-        return Event(timestamp = t, location = X, polarity = p, cameraIndex = self._CameraIndex)
+        BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self._CameraIndex)
+
 
     def FastForward(self, t):
         try:
@@ -536,10 +515,12 @@ class Reader(Module):
         None
 
     def _CloseFile(self):
-        if not self.CurrentFile is None:
+        try:
             self.CurrentFile.close()
             self.Log("Closed file {0}".format(self.StreamName))
             self.CurrentFile = None
+        except:
+            pass
 
 def peek(f, length=1):
     pos = f.tell()

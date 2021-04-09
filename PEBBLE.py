@@ -85,10 +85,10 @@ class Framework:
         self.PropagatedEvent = None
         self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
         if len(self.InputEvents) == 1:
-            self._NextInputEvent = self._SingleInputModuleNextInputEventMethod
+            self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
             del self.__dict__['InputEvents']
         else:
-            self._NextInputEvent = self._MultipleInputModulesNextInputEventMethod
+            self._NextInputEventMethod = self._MultipleInputModulesNextInputEventMethod
 
         self._LogType = 'columns'
         self._LogInit()
@@ -342,9 +342,9 @@ class Framework:
 
         self.t = 0.
         while self.Running and not self.Paused:
-            e = self._NextInputEvent()
-            if not e is None:
-                self.t = e.timestamp
+            Container = self._NextInputEventMethod()
+            if not Container is None:
+                self.t = Container.timestamp
             if self.t > stop_at:
                 self.Paused = 'Framework'
             if self.t > self.LastStartWarning + 1.:
@@ -355,7 +355,7 @@ class Framework:
                 break
 
         while self.Running and not self.Paused:
-            self.t = self.NextEvent(AtEventMethod)
+            self.t = self.Next(AtEventMethod)
             self._SendLog()
 
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
@@ -380,30 +380,29 @@ class Framework:
         for ToolName in self.ToolsList:
             self.Tools[ToolName]._Restart()
 
-    def NextEvent(self, AtEventMethod = None):
-        self.PropagatedEvent = self._NextInputEvent()
-        if self.PropagatedEvent is None:
+    def Next(self, AtEventMethod = None):
+        self.PropagatedContainer = self._NextInputEventMethod()
+        if self.PropagatedContainer is None:
             return None
-        t = self.PropagatedEvent.timestamp
+        t = self.PropagatedContainer.timestamp
         for RunMethod in self._RunToolsMethodTuple:
             if not AtEventMethod is None:
-                AtEventMethod(self.PropagatedEvent)
-            self.PropagatedEvent = RunMethod(self.PropagatedEvent)
-            if self.PropagatedEvent is None:
+                AtEventMethod(self.PropagatedContainer)
+            if not RunMethod(self.PropagatedContainer):
                 break
-        if not AtEventMethod is None and not self.PropagatedEvent is None:
-            AtEventMethod(self.PropagatedEvent)
+        if not AtEventMethod is None and not self.PropagatedContainer is None:
+            AtEventMethod(self.PropagatedContainer)
 
         return t
 
     def _SingleInputModuleNextInputEventMethod(self):
-        return self.Tools[self.ToolsList[0]].__OnEvent__(None)
+        return self.Tools[self.ToolsList[0]].__OnEvent__(_EventContainerClass(Bare = True))
 
     def _MultipleInputModulesNextInputEventMethod(self):
         OldestEvent, ModuleSelected = None, None
         for InputName, EventAwaiting in self.InputEvents.items():
             if EventAwaiting is None:
-                EventAwaiting = self.Tools[InputName].__OnEvent__(None)
+                EventAwaiting = self.Tools[InputName].__OnEvent__(_EventContainerClass(Bare = True))
             else:
                 self.InputEvents[InputName] = None
             if not EventAwaiting is None:
@@ -865,14 +864,14 @@ class Module:
         self._SetOutputCameraIndexes()
 
         # Finalize Module initialization
-        if self.__CameraInputRestriction__ and self.__Type__ != 'Input':
+        if self.__Type__ != 'Input':
             OnEventMethodUsed = self.__OnEventRestricted__
         else:
-            OnEventMethodUsed = self.__OnEventUnrestricted__
+            OnEventMethodUsed = self.__OnEventInput__
 
         if self._MonitorDt and self._MonitoredVariables:
             self.History = {'t':[]}
-            self.__MonitorRetreiveMethods = {'t': lambda event: event.timestamp}
+            self.__MonitorRetreiveMethods = {}
             for Variable in self._MonitoredVariables:
                 if type(Variable) == tuple:
                     VarName, Type = Variable
@@ -887,7 +886,7 @@ class Module:
 
             self.__LastMonitoredTimestamp = -np.inf
 
-            self.__OnEvent__ = lambda event: self.__OnEventMonitor__(OnEventMethodUsed(event))
+            self.__OnEvent__ = lambda eventContainer: self.__OnEventMonitor__(OnEventMethodUsed, eventContainer)
         else:
             self.__OnEvent__ = OnEventMethodUsed
 
@@ -904,7 +903,7 @@ class Module:
         return True
     def _OnEventModule(self, event):
         # Template for user-filled module event running method
-        return event
+        pass
     def _OnSnapModule(self):
         # Template for user-filled module preparation for taking a snapshot. 
         pass
@@ -926,31 +925,27 @@ class Module:
         # Data 'History' from automatic monitoring is already recovered. 
         pass
 
-    def __OnEventRestricted__(self, event):
-        for CameraIndex in list(event._ExtensionKeysForCameraIndex.keys()):
-            if CameraIndex in self.__CameraInputRestriction__:
-                event = self._OnEventModule(event)
-                if event is None:
-                    return None
-        return event
+    def __OnEventInput__(self, eventContainer):
+        self._OnEventModule(eventContainer.BareEvent)
+        if eventContainer.IsFilled:
+            return eventContainer
+        else:
+            return None
 
-    def __OnEventUnrestricted__(self, event):
-        if event is None:
-            return self._OnEventModule(event)
-        for CameraIndex in list(event._ExtensionKeysForCameraIndex.keys()):
-            event.RunCameraIndex(CameraIndex)
-            event = self._OnEventModule(event)
-            if event is None:
-                return None
-        return event
+    def __OnEventRestricted__(self, eventContainer):
+        for event in eventContainer.GetEvents(self.__CameraInputRestriction__):
+            self._OnEventModule(event)
+        return eventContainer.IsFilled
 
-    def __OnEventMonitor__(self, event):
-        if event.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
-            self.__LastMonitoredTimestamp = event.timestamp
+    def __OnEventMonitor__(self, OnEventMethodUsed, eventContainer):
+        OnEventMethodUsed(eventContainer)
+        if eventContainer.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
+            self.__LastMonitoredTimestamp = eventContainer.timestamp
             self._OnSnapModule()
+            self.History['t'] += [eventContainer.timestamp]
             for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
-                self.History[VarName] += [RetreiveMethod(event)]
-        return event
+                self.History[VarName] += [RetreiveMethod()]
+        return eventContainer.IsFilled
 
     def __GetRetreiveMethod__(self, VarName, UsedType):
         if '@' in VarName:
@@ -965,18 +960,18 @@ class Module:
                 if UsedType is None:
                     ExampleVar = SubRetreiveMethod(self.__dict__[Container][0])
                     UsedType = type(ExampleVar)
-                return lambda event: [UsedType(SubRetreiveMethod(Instance)) for Instance in self.__dict__[Container]]
+                return lambda :[UsedType(SubRetreiveMethod(Instance)) for Instance in self.__dict__[Container]]
             elif type(self.__dict__[Container]) == dict:
                 if UsedType is None:
                     ExampleVar = SubRetreiveMethod(self.__dict__[Container].values()[0])
                     UsedType = type(ExampleVar)
-                return lambda event: [(LocalDictKey, UsedType(SubRetreiveMethod(Instance))) for LocalDictKey, Instance in self.__dict__[Container].items()]
+                return lambda :[(LocalDictKey, UsedType(SubRetreiveMethod(Instance))) for LocalDictKey, Instance in self.__dict__[Container].items()]
             else:
                 if UsedType is None:
                     ExampleVar = SubRetreiveMethod(self.__dict__[Container])
                     UsedType = type(ExampleVar)
                 print(UsedType)
-                return lambda event: UsedType(SubRetreiveMethod(self.__dict__[Container]))
+                return lambda :UsedType(SubRetreiveMethod(self.__dict__[Container]))
         else:
             if UsedType is None:
                 UsedType = type(self.__dict__[VarName])
@@ -987,7 +982,7 @@ class Module:
             else:
                 SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
 
-            return lambda event: UsedType(SubRetreiveMethod(self))
+            return lambda :UsedType(SubRetreiveMethod(self))
 
     def _Rewind(self, t):
         pass
@@ -1078,96 +1073,122 @@ class Module:
     def LogSuccess(self, Message):
         self.Log(Message, 3)
 
-# Listing all the events existing
-
-class BareEvent:
-    _Key = 0
-    _Fields = ['timestamp']
-    def __init__(self, **kwargs):
-        for Field in self.__class__._Fields:
-            try:
-                self.__dict__[Field] = kwargs[Field]
-            except:
-                self.__dict__[Field] = self._Defaults[Field]
-        if self.__class__ == BareEvent:
-            self._ExtensionsForCameraIndex = {}
-            self._ExtensionKeysForCameraIndex = {}
-            self._RunningExtensions = None
-            self._RunningCameraIndex = None
-    def _AsList(self, AskedKey = None):
-        List = [self._Key]
-        for Field in self.__class__._Fields:
-            Value = getattr(self, Field)
-            if type(Value) == np.ndarray:
-                List += [Value.tolist()]
-            else:
-                List += [Value]
-        if not self.__class__ == BareEvent:
-            return List
-        for Extension in self._ExtensionsForCameraIndex[self._RunningCameraIndex]:
-            if AskedKey is None: 
-                ExList = Extension._AsList(None)
-                if not ExList is None:
-                    List += [ExList]
-            else:
-                if AskedKey == Extension._Key:
-                    return List[1:] + Extension._AsList()[1:]
-        return List[1:]
-
-    def Attach(self, Extension, **kwargs):
-        if 'cameraIndex' in kwargs:
-            CameraIndex = kwargs['cameraIndex']
-            del kwargs['cameraIndex']
+class _EventContainerClass: # Holds the timestamp and manages the subStreamIndexes and extensions. Should in theory never be used as such.
+    def __init__(self, timestamp = None, FirstEvent = None, FirstSubStreamIndex = None, Bare = False):
+        if not Bare:
+            self.timestamp = timestamp
+            self.Events = {FirstSubStreamIndex: [FirstEvent]}
         else:
-            if self._RunningCameraIndex is None:
-                CameraIndex = 0
-            else:
-                CameraIndex = self._RunningCameraIndex
-        if CameraIndex not in self._ExtensionsForCameraIndex:
-            self._ExtensionsForCameraIndex[CameraIndex] = []
-            self._ExtensionKeysForCameraIndex[CameraIndex] = set()
-        self._ExtensionsForCameraIndex[CameraIndex] += [Extension(bare = True, **kwargs)]
-        self._ExtensionKeysForCameraIndex[CameraIndex].add(Extension._Key)
-        self._ExtensionsForCameraIndex[CameraIndex][-1]._Publicize(self)
-
-    def RunCameraIndex(self, CameraIndex):
-        if CameraIndex in self._ExtensionsForCameraIndex.keys():
-            self._RunningCameraIndex = CameraIndex
-            return True
-        else:
-            self._RunningCameraIndex = None
-            return False
-
+            self.BareEvent = _BareEventClass(self)
+            self.timestamp = None
+            self.Events = {}
+    def _AddEvent(self, Extension, SubStreamIndex, **kwargs):
+        if not SubStreamIndex in self.Events:
+            self.Events[SubStreamIndex] = []
+        self.Events[SubStreamIndex].append(Extension(Container = self, SubStreamIndex = SubStreamIndex, **kwargs))
+    def GetEvents(self, SubStreamRestriction = []):
+        RequestedEvents = []
+        for SubStreamIndex, Events in self.Events.items():
+            if not SubStreamRestriction or SubStreamIndex in SubStreamRestriction:
+                RequestedEvents += Events
+        return RequestedEvents
+    def Filter(self, event):
+        self.Events[event.SubStreamIndex].remove(event)
+        if len(self.Events[event.SubStreamIndex]) == 0:
+            del self.Events[event.SubStreamIndex]
     @property
-    def cameraIndex(self):
-        return self._RunningCameraIndex
+    def IsEmpty(self):
+        return len(self.Events) == 0
+    @property
+    def IsFilled(self):
+        return len(self.Events) != 0
+    def __eq__(self, rhs):
+        return self.timestamp == rhs.timestamp
+    def __lt__(self, rhs):
+        return self.timestamp < rhs.timestamp
+    def __le__(self, rhs):
+        return self.timestamp <= rhs.timestamp
+    def __gt__(self, rhs):
+        return self.timestamp > rhs.timestamp
+    def __ge__(self, rhs):
+        return self.timestamp >= rhs.timestamp
 
-    def HasIndex(self, CameraIndex):
-        return CameraIndex in self._ExtensionKeysForCameraIndex.keys()
-    def Has(self, ExtensionRequired):
-        if not isinstance(self, BareEvent):
-            return False
-        if self._RunningCameraIndex is None:
-            return False
-        return ExtensionRequired._Key in self._ExtensionKeysForCameraIndex[self._RunningCameraIndex]
-    def Get(self, ExtensionRequired):
-        self._RunningExtensions = [Extension for Extension in self._ExtensionsForCameraIndex[self._RunningCameraIndex] if ExtensionRequired._Key == Extension._Key]
-        return self.__iter__()
-    def __iter__(self):
-        if self._RunningExtensions is None:
-            raise Exception("No subevent type selected. Use Get() method first")
-        self._IterVar = 0
-        return self
-    def __next__(self):
-        if self._IterVar < len(self._RunningExtensions):
-            self._IterVar += 1
-            self._RunningExtensions[self._IterVar-1]._Publicize(self)
-            return self
+class _BareEventClass: # First basic event given to an input module. That input module is expected to join another event to this one, restructuring internally the event packet
+    def __init__(self, Container):
+        self._Container = Container
+    def Join(self, Extension, **kwargs):
+        if 'SubStreamIndex' in kwargs:
+            SubStreamIndex = kwargs['SubStreamIndex']
+            del kwargs['SubStreamIndex']
         else:
-            self._RunningExtensions[-1]._Hide(self)
-            self._RunningExtensions = None
-            raise StopIteration
+            raise Exception("No SubStreamIndex specified during first event creation")
+        if 'timestamp' in kwargs:
+            self._Container.timestamp = kwargs['timestamp']
+            del kwargs['timestamp']
+        else:
+            raise Exception("No timestamp specified during first event creation")
+        self._Container._AddEvent(Extension, SubStreamIndex, **kwargs)
+        del self._Container.__dict__['BareEvent']
+        return self._Container.Events[SubStreamIndex][-1]
 
+class _EventClass:
+    def __init__(self, **kwargs):
+        if not 'Container' in kwargs:
+            self._Container = _EventContainerClass(kwargs['timestamp'], self, kwargs['SubStreamIndex'])
+        else:
+            self._Container = kwargs['Container']
+            del kwargs['Container']
+        self.SubStreamIndex = kwargs['SubStreamIndex']
+        del kwargs['SubStreamIndex']
+        self._Extensions = set()
+        if 'Extensions' in kwargs:
+            for Extension in kwargs['Extensions']:
+                self.Attach(Extension, **kwargs)
+    def Attach(self, Extension, **kwargs):
+        if Extension in self._Extensions:
+            self.Join(Extension, **kwargs) # For now, its better to join when instance is already there (ex: multiple TrackerEvents)
+            return
+        self._Extensions.add(Extension)
+        for Field in Extension._Fields:
+            self.__dict__[Field] = kwargs[Field]
+    def Join(self, Extension, **kwargs):
+        if 'SubStreamIndex' in kwargs:
+            SubStreamIndex = kwargs['SubStreamIndex']
+            del kwargs['SubStreamIndex']
+        else:
+            SubStreamIndex = self.SubStreamIndex
+        self._Container._AddEvent(Extension, SubStreamIndex, **kwargs)
+        return self._Container.Events[SubStreamIndex][-1]
+    def Filter(self):
+        self._Container.Filter(self)
+    def AsList(self, Keys = ()):
+        Output = [self.timestamp]
+        for Extension in self._Extensions:
+            if Keys and Extension._Key not in Keys:
+                continue
+            Output += [[Extension._Key]+[self.__dict__[Field]for Field in Extension._Fields]]
+        return Output
+    def AsDict(self, Keys = ()):
+        Output = {0:self.timestamp}
+        for Extension in self._Extensions:
+            if Keys and Extension._Key not in Keys:
+                continue
+            Output[Extension._Key] = [self.__dict__[Field] for Field in Extension._Fields]
+        return Output
+    def Copy(self):
+        kwargs = {'timestamp':self.timestamp, 'SubStreamIndex':self.SubStreamIndex, 'Extensions':self._Extensions}
+        for Extension in self._Extensions:
+            for Field in Extension._Fields:
+                if type(self.__dict__[Field]) != np.ndarray:
+                    kwargs[Field] = type(self.__dict__[Field])(self.__dict__[Field])
+                else:
+                    kwargs[Field] = np.array(self.__dict__[Field])
+        return self.__class__(**kwargs)
+    @property
+    def timestamp(self):
+        return self._Container.timestamp
+    def Has(self, Extension):
+        return (Extension in self._Extensions)
     def __eq__(self, rhs):
         return self.timestamp == rhs.timestamp
     def __lt__(self, rhs):
@@ -1181,65 +1202,34 @@ class BareEvent:
     def __repr__(self):
         return "{0:.3f}s".format(self.timestamp)
 
+# Listing all the events existing
 
-    def Copy(self):
-        SelfDict = {Key: getattr(self, Key) for Key in self._Fields}
-        NewInstance = self.__class__(**SelfDict)
-        for CameraIndex, Extensions in self._ExtensionsForCameraIndex.items():
-            for Extension in Extensions:
-                Data = {Key: getattr(Extension, Key) for Key in Extension._Fields}
-                Data['cameraIndex'] = CameraIndex
-                NewInstance.Attach(Extension.__class__, **Data)
-        return NewInstance
-
-class _EventExtension(BareEvent):
+class _EventExtensionClass:
     _Key = -1
-    def __new__(cls, *args, **kw):
-        if not 'bare' in kw:
-            BaseInstance = BareEvent(**kw)
-            BaseInstance.Attach(cls, **kw)
-            return BaseInstance
-        else:
-            del kw['bare']
-            ExtensionInstance = object.__new__(cls)
-            BareEvent.__init__(ExtensionInstance, *args, **kw)
-            return ExtensionInstance
-    def __init__(self, *args, **kwargs):
-        BareEvent.__init__(self, **kwargs)
-    def _Publicize(self, BaseEvent):
-        for Field in self._Fields:
-            BaseEvent.__dict__[Field] = getattr(self, Field)
-    def _Hide(self, BaseEvent):
-        for Field in self._Fields:
-            del BaseEvent.__dict__[Field]
-class Event(_EventExtension):
-    _Key = 1
-    _Fields = ['location', 'polarity']
-    _Defaults = {}
+    _Fields = ()
+    def __new__(cls, *args, **kwargs):
+        Event = _EventClass(**kwargs)
+        Event.Attach(cls, **kwargs)
+        return Event
 
-class TrackerEvent(_EventExtension):
+class CameraEvent(_EventExtensionClass):
+    _Key = 1
+    _Fields = ('location', 'polarity')
+class TrackerEvent(_EventExtensionClass):
     _Key = 2
     _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
-    _Defaults = {'TrackerID':'', 'TrackerAngle':0, 'TrackerScaling':1, 'TrackerColor':'b', 'TrackerMarker': 'o'}
-
-class DisparityEvent(_EventExtension):
+class DisparityEvent(_EventExtensionClass):
     _Key = 3
-    _Fields = ['location', 'disparity', 'sign'] # need to put location again in order for display to work correctly.
-
-class CameraPoseEvent(_EventExtension):
+    _Fields = ['disparity', 'sign']
+class PoseEvent(_EventExtensionClass):
     _Key = 4
     _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
-    _Defaults = {'worldHomography': 0} # As one homograĥy can be recovered from the other, we allow for a non defined value
-
-class TauEvent(_EventExtension):
+class TauEvent(_EventExtensionClass):
     _Key = 5
     _Fields = ['tau']
-
-class FlowEvent(_EventExtension):
+class FlowEvent(_EventExtensionClass):
     _Key = 6
-    _Fields = ['location', 'flow']
-
-class OdometryEvent(_EventExtension):
+    _Fields = ['flow']
+class OdometryEvent(_EventExtensionClass):
     _Key = 7
     _Fields = ['omega', 'v']
-

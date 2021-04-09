@@ -1,5 +1,5 @@
 import numpy as np
-from PEBBLE import Module, Event, DisparityEvent, TrackerEvent, FlowEvent
+from PEBBLE import Module, CameraEvent, DisparityEvent
 import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
@@ -70,12 +70,12 @@ class DenseStereo(Module):
         return True
 
     def _OnEventModule(self, event):
-        self.Maps[event.cameraIndex].OnEvent(event)
+        self.Maps[event.SubStreamIndex].OnEvent(event)
         if (event.location < self._ComparisonRadius).any() or (event.location >= self.UsedGeometry - self._ComparisonRadius).any(): # This event cannot be set as CP, nor can it be matched to anything as its outside the borders
-            return event
+            return
 
-        if self.Maps[event.cameraIndex].GetAverageActivity(event.location, event.timestamp) < self.MinAverageActivity:
-            return event
+        if self.Maps[event.SubStreamIndex].GetAverageActivity(event.location, event.timestamp) < self.MinAverageActivity:
+            return
 
         Decay = np.e**((self.LastTDecay - event.timestamp)/self._Tau)
         self.InputEvents *= Decay
@@ -83,9 +83,9 @@ class DenseStereo(Module):
         self.UnmatchedEvents *= Decay
         self.LastTDecay = event.timestamp
 
-        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.cameraIndex)] < self._Tau * self._ValidDisparityTauRatio: # We assume the disparity here still valid and dont update it
-            if self.DisparityMap[tuple(event.location) +(2,event.cameraIndex)]:
-                self.SendMatch(event, self.DisparityMap[tuple(event.location) +(0,event.cameraIndex)], Store = False)
+        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.SubStreamIndex)] < self._Tau * self._ValidDisparityTauRatio: # We assume the disparity here still valid and dont update it
+            if self.DisparityMap[tuple(event.location) +(2,event.SubStreamIndex)]:
+                self.SendMatch(event, self.DisparityMap[tuple(event.location) +(0,event.SubStreamIndex)], Store = False)
         else:
             self.InputEvents += 1
             if self.RunMatch(event):
@@ -93,22 +93,20 @@ class DenseStereo(Module):
             else:
                 self.UnmatchedEvents += 1
 
-        return event
-
     def RunMatch(self, event, TryLocal = True):
         if TryLocal:
-            DisparitiesSearched = self.GetLocalDisparities(event.cameraIndex, event.location[0], event.location[1], event.timestamp)
+            DisparitiesSearched = self.GetLocalDisparities(event.SubStreamIndex, event.location[0], event.location[1], event.timestamp)
             if len(DisparitiesSearched) == 0:
-                DisparitiesSearched = self.GetGlobalDisparities(event.cameraIndex, event.location[0])
+                DisparitiesSearched = self.GetGlobalDisparities(event.SubStreamIndex, event.location[0])
                 Type = 'global'
             else:
                 DisparitiesSearched = np.array(list(DisparitiesSearched))
                 Type = 'local'
         else:
-            DisparitiesSearched = self.GetGlobalDisparities(event.cameraIndex, event.location[0])
+            DisparitiesSearched = self.GetGlobalDisparities(event.SubStreamIndex, event.location[0])
             Type = 'global'
         
-        MatchValues = self.GetDisparitiesMatches(DisparitiesSearched, event.location, event.cameraIndex, event.timestamp)
+        MatchValues = self.GetDisparitiesMatches(DisparitiesSearched, event.location, event.SubStreamIndex, event.timestamp)
         ValidDisparities = (MatchValues >= self.MetricThreshold[Type])
         NValidDisparities = ValidDisparities.sum()
         MatchValues *= ValidDisparities
@@ -133,8 +131,8 @@ class DenseStereo(Module):
         for nLocalIndex, BestLocalIndex in enumerate(reversed(MatchValues.argsort()[-NValidDisparities:])):
             InitialMatchValue = MatchValues[BestLocalIndex]
             locationStereo = event.location + np.array([DisparitiesSearched[BestLocalIndex], 0])
-            StereoDisparitySearched = self.GetGlobalDisparities(1-event.cameraIndex, locationStereo[0])
-            StereoMatchValues = self.GetDisparitiesMatches(StereoDisparitySearched, locationStereo, 1-event.cameraIndex, event.timestamp)
+            StereoDisparitySearched = self.GetGlobalDisparities(1-event.SubStreamIndex, locationStereo[0])
+            StereoMatchValues = self.GetDisparitiesMatches(StereoDisparitySearched, locationStereo, 1-event.SubStreamIndex, event.timestamp)
             if abs(StereoMatchValues - InitialMatchValue).min() > 0.001:
                 self.LogWarning("Weird, as stereo confirmation didn't find corresponding match value")
                 print(DisparitiesSearched[MatchValues.argsort()])
@@ -185,13 +183,13 @@ class DenseStereo(Module):
 
     def SendMatch(self, event, d, Store = True):
         if Store:
-            self.DisparityMap[event.location[0], event.location[1],:,event.cameraIndex] = np.array([d, event.timestamp, 0])
-            self.DisparityMap[event.location[0]+d, event.location[1],:,1-event.cameraIndex] = np.array([-d, event.timestamp, 1])
+            self.DisparityMap[event.location[0], event.location[1],:,event.SubStreamIndex] = np.array([d, event.timestamp, 0])
+            self.DisparityMap[event.location[0]+d, event.location[1],:,1-event.SubStreamIndex] = np.array([-d, event.timestamp, 1])
         else:
-            self.DisparityMap[event.location[0], event.location[1],2,event.cameraIndex] = 0
+            self.DisparityMap[event.location[0], event.location[1],2,event.SubStreamIndex] = 0
 
         if self._WinnerTakeAllRadius:
-            LocalPatch = self.DisparityMap[event.location[0]-self._WinnerTakeAllRadius:event.location[0]+self._WinnerTakeAllRadius+1,event.location[1]-self._WinnerTakeAllRadius:event.location[1]+self._WinnerTakeAllRadius+1,:2,event.cameraIndex]
+            LocalPatch = self.DisparityMap[event.location[0]-self._WinnerTakeAllRadius:event.location[0]+self._WinnerTakeAllRadius+1,event.location[1]-self._WinnerTakeAllRadius:event.location[1]+self._WinnerTakeAllRadius+1,:2,event.SubStreamIndex]
             xs, ys = np.where(event.timestamp - LocalPatch[:,:,1] < self._Tau * self._ValidDisparityTauRatio)
             if xs.shape[0] < self._WinnerPatchMinRatio * (self._WinnerTakeAllRadius*2+1)**2:
                 return
@@ -207,9 +205,9 @@ class DenseStereo(Module):
         else:
             dMax = d
         if abs(d-dMax) > 1:
-            event.Attach(DisparityEvent, disparity = abs(dMax), sign = int(np.sign(dMax)), location = np.array(event.location))
+            event.Attach(DisparityEvent, disparity = abs(dMax), sign = int(np.sign(dMax)))
         else:
-            event.Attach(DisparityEvent, disparity = abs(d), sign = int(np.sign(d)), location = np.array(event.location))
+            event.Attach(DisparityEvent, disparity = abs(d), sign = int(np.sign(d)))
 
     def Match(self, SigsA, SigsB, LocalExponents = None):
         if LocalExponents is None:

@@ -18,4 +18,4 @@ class PolarityKiller(Module):
 
     def _OnEventModule(self, event):
         event.polarity = 0
-        return event
+        return

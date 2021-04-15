@@ -36,7 +36,7 @@ class OdometerMixer(Module):
 
         self._KMat = None
 
-        self._K = 432
+        self._DefaultK = 450
 
     def _InitializeModule(self, **kwargs):
         self.ReferenceOmega = np.zeros(3)
@@ -67,6 +67,11 @@ class OdometerMixer(Module):
             self.StereoBaseRotation = np.identity(3)
         else:
             self.StereoBaseRotation = np.array(self._StereoBaseRotation)
+
+        if self._KMat is None:
+            self._KMat = [np.array([[self._DefaultK, 0., self.ScreenSize[0]/2],
+                                    [0., -self._DefaultK, self.ScreenSize[1]/2],
+                                    [0., 0., 1.]]) for _ in range(2)]
 
         if self._KMat is None:
             self._AddVirtualFrame = False
@@ -133,10 +138,11 @@ class OdometerMixer(Module):
             self.UpdateFrame(event.timestamp)
             self.UpdateD(event.timestamp)
             if self._AddVirtualFrame:
-                VirtualFrameLocation, disparity = self.GenerateVirtualEvent(event.SubStreamIndex)
+                VirtualFrameLocation, disparity, sign = self.GenerateVirtualEvent(event.SubStreamIndex)
                 if not VirtualFrameLocation is None:
                     NewEvent = event.Join(CameraEvent, location = VirtualFrameLocation, polarity = 0)
-                    NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
+                    if not disparity is None:
+                        NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
         return
 
     @property
@@ -195,13 +201,16 @@ class OdometerMixer(Module):
         X = RT.dot(WorldPoint3D) # In Camera Reference Frame
         if CameraIndex != self._ReferenceIndex:
             X = self.StereoBaseRotation.dot(X) + self.StereoBaseVector # If we want the stereo camera, we change the basis
-        d = int(abs(self.StereoBaseDistance * self._KMat[CameraIndex][0,0] / self._KMat[CameraIndex][-1,-1] / X[2]) + 0.5)
         if X[2] > 0: # with these corrdinates, Z looks at the front of the camera
             xproj = self._KMat[CameraIndex].dot(X) # We project. The result should be in a Z-forward, y-upward basis
             x = np.array(xproj[:2]/xproj[2]+0.5, dtype = int)
             if (x>=0).all() and (x<self.ScreenSize).all():
-                return x, d
+                sign = 1-2*CameraIndex
+                d = int(abs(self.StereoBaseDistance * self._KMat[CameraIndex][0,0] / self._KMat[CameraIndex][-1,-1] / X[2]) + 0.5)
+                if x[0]+sign*d < 0 or x[0]+sign*d>= self.ScreenSize[0]:
+                    d = None
+                return x, d, sign 
             else:
-                return None, None
+                return None, None, None
         else:
-            return None, None
+            return None, None, None

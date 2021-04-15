@@ -5,6 +5,7 @@ import datetime
 import os
 
 _FOLDER = '/home/dardelet/Pictures/Recordings/'
+_PICTURES_VIEWER = "eog"
 
 class PictureSaver(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -68,7 +69,7 @@ class PictureSaver(Module):
             return
         for Container in self.StreamsContainers[event.SubStreamIndex].values():
             Container.OnEvent(event)
-        if event.timestamp > self.StreamsLastFrames[event.SubStreamIndex][0] + self._Tau:
+        if event.timestamp > self.StreamsLastFrames[event.SubStreamIndex][0] + self._FramesDt:
             self.Draw(event.SubStreamIndex, event.timestamp)
         return
 
@@ -89,8 +90,14 @@ class PictureSaver(Module):
                 self.StreamsContainers[subStreamIndex][Container].Draw(t, self._Tau, self.StreamsFAxs[subStreamIndex][output][1])
             self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
             self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
+            self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
             self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}_{1}.png'.format(subStreamIndex, FrameIndexes))
         self.StreamsLastFrames[subStreamIndex] = (t, FrameIndexes)
+
+    def OpenPictures(self, output = None, subStreamIndex = 0):
+        if output is None:
+            output = self._Outputs[0]
+        os.system(_PICTURES_VIEWER + ' ' + self.FolderName + output + '_{0}_0.png'.format(subStreamIndex))
 
 class EventsContainer:
     def __init__(self, ScreenSize):

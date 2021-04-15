@@ -53,7 +53,7 @@ class StreamWriter(Module):
             if self._ResetTsToZero:
                 self.Offset = event.timestamp
                 self.CurrentFile.write("# ts Offset = {0:.6f}\n".format(self.Offset))
-                self.CurrentFile.write("# " + self._Separator.join(['timestamp'] + self._EventType._Fields) + "\n")
+                self.CurrentFile.write("# " + self._Separator.join(['timestamp'] + list(self._EventType._Fields)) + "\n")
             else:
                 self.Offset = 0
             #self.CurrentFile.write("# " + self.StreamName + "\n")
@@ -62,17 +62,18 @@ class StreamWriter(Module):
         return 
 
     def WriteEvent(self, event):
-        EventList = event.AsList(self._EventType._Key)
+        EventList = event.AsList((self._EventType._Key,))
         Values = ["{0:.6f}".format(EventList.pop(0)-self.Offset)]
-        for Data in EventList:
-            if type(Data) in (tuple, list, np.ndarray):
-                Values += [str(v) for v in Data]
-            else:
-                Values += [str(Data)]
+        for Extension in EventList:
+            for Data in Extension[1:]:
+                if type(Data) in (tuple, list, np.ndarray):
+                    Values += [str(v) for v in Data]
+                else:
+                    Values += [str(Data)]
         self.CurrentFile.write(self._Separator.join(Values) + '\n')
 
     def _CloseFile(self):
         if not self.CurrentFile is None:
             self.CurrentFile.close()
-            self.Log("Closed file {0}".format(self.FileName))
+            self.Log("Closed file {0}".format(self._FileName))
             self.CurrentFile = None

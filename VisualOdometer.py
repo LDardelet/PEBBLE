@@ -20,6 +20,7 @@ class VisualOdometer(Module):
                                     ('ExpectedFlow', float),
                                     ('ReceivedFlow', float),
                                     ('ErrorFlow', float),
+                                    ('UsedErrorFlow', float),
                                     ('A', float),
                                     ('AFlow', float),
                                     ('Det', float)]
@@ -31,6 +32,11 @@ class VisualOdometer(Module):
         self._DelayStart = 0.
 
         self._MinDetRatioToSolve = np.inf
+
+        self._ValidDisparityTauRatio = 1.
+        self._ValidFlowTauRatio = 0.4
+
+        self._RejectMaxErrorRatio = 1.
 
         self._Tau = 0.05
 
@@ -64,10 +70,10 @@ class VisualOdometer(Module):
         self.ExpectedFlowSum = 0.
         self.ReceivedFlowSum = 0.
         self.ErrorFlowSum = 0.
+        self.UsedErrorFlowSum = 0.
         self.AFlow = 0.
+        self.UsedAFlow = 0.
         self.FoundSolution = False
-
-        self._RejectMaxErrorRatio = np.inf
 
         if self._DelayStart == 0:
             self.Started = True
@@ -102,7 +108,7 @@ class VisualOdometer(Module):
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
             #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
-            if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau:
+            if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau*self._ValidDisparityTauRatio:
                 IsValidEvent = True
         if event.Has(DisparityEvent): # We assume here that there is a CameraEvent, since we have a Disparity event.
             if not self.Started:
@@ -115,7 +121,7 @@ class VisualOdometer(Module):
                 else:
                     return
             self.DisparityMap[event.location[0], event.location[1], :] = np.array([event.disparity, event.timestamp])
-            if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self._Tau:
+            if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self._Tau*self._ValidFlowTauRatio:
                 IsValidEvent = True
         
         if IsValidEvent:
@@ -145,6 +151,9 @@ class VisualOdometer(Module):
         self.AFlow = self.AFlow * decay + 1.
         if self.FoundSolution and Error > self.ErrorFlow * self._RejectMaxErrorRatio:
             return
+
+        self.UsedErrorFlowSum = self.UsedErrorFlowSum * decay + Error
+        self.UsedAFlow = self.UsedAFlow * decay + 1.
 
         dP_i = np.array([nx,
                          0,
@@ -262,6 +271,9 @@ class VisualOdometer(Module):
     @property
     def ErrorFlow(self):
         return self.ErrorFlowSum / max(0.1, self.AFlow)
+    @property
+    def UsedErrorFlow(self):
+        return self.UsedErrorFlowSum / max(0.1, self.UsedAFlow)
 
 class Quat:
     def __init__(self, w, x=None, y=None, z=None):

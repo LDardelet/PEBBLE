@@ -71,7 +71,10 @@ class Reader(Module):
         else:
             self._StorageFunction = self._DoNothing
             self.__RewindForbidden__ = True
-        self.TsOffset = None
+        if self._AutoZeroOffset:
+            self.TsOffset = None
+        else:
+            self.TsOffset = 0
 
         Extension = self.StreamName.split('.')[-1]
         if 'dat' == Extension:

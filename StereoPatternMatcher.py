@@ -21,7 +21,7 @@ class StereoPatternMatcher(Module):
         self._CameraTrackersIndex = 0
         self._MatchedCameraIndex = 0
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.TrackerModule = self.__Framework__.Tools[self.__CreationReferences__['Tracker']]
 
         self._EpipolarMatrix = np.array(self._EpipolarMatrix)

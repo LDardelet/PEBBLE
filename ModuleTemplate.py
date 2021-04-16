@@ -1,4 +1,4 @@
-from PEBBLE import Module, Event
+from PEBBLE import Module
 
 class ModuleTemplate(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -13,7 +13,7 @@ class ModuleTemplate(Module):
         self._NeedsLogColumn = False
         self._MonitoredVariables = []
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         return True
 
     def _OnEventModule(self, event):

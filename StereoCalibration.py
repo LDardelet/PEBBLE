@@ -24,7 +24,7 @@ class StereoCalibration(Module):
         self._TriggerCalibrationAfterRatio = 0.1
         self._EnhanceSTContext = True
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.UsedGeometry = np.array(self.Geometry[:2])
         self.RectifyFunction = self.MatrixRectification
         if type(self._CalibrationInput) == str:

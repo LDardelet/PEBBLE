@@ -14,9 +14,6 @@ class VisualOdometer(Module):
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('V', np.array),
                                     ('omega', np.array),
-                                    ('dV', np.array),
-                                    ('domega', np.array),
-                                    ('PureOmega', np.array),
                                     ('ExpectedFlow', float),
                                     ('ReceivedFlow', float),
                                     ('ErrorFlow', float),
@@ -40,7 +37,7 @@ class VisualOdometer(Module):
 
         self._Tau = 0.05
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.ScreenSize = np.array(self.Geometry[:2])
         self.ScreenCenter = self.ScreenSize / 2 - 0.5
 

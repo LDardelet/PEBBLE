@@ -95,7 +95,7 @@ class BundleAdjustmentWarp(Module):
         self._CheatGaussianNoise = 0.01
         self._NControlPoints = 10
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.Point2DSpaceWarps = {}
         self.LastPointsReceived = {}
         self.LastTs = -np.inf

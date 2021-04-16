@@ -26,7 +26,7 @@ class Mapper(Module):
                                     ('TrustedAverageErrorNorm', float),
                                     ('TrustedSigmaErrorNorm', float)]
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.Trackers = {}
         self.ActiveTrackers = set()
         self.Pose = PoseClass(np.array(self.Geometry)[:2], self)

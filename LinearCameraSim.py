@@ -248,7 +248,7 @@ class MovementSimulatorClass(Module):
     def Geometry(self, value):
         self._Geometry = value
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.LogError("Events handling not updated with containers. Will not work as such")
 
         self.BiCameraSystem = BiCameraClass(self, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)

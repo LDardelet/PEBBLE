@@ -36,10 +36,10 @@ class FlowComputer(Module):
 
         self._MaxFlowValue = np.inf
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.CurrentShape = list(self.Geometry)
-        self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
-        self.STContext = self._LinkedMemory.STContext
+        self.Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
+        self.STContext = self.Memory.STContext
 
         self.D = (2*self._R+1)
         self._MaxNEdges = min(int(self._R * self._MaxNEdgesRatio), self._MaxNEdges)
@@ -71,7 +71,7 @@ class FlowComputer(Module):
         return
 
     def ComputeGradientFlow(self, event):
-        Patch = self._LinkedMemory.GetSquarePatch(event.location, self._R)
+        Patch = self.Memory.GetSquarePatch(event.location, self._R)
         if self._PolaritySeparation:
             Patch = Patch[:,:,event.polarity] #for polarity separation
         else:
@@ -138,7 +138,7 @@ class FlowComputer(Module):
         return S, STD, ValidMap
 
     def ComputeFlow(self, event):
-        Patch = self._LinkedMemory.GetSquarePatch(event.location, self._R)
+        Patch = self.Memory.GetSquarePatch(event.location, self._R)
         if self._PolaritySeparation:
             Patch = Patch[:,:,event.polarity] #for polarity separation
         else:

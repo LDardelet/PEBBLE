@@ -255,7 +255,7 @@ class MovementSimulatorClass(Module):
         self._MaxStepsNoEvents = 100
         self._AddAxes = False
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.LogError("Events handling not updated to containers. Unable to proceed")
 
         if self._AddAxes:
@@ -264,8 +264,8 @@ class MovementSimulatorClass(Module):
             self.PoseAxs[1].set_title('Thetas')
         else:
             self.PoseAxs = None
-        self._BiCameraSystem = BiCameraClass(self.PoseAxs, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
-        self.BaseMap = Map3DClass(self._MapType, self._BiCameraSystem)
+        self.BiCameraSystem = BiCameraClass(self.PoseAxs, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
+        self.BaseMap = Map3DClass(self._MapType, self.BiCameraSystem)
 
         self.StreamName = self.__Framework__._GetStreamFormattedName(self)
         self.Geometry = BiCameraClass.Definition.tolist() + [2]
@@ -273,7 +273,7 @@ class MovementSimulatorClass(Module):
         self.nEvent = 0
         self.Current3DEvent = None
         self.T = 0.
-        self._BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * self._RelativeBeginingOffset, t = 0.)
+        self.BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * self._RelativeBeginingOffset, t = 0.)
 
         self.nSequenceStep = 0
         if not self._Sequence:
@@ -292,9 +292,9 @@ class MovementSimulatorClass(Module):
     def _OnEventModule(self, event):
 
         NoEventsSteps = 0
-        while self.T < _MAX_T and not self._BiCameraSystem.Events and NoEventsSteps < self._MaxStepsNoEvents:
+        while self.T < _MAX_T and not self.BiCameraSystem.Events and NoEventsSteps < self._MaxStepsNoEvents:
             self.T += self._dt
-            self._BiCameraSystem.Pose.UpdatePose(self._BiCameraSystem.Pose.X + self._dt * self._TranslationSpeed, self._BiCameraSystem.Pose.Thetas + self._dt * self._RotationSpeed, t = self.T)
+            self.BiCameraSystem.Pose.UpdatePose(self.BiCameraSystem.Pose.X + self._dt * self._TranslationSpeed, self.BiCameraSystem.Pose.Thetas + self._dt * self._RotationSpeed, t = self.T)
 
             for EG in self.BaseMap.EventsGenerators:
                 EG.ComputeCameraLocations()
@@ -305,21 +305,21 @@ class MovementSimulatorClass(Module):
                     self._TranslationSpeed = np.array(self._Sequence[self.nSequenceStep][0])
                     self._RotationSpeed = np.array(self._Sequence[self.nSequenceStep][1])
 
-        if not self._BiCameraSystem.Events:
+        if not self.BiCameraSystem.Events:
             self.__Framework__.Running = False
             self.LogWarning("No displayed object in virtual scene left.")
             return None
-        NewEvent = self._BiCameraSystem.Events.pop(0)
+        NewEvent = self.BiCameraSystem.Events.pop(0)
         NewEvent.timestamp = self.T
 
-        self.Current3DEvent = self._BiCameraSystem.Events3D.pop(0)
+        self.Current3DEvent = self.BiCameraSystem.Events3D.pop(0)
 
         if self.__Framework__.Running:
             self.nEvent += 1
             if (self.nEvent & 2047) == 0:
                 self.Log("Current pose:")
-                self.Log(" X = {0}".format(self._BiCameraSystem.Pose.X))
-                self.Log(" Thetas = {0}".format(self._BiCameraSystem.Pose.Thetas))
+                self.Log(" X = {0}".format(self.BiCameraSystem.Pose.X))
+                self.Log(" Thetas = {0}".format(self.BiCameraSystem.Pose.Thetas))
             return NewEvent
         else:
             return None
@@ -329,16 +329,16 @@ class MovementSimulatorClass(Module):
 
     def GenerateBiCameraView(self):
         if not self.__Initialized__:
-            self._BiCameraSystem = BiCameraClass()
-            self.BaseMap = Map3DClass(self._MapType, self._BiCameraSystem)
-            self._BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * self._RelativeBeginingOffset, t = 0.)
+            self.BiCameraSystem = BiCameraClass()
+            self.BaseMap = Map3DClass(self._MapType, self.BiCameraSystem)
+            self.BiCameraSystem.Pose.UpdatePoseX(_MAP_DIMENSIONS * self._RelativeBeginingOffset, t = 0.)
         self.UpdateEventsGeneratorsLocations()
 
-        return self._BiCameraSystem._GenerateView(self.BaseMap)
+        return self.BiCameraSystem._GenerateView(self.BaseMap)
 
     def UpdateEventsGeneratorsLocations(self):
         for EG in self.BaseMap.EventsGenerators:
-            EG.ComputeCameraLocations(self._BiCameraSystem)
+            EG.ComputeCameraLocations(self.BiCameraSystem)
 
 class EventGeneratorClass:
     def __init__(self, ID, Location, Index, BiCamera, BaseVoxelsMap):

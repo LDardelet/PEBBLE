@@ -17,7 +17,6 @@ class DenseStereo(Module):
         self._ComparisonRadius = 10
         self._OfflineRadiusRatio = 0.
         self._Tau = 0.05
-        self._MaxSimultaneousPointsPerType = {'Seed':100, 'Unmatched':100}
 
         self._MinAverageActivityRadiusRatio = 0.2
         self._ValidDisparityTauRatio = 0.5
@@ -45,12 +44,12 @@ class DenseStereo(Module):
                                     ('MatchedEvents', float),
                                     ('UnmatchedEvents', float)]
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.UsedGeometry = np.array(self.Geometry)[:2]
 
         self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}
-        self.RightMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
-        self.LeftMemory = self._Memory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
+        self.RightMemory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
+        self.LeftMemory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
 
         self.OfflineRadius = int(self._ComparisonRadius * self._OfflineRadiusRatio)
         self.MinAverageActivity = self._ComparisonRadius * self._MinAverageActivityRadiusRatio
@@ -65,7 +64,7 @@ class DenseStereo(Module):
         self.UnmatchedEvents = 0
         self.LastTDecay = -np.inf
 
-        self.DisparityRanges = [[self._DisparityRange[0], self._DisparityRange[1]], [-self._DisparityRange[1], -self._DisparityRange[0]]]
+        self.DisparityRanges = [[max(self._DisparityRange[0], -self.UsedGeometry[0]), min(self._DisparityRange[1], self.UsedGeometry[0])], [max(-self._DisparityRange[1], -self.UsedGeometry[0]), min(-self._DisparityRange[0], self.UsedGeometry[0])]]
 
         return True
 

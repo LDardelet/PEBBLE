@@ -7,12 +7,24 @@ import atexit
 import types
 import copy
 import os
+import shutil
 import _pickle as cPickle
 import json
-from datetime import datetime as dtClass
+from datetime import datetime as dtModule
 import ast
 
-from pydoc import locate
+_RUNS_DIRECTORY = os.path.expanduser('~/Runs/')
+        
+_TYPE_TO_STR = {np.array:'np.array', float:'float', int:'int', str:'str'}
+_STR_TO_TYPE = {value:key for key, value in _TYPE_TO_STR.items()}
+
+def LoadParametersFromFile(FileName):
+    with open(FileName, 'r') as fParamsJSON:
+        Parameters = json.load(fParamsJSON)
+    for ModuleName, ModuleParameters in Parameters.items():
+        for nVar, (Name, StrType) in enumerate(ModuleParameters['_MonitoredVariables']):
+            ModuleParameters['_MonitoredVariables'][nVar] = (Name, _STR_TO_TYPE[StrType])
+    return ParametersDictClass(Parameters)
 
 class Framework:
     _Default_Color = '\033[0m'
@@ -20,42 +32,14 @@ class Framework:
     _LOG_FILE_EXTENSION = 'log'
     _PROJECT_FILE_EXTENSION = 'json'
     _DATA_FILE_EXTENSION = 'data'
+
     '''
     Main event-based framework file.
-    Each tool is in a  different file, and caan be added through 'Project files', that create the sequence of events processing.
-    Each tool must contain a simple  __init__ method with 'self' and 'argCreationDict' only, the second one containing all necessary variables from tools above itself.
-    It also must contain a '_Initialization' method, with 'self' and 'argInitializationDict' only, the second one containing all necessary information about the current stream processed.
-
-    Finally, each tool contains an '_OnEvent' method processing each event. It must only have 'event' as argument - apart from 'self' - and all variables must have be stored inside, prior to this.
-    '_OnEvent' can be seen as a filter, thus it must return the event incase one wants the processing of the current event to go on with the following tools.
-
-    Finally, each tool must declare a '__Type__' variable, to disclaim to the framework what kind to job is processed.
-    For the special type 'Input', no '_OnEvent' method is currently needed.
-
-    Currently implemented tools :
-        Input tools :
-            -> StreamReader : Basic input method
-        Display and visualization tools :
-            -> DisplayHandler : allows to use the StreamDisplay Program
-        Memory tools :
-            -> Memory : Basic storage tool
-        Filters :
-            -> RefractoryPeriod : Filters events from spike trains for a certain period.
-        Computation tools :
-            -> SpeedProjector : Recover the primitive generator of an events sequence by projecting the 3D ST-Context along several speeds, until finding the correct one
-            -> FlowComputer : Computes the optical flow of a stream of events
-
     '''
-    def __init__(self, File1 = None, File2 = None, onlyRawData = False, FullSessionLogFile = None):
+    def __init__(self, File1 = None, File2 = None, onlyRawData = False):
         self.__Type__ = 'Framework'
         self._LogType = 'raw'
-        if FullSessionLogFile is None:
-            self._SessionLog = sys.stdout
-        else:
-            self._SessionLog = open(FullSessionLogFile, 'w')
-            atexit.register(self._SessionLog.close)
-        self._LogOut = self._SessionLog
-        self._LastLogOut = self._SessionLog
+        self._SessionLogs = [sys.stdout]
         try:
             self._Terminal_Width = int(os.popen('stty size', 'r').read().split()[1])
         except:
@@ -76,11 +60,10 @@ class Framework:
         else:        
             self._LoadFiles(File1, File2, onlyRawData)
 
-
+        self._FolderData = {'home':None}
         atexit.register(self._OnClosing)
 
-
-    def Initialize(self, **ArgsDict):
+    def Initialize(self):
         self._Initializing = True
         self.PropagatedEvent = None
         self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
@@ -94,13 +77,10 @@ class Framework:
         self._LogInit()
         self.PropagatedIndexes = set()
         for ToolName in self.ToolsList:
-            ToolArgsDict = {}
-            for key, value in ArgsDict.items():
-                if ToolName in key or key[0] == '_':
-                    ToolArgsDict['_'+'_'.join(key.split('_')[1:])] = value
-            InitializationAnswer = Module.__Initialize__(self.Tools[ToolName], **ToolArgsDict)
+            InitializationAnswer = Module.__Initialize__(self.Tools[ToolName], self.RunParameters[ToolName])
             if not InitializationAnswer:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
+                self._DestroyFolder()
                 return False
             for Index in self.Tools[ToolName].__CameraOutputRestriction__:
                 self.PropagatedIndexes.add(Index)
@@ -110,14 +90,6 @@ class Framework:
         self._SendLog()
         self._Initializing = False
         return True
-
-    def _OnClosing(self):
-        if self.Modified:
-            ans = 'void'
-            while self._PROJECT_FILE_EXTENSION not in ans and ans != '':
-                ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
-            if ans != '':
-                self.SaveProject(ans)
 
     def _GetCameraIndexChain(self, Index):
         ToolsChain = []
@@ -152,30 +124,51 @@ class Framework:
         '''
         return self._GetParentModule(Tool).StreamName
 
+    def _GetHighestLevelTau(self, EventConcerned):
+        NameAsking = ModuleAsking.__Name__
+        ProposedTau = None
+        for NameProposing in reversed(self.ToolsList):
+            ProposedTau = self.Tools[NameProposing]._ProposedTau(EventConcerned)
+            if not ProposedTau is None:
+                return ProposedTau
+
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
 
-    def RunStream(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, LogFile = None, **kwargs):
-        if resume:
-            if self._LastLogOut is self._SessionLog:
-                pass
+    def RunStream(self, StreamName = None, Parameters = None, start_at = 0., stop_at = np.inf, stop_after = np.inf, resume = False, AtEventMethod = None):
+        if not resume:
+            if stop_at != np.inf and stop_after != np.inf:
+                raise Exception("Both stop_at and stop_after specified")
+            if start_at == -np.inf:
+                stop_at = min(0. + stop_after, stop_at)
             else:
-                self._LogOut = open(self._LastLogOut.name, 'a')
+                stop_at = min(start_at + stop_after, stop_at)
+            if Parameters is None:
+                self._Log("Using default parameters for all modules", 1)
+                ParametersDict = self.GetModulesParameters()
+            elif type(Parameters) == ParametersDictClass:
+                ParametersDict = Parameters
+            elif type(Parameters) == dict:
+                ParametersDict = ParametersDictClass(Parameters)
+            elif type(Parameters) == str:
+                self._Log("Using parameters stored in {0}".format(Parameters), 1)
+                ParametersDict = LoadParametersFromFile(Parameters)
+            else:
+                self._Log("Parameters input type not understood", 2)
+                self._Log("Use either None (default) for defaults modules parameter", 2)
+                self._Log("           Dictionary build from Framework.GetModulesParameters()", 2)
+                self._Log("           Str /PATH/TO/params.txt for using previous run parameters", 2)
+                return
+
+            self._InitiateFolder()
+            self._SaveParameters(ParametersDict)
         else:
-            if LogFile is None:
-                self._LogOut = self._SessionLog
-            else:
-                GivenExtention = LogFile.split('.')[-1]
-                if GivenExtention != self._LOG_FILE_EXTENSION:
-                    raise Exception("Enter log file with .{0} extension".format(self._LOG_FILE_EXTENSION))
-                self._LogOut = open(LogFile, 'w')
-            self._LastLogOut = self._LogOut
+            ParametersDict = None
         if self._LogType == 'columns':
             self._LogInit(resume)
-        self._RunProcess(StreamName = StreamName, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod, **kwargs)
-        if not self._LogOut is self._SessionLog:
-            self._LogOut.close()
-            self._LogOut = self._SessionLog
+        FinishedProperly = self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod)
+        if FinishedProperly:
+            self.SaveCSVData()
         self._LogType = 'raw'
 
     def _GetCommitValue(self):
@@ -186,6 +179,64 @@ class Framework:
         except:
             commit_value = "unknown"
         return commit_value
+
+    def _InitiateFolder(self):
+        self._FolderData = {'home':_RUNS_DIRECTORY + dtModule.now().strftime("%d-%m-%Y_%H-%M") + '/',
+                            'history':None,
+                            'pictures':None}
+        os.mkdir(self._FolderData['home'])
+        self._Log("Created output folder {0}".format(self._FolderData['home']), 1)
+        self._SessionLogs = [sys.stdout, open(self._FolderData['home']+'log.txt', 'w')]
+
+    def _OnClosing(self):
+        if self.Modified:
+            ans = 'void'
+            while self._PROJECT_FILE_EXTENSION not in ans and ans != '':
+                ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
+            if ans != '':
+                self.SaveProject(ans)
+        if self._FolderData['home'] is None:
+            return
+        for ToolName in self.ToolsList:
+            self.Tools[ToolName]._OnClosing()
+        self._SessionLogs.pop(1).close()
+
+    def _DestroyFolder(self):
+        shutil.rmtree(self._FolderData['home'])
+        self._FolderData['home'] = None
+
+    def _SaveParameters(self, Parameters):
+        PickableParameters = {}
+        for ModuleName, ModuleParameters in Parameters.items():
+            PickableParameters[ModuleName] = {}
+            for Key, Value in ModuleParameters.items():
+                if Key == '_MonitoredVariables':
+                    PickableParameters[ModuleName][Key] = []
+                    for Name, Type in Value:
+                        PickableParameters[ModuleName][Key] += [(Name, _TYPE_TO_STR[Type])]
+                    continue
+                if type(Value) == np.ndarray:
+                    PickableParameters[ModuleName][Key] = Value.tolist()
+                else:
+                    PickableParameters[ModuleName][Key] = Value
+        with open(self._FolderData['home']+'params.json', 'w') as fParamsJSON:
+            try:
+                json.dump(PickableParameters, fParamsJSON, indent=4, sort_keys=True)
+            except TypeError:
+                self._Log("Unable to save parameters as non serializable object was present")
+
+    @property
+    def HistoryFolder(self):
+        if self._FolderData['history'] is None:
+            self._FolderData['history'] = self._FolderData['home']+'History/'
+            os.mkdir(self._FolderData['history'])
+        return self._FolderData['history']
+    @property
+    def PicturesFolder(self):
+        if self._FolderData['pictures'] is None:
+            self._FolderData['pictures'] = self._FolderData['home']+'Pictures/'
+            os.mkdir(self._FolderData['pictures'])
+        return self._FolderData['pictures']
 
     def SaveData(self, Filename, forceOverwrite = False):
         GivenExtention = Filename.split('.')[-1]
@@ -204,7 +255,7 @@ class Framework:
         with open(Filename, 'wb') as BinDataFile:
             def BinWrite(data_str):
                 BinDataFile.write(str.encode(data_str))
-            now = dtClass.now()
+            now = dtModule.now()
             dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
             BinWrite("# Edited on -> "+ dt_string + "\n")
             commit_value = self._GetCommitValue()
@@ -217,6 +268,16 @@ class Framework:
 
             for ToolName in self.ToolsList:
                 self.Tools[ToolName]._SaveData(BinDataFile)
+
+    def SaveCSVData(self, Folder = None, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' '):
+        if Folder is None:
+            Folder = self.HistoryFolder
+        else:
+            if Folder[-1] != '/':
+                Folder = Folder + '/'
+        for ToolName in self.ToolsList:
+            FileName = Folder + ToolName + '.csv'
+            self.Tools[ToolName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
     
     def _LoadFiles(self, File1, File2, onlyRawData):
         if File1 is None:
@@ -296,7 +357,7 @@ class Framework:
                     break
             self._Log("Successfully recovered data", 3)
 
-    def _RunProcess(self, StreamName = None, start_at = 0., stop_at = np.inf, resume = False, AtEventMethod = None, BareInit = False, **kwargs):
+    def _RunProcess(self, StreamName = None, ParametersDict = None, start_at = -np.inf, stop_at = np.inf, resume = False, AtEventMethod = None, BareInit = False):
         if StreamName is None:
             N = 0
             StreamName = "DefaultStream_{0}".format(N)
@@ -304,8 +365,8 @@ class Framework:
                 N += 1
                 StreamName = "DefaultStream_{0}".format(N)
         if not resume:
-            self.LastStartWarning = 0
-            self.RunKwargs = dict(kwargs)
+            self._LastStartWarning = 0
+            self.RunParameters = dict(ParametersDict)
             self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
             if type(StreamName) == str:
                 for ToolName in self.CurrentInputStreams.keys():
@@ -314,24 +375,24 @@ class Framework:
                 if len(StreamName) != len(self.CurrentInputStreams):
                     self._Log("Wrong number of stream names specified :", 2)
                     self._Log("Framework contains {0} input tools, while {1} tool(s) has been given a file".format(len(self.CurrentInputStreams), len(StreamName)), 2)
-                    return None
+                    return False
                 for key in StreamName.keys():
                     if key not in self.CurrentInputStreams.keys():
                         self._Log("Wrong input tool key specified in stream names : {0}".format(key), 2)
-                        return None
+                        return False
                     self.CurrentInputStreams[key] = StreamName[key]
             else:
                 self._Log("Wrong StreamName type. It can be :", 2)
-                self._Log(" - None : Default name is then placed, for None file specific input tools.", 2)
+                self._Log(" - None : Default name is then placed, for None file specific input tools like simulators.", 2)
                 self._Log(" - str : The same file is then used for all input tools.", 2)
                 self._Log(" - dict : Dictionnary with input tools names as keys and specified filenames as values", 2)
-                return None
+                return False
             
             self.StreamHistory += [self.CurrentInputStreams]
-            InitializationAnswer = self.Initialize(**kwargs)
+            InitializationAnswer = self.Initialize()
             if not InitializationAnswer or BareInit:
                 self._SendLog()
-                return None
+                return False
 
         self.PropagatedEvent = None
         self.Running = True
@@ -341,18 +402,20 @@ class Framework:
                 self.Tools[tool_name]._Resume()
 
         self.t = 0.
-        while self.Running and not self.Paused:
+        while not resume and start_at > -np.inf and self.Running and not self.Paused:
             Container = self._NextInputEventMethod()
             if not Container is None:
                 self.t = Container.timestamp
+            if self.t >= start_at:
+                del self.__dict__['_LastStartWarning']
+                self._Log("Warp finished", 3)
+                break
             if self.t > stop_at:
                 self.Paused = 'Framework'
-            if self.t > self.LastStartWarning + 1.:
+            if self.t > self._LastStartWarning + 1.:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(self.t, start_at))
                 self._SendLog()
-                self.LastStartWarning = self.t
-            if self.t >= start_at:
-                break
+                self._LastStartWarning = self.t
 
         while self.Running and not self.Paused:
             self.t = self.Next(AtEventMethod)
@@ -366,11 +429,13 @@ class Framework:
                 self.Paused = 'Framework'
         if not self.Running:
             self._Log("Main loop finished without error.")
+            return True
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(self.t, self.Paused), 1)
                 for tool_name in self.ToolsList:
                     self.Tools[tool_name]._Pause(self.Paused)
+            return False
 
     def Resume(self, stop_at = np.inf):
         self._LogType = 'columns'
@@ -417,17 +482,6 @@ class Framework:
                     else:
                         self.InputEvents[InputName] = EventAwaiting
         return OldestEvent
-
-    def Rewind(self, t):
-        ForbiddingModules = []
-        for tool_name in self.ToolsList:
-            if self.Tools[tool_name].__RewindForbidden__:
-                ForbiddingModules += [tool_name]
-        if ForbiddingModules:
-            return ForbiddingModules
-        for tool_name in reversed(self.ToolsList):
-            self.Tools[tool_name]._Rewind(t)
-        self._Log("Framework : rewinded to {0:.3f}".format(t), 1)
 
 #### Project Management ####
 
@@ -506,6 +560,12 @@ class Framework:
             else:
                 self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name), 1)
         self.Tools[tool_name].__CameraInputRestriction__ = self._ToolsCamerasRestrictions[tool_name]
+
+    def GetModulesParameters(self):
+        ParametersDict = {}
+        for ToolName in self.ToolsList:
+            ParametersDict[ToolName] = self.Tools[ToolName]._GetParameters()
+        return ParametersDictClass(ParametersDict)
 
     def SaveProject(self, ProjectFile):
         GivenExtention = ProjectFile.split('.')[-1]
@@ -745,7 +805,8 @@ class Framework:
             else:
                 ModuleName = Module.__Name__
             Message = self._LogColors[MessageType] + int(bool(Message))*(ModuleName + ': ') + Message
-            self._LogOut.write(Message + self._LogColors[0] + "\n")
+            for Log in self._SessionLogs:
+                Log.write(Message + self._LogColors[0] + "\n")
     def _SendLog(self):
         if self._LogType == 'raw' or not self._HasLogs:
             return
@@ -760,7 +821,8 @@ class Framework:
                     CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ToolName].pop(0)
                 else:
                     CurrentLine += self._Default_Color + ' | ' + self._MaxColumnWith*' '
-            self._LogOut.write(CurrentLine + "\n")
+            for Log in self._SessionLogs:
+                Log.write(CurrentLine + "\n")
         self._HasLogs = 0
         self._LogT = None
     def _LogInit(self, Resume = False):
@@ -792,7 +854,6 @@ class Module:
         self.__CreationReferences__ = dict(argsCreationReferences)
         self.__Type__ = None
         self.__Initialized__ = False
-        self.__RewindForbidden__ = False
         self.__SavedValues__ = {}
         self.__CameraInputRestriction__ = []
         self.__CameraOutputRestriction__ = []
@@ -806,6 +867,15 @@ class Module:
             self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
         except:
             None
+
+    def _GetParameters(self):
+        InputDict = {}
+        for Key, Value in self.__dict__.items():
+            if type(Value) == types.MethodType:
+                continue
+            if len(Key) > 1 and Key[0] == '_' and Key[1] != '_' and Key[:7] != '_Module':
+                InputDict[Key] = Value
+        return InputDict
 
     @property
     def StreamName(self):
@@ -822,14 +892,19 @@ class Module:
         '''
         Method to recover the geometry of the stream fed to this module.
         Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
+        Input modules should override this property as they are the ones to feed the rest of the framework
         '''
-        if self.__Type__ == 'Input':
-            return self.__Framework__.CurrentInputStreams[self.__Name__]
-        else:
-            return self.__Framework__._GetStreamGeometry(self)
+        return self.__Framework__._GetStreamGeometry(self)
     @property
     def OutputGeometry(self):
         return self.Geometry
+    @property
+    def FrameworkTau(self):
+        '''
+        Method to retreive the highest level information Tau from the framework.
+        If no Tau is proposed by any other module, will return None, so default value has to be Module specific
+        '''
+        return self.__Framework__._GetHighestLevelTau(self._RunningEvent)
 
     def _SetOutputCameraIndexes(self):
         '''
@@ -839,26 +914,33 @@ class Module:
         '''
         self.__CameraOutputRestriction__ = list(self.__CameraInputRestriction__)
 
-    def __Initialize__(self, **kwargs):
-        # First restore all prevous values
+    def __Initialize__(self, Parameters):
+        # First restore all previous values
         self.Log(" > Initializing module")
         if self.__SavedValues__:
-            for key, value in self.__SavedValues__.items():
-                self.__dict__[key] = value
+            for Key, Value in self.__SavedValues__.items():
+                self.__dict__[Key] = Value
         self.__SavedValues__ = {}
         # Now change specific values for this initializing module
-        for key, value in kwargs.items():
-            if key[0] != '_':
-                key = '_' + key
-            if key not in self.__dict__:
-                pass
+        for Key, Value in Parameters.items():
+            if Key not in self.__dict__:
+                self.LogError("Unconsistent parameter for {0} : {1}".format(self.__Name__, Key))
+                return False
             else:
-                self.Log("Changed specific value {0} from {1} to {2}".format(key, self.__dict__[key], value))
-                self.__SavedValues__[key] = copy.copy(self.__dict__[key])
-                self.__dict__[key] = value
+                if type(Value) != type(self.__dict__[Key]):
+                    self.__UpdateParameter__(Key, Value)
+                    continue
+                if type(Value) != np.ndarray:
+                    if Value != self.__dict__[Key]:
+                        self.__UpdateParameter__(Key, Value)
+                        continue
+                else:
+                    if (Value != self.__dict__[Key]).any():
+                        self.__UpdateParameter__(Key, Value)
+                        continue
         
         # Initialize the stuff corresponding to this specific module
-        if not self._InitializeModule(**kwargs):
+        if not self._InitializeModule():
             return False
 
         self._SetOutputCameraIndexes()
@@ -893,16 +975,25 @@ class Module:
         self.__Initialized__ = True
         return True
 
+    def __UpdateParameter__(self, Key, Value):
+        self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__dict__[Key], Value))
+        self.__SavedValues__[Key] = copy.copy(self.__dict__[Key])
+        self.__dict__[Key] = Value
+
     def GetSnapIndexAt(self, t):
         return (abs(np.array(self.History['t']) - t)).argmin()
     def _Restart(self):
         # Template method for restarting modules, for instant display handler. Quite specific for now
         pass
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         # Template for user-filled module initialization
         return True
     def _OnEventModule(self, event):
         # Template for user-filled module event running method
+        pass
+    def _ProposedTau(self, event):
+        # User-filled method to propose a tau for the whole framework. Ideally, thet further in the framework, the higher the information and the more acurate Tau information is
+        # Return None for default, or for non defined tau yet
         pass
     def _OnSnapModule(self):
         # Template for user-filled module preparation for taking a snapshot. 
@@ -924,6 +1015,10 @@ class Module:
         # Template method to recover additional data from module, when Framework 'RecoverData' is called.
         # Data 'History' from automatic monitoring is already recovered. 
         pass
+    def _OnClosing(self):
+        # Template method to be called when python closes. 
+        # Used for closing any files or connexions that could have been made. Use that rather than another atexit call
+        pass
 
     def __OnEventInput__(self, eventContainer):
         self._OnEventModule(eventContainer.BareEvent)
@@ -934,6 +1029,7 @@ class Module:
 
     def __OnEventRestricted__(self, eventContainer):
         for event in eventContainer.GetEvents(self.__CameraInputRestriction__):
+            self._RunningEvent = event
             self._OnEventModule(event)
         return eventContainer.IsFilled
 
@@ -946,6 +1042,10 @@ class Module:
             for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
                 self.History[VarName] += [RetreiveMethod()]
         return eventContainer.IsFilled
+
+    @property
+    def PicturesFolder(self):
+        return self.__Framework__.PicturesFolder
 
     def __GetRetreiveMethod__(self, VarName, UsedType):
         if '@' in VarName:
@@ -984,9 +1084,6 @@ class Module:
 
             return lambda :UsedType(SubRetreiveMethod(self))
 
-    def _Rewind(self, t):
-        pass
-
     def _SaveData(self, BinDataFile, MaxHistoryChunkSizeB = 16777216):
         if self._MonitorDt and self._MonitoredVariables:
             DataDict = {'Dt':self._MonitorDt, 't':self.History['t'], 'vars':self._MonitoredVariables}
@@ -1024,6 +1121,76 @@ class Module:
         self._SaveAdditionalData(ExternalDataDict)
         if ExternalDataDict:
             cPickle.dump(('.'.join([self.__Name__, 'External']), ExternalDataDict), BinDataFile)
+
+    def SaveCSVData(self, FileName, Variables = [], FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' '):
+        if not Variables:
+            if not self._MonitoredVariables:
+                self.LogWarning("No CSV export as no data was being monitored")
+                return
+            Variables = [Key for Key, Type in self._MonitoredVariables if Key != 't']
+        else:
+            if 't' in Variables:
+                Variables.remove('t')
+        def FloatToStr(value):
+            return str(round(value, FloatPrecision))
+        FormatFunctions = [FloatToStr] # for 't'
+        CSVVariables = ['t']
+        CSVDataAccess = [('t', None)]
+        for Key, Type in self._MonitoredVariables:
+            if Key not in Variables:
+                continue
+            TemplateVar = self.History[Key][0]
+            if Type == np.array:
+                Size = TemplateVar.flatten().shape[0]
+                if Size > 9: # We remove here anything that would be too big for CSV files, like frames, ST-contexts, ...
+                    self.LogWarning("Avoiding monitored variable {0} as its shapes is not fitted for CSV files".format(Key))
+                    continue
+                DataType = type(TemplateVar.flatten()[0])
+                if DataType == np.int64:
+                    OutputFunction = str
+                else:
+                    OutputFunction = FloatToStr
+                if Size == 1:
+                    FormatFunctions.append(OutputFunction)
+                    CSVVariables.append(Key)
+                    CSVDataAccess.append((Key, 0))
+                elif Size == 2 and Default2DIndexes:
+                    for nIndex, Index in enumerate(Default2DIndexes):
+                        FormatFunctions.append(OutputFunction)
+                        CSVVariables.append(Key+'_'+Index)
+                        CSVDataAccess.append((Key, nIndex))
+                elif Size == 3 and Default3DIndexes:
+                    for nIndex, Index in enumerate(Default3DIndexes):
+                        FormatFunctions.append(OutputFunction)
+                        CSVVariables.append(Key+'_'+Index)
+                        CSVDataAccess.append((Key, nIndex))
+                else:
+                    for nIndex in range(Size):
+                        FormatFunctions.append(OutputFunction)
+                        CSVVariables.append(Key+'_'+str(nIndex))
+                        CSVDataAccess.append((Key, nIndex))
+            else:
+                CSVVariables.append(Key)
+                CSVDataAccess.append((Key, None))
+                if type(TemplateVar) == int:
+                    FormatFunctions.append(str)
+                else:
+                    FormatFunctions.append(FloatToStr)
+        if len(CSVVariables) == 1:
+            self.LogWarning("No CSV export as no data was kept into CSV")
+            return
+        with open(FileName, 'w') as fCSV:
+            fCSV.write("# "+Separator.join(CSVVariables) + "\n")
+            for nLine in range(len(self.History['t'])):
+                Data = []
+                for FormatFunction, (Key, Index) in zip(FormatFunctions, CSVDataAccess):
+                    if Index is None:
+                        Data += [FormatFunction(self.History[Key][nLine])]
+                    else:
+                        Data += [FormatFunction(self.History[Key][nLine][Index])]
+                fCSV.write(Separator.join(Data)+'\n')
+            self.LogSuccess("Saved {0} data in {1}".format(self.__Name__, FileName))
+
     def _RecoverData(self, Identifier, Data):
         if Identifier == 'External':
             self._RecoverAdditionalData(Data)
@@ -1145,7 +1312,7 @@ class _EventClass:
             for Extension in kwargs['Extensions']:
                 self.Attach(Extension, **kwargs)
     def Attach(self, Extension, **kwargs):
-        if Extension in self._Extensions:
+        if not Extension._CanAttach or Extension in self._Extensions:
             self.Join(Extension, **kwargs) # For now, its better to join when instance is already there (ex: multiple TrackerEvents)
             return
         self._Extensions.add(Extension)
@@ -1205,7 +1372,8 @@ class _EventClass:
 # Listing all the events existing
 
 class _EventExtensionClass:
-    _Key = -1
+    _Key = -1 # identifier for this type of events
+    _CanAttach = True
     _Fields = ()
     def __new__(cls, *args, **kwargs):
         Event = _EventClass(**kwargs)
@@ -1217,19 +1385,50 @@ class CameraEvent(_EventExtensionClass):
     _Fields = ('location', 'polarity')
 class TrackerEvent(_EventExtensionClass):
     _Key = 2
-    _Fields = ['TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker']
+    _CanAttach = False # From experience, many trackers can be updated upon a single event. For equity, all trackers are joined, not attached
+    _Fields = ('TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker')
 class DisparityEvent(_EventExtensionClass):
     _Key = 3
-    _Fields = ['disparity', 'sign']
+    _Fields = ('disparity', 'sign')
 class PoseEvent(_EventExtensionClass):
     _Key = 4
-    _Fields = ['poseHomography', 'worldHomography', 'reprojectionError']
+    _Fields = ('poseHomography', 'worldHomography', 'reprojectionError')
 class TauEvent(_EventExtensionClass):
     _Key = 5
-    _Fields = ['tau']
+    _Fields = ('tau')
 class FlowEvent(_EventExtensionClass):
     _Key = 6
-    _Fields = ['flow']
+    _Fields = ('flow')
 class OdometryEvent(_EventExtensionClass):
     _Key = 7
-    _Fields = ['omega', 'v']
+    _Fields = ('omega', 'v')
+
+class ParametersDictClass(dict):
+    def __init__(self, *args):
+        super().__init__(*args)
+    def __setitem__(self, key, value):
+        if key[0] == '*':
+            key = key[1:]
+            if key[0] == '_':
+                Found = False
+                for subKey in self.keys():
+                    if key in self[subKey].keys():
+                        Found = True
+                        self[subKey][key] = value
+                if not Found:
+                    raise KeyError(key)
+            else:
+                Pattern, key = key.split('_')
+                key = '_'+key
+                Found = False
+                for subKey in self.keys():
+                    if Pattern in subKey:
+                        if key in self[subKey].keys():
+                            Found = True
+                            self[subKey][key] = value
+                        else:
+                            raise KeyError("{0} missing in {1}".format(key, subKey))
+                if not Found:
+                    raise KeyError(key)
+        else:
+            super().__setitem__(key, value)

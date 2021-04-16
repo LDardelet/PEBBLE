@@ -14,7 +14,7 @@ class Memory(Module):
         self._MonitoredVariables = [("STContext", np.array)]
         self._NeedsLogColumn = False
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
 
         self.STContext = -np.inf*np.ones(self.Geometry)
         self.LastEvent = None
@@ -31,9 +31,6 @@ class Memory(Module):
 
     def CreateSnapshot(self):
         return np.array(self.STContext)
-
-    def _Rewind(self, tNew):
-        self.STContext[self.STContext >= tNew] = -np.inf
 
     def GetSquarePatch(self, xy, R):
         return self.STContext[max(0,xy[0]-R):xy[0]+R+1,max(0,xy[1]-R):xy[1]+R+1,:]

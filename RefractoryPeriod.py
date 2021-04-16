@@ -18,16 +18,16 @@ class Refractory(Module):
         self._Period = 0.03 # Given is seconds
         self._Active = True
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
 
-        self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
+        self.Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 
         return True
 
     def _OnEventModule(self, event):
-        if not self._Active or event.timestamp >= self._Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
+        if not self._Active or event.timestamp >= self.Memory.STContext[event.location[0], event.location[1], event.polarity] + self._Period:
             self.AllowedEvents += 1
         else:
             event.Filter()

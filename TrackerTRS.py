@@ -39,7 +39,6 @@ class TrackerTRS(Module):
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__ReferencesAsked__ = ['Memory']
         self.__Type__ = 'Computation'
-        self.__RewindForbidden__ = True                                             # Obviously, no rewind is allowed for this module, as each event can change number of parameters.
 
         self._SendTrackerEventForStatuses = [StateClass._STATUS_STABILIZING,
                                               StateClass._STATUS_CONVERGED,
@@ -136,15 +135,13 @@ class TrackerTRS(Module):
                                      ]
         self._StateClass = StateClass
 
-    def _InitializeModule(self, **kwargs):
-        self._LinkedMemory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
-
+    def _InitializeModule(self):
         self.FeatureManager = FeatureManagerClass(self)
         self.GTMaker = GTMakerClass(self)
         if self._DetectorAutoRestart: #  One cannot expect all trackers to die if they auto restart
             self._TrackerStopIfAllDead = False
 
-        L_X, L_Y = self._LinkedMemory.STContext.shape[:2]
+        L_X, L_Y = self.Geometry[:2]
         self.Trackers = []
         self.AliveTrackers = []
         self.JustDeadTrackers = [] # Used to store trackers that just died, in order to have their last values recorded.
@@ -804,7 +801,7 @@ class TrackerClass:
 
         if self.State.Idle:
             return True
-        if not self.State.Disengaged and ((self.Position[:2] - self.TM._OutOfBondsDistance < 0).any() or (self.Position[:2] + self.TM._OutOfBondsDistance >= np.array(self.TM._LinkedMemory.STContext.shape[:2])).any()): # out of bounds, cannot happen if disengaged
+        if not self.State.Disengaged and ((self.Position[:2] - self.TM._OutOfBondsDistance < 0).any() or (self.Position[:2] + self.TM._OutOfBondsDistance >= np.array(self.Geometry[:2])).any()): # out of bounds, cannot happen if disengaged
             if self.Lock:
                 self.Unlock('out of bounds')
             self.TM._KillTracker(self, event.timestamp, Reason = "out of bounds")

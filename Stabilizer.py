@@ -26,7 +26,7 @@ class Stabilizer(Module):
         self._NPixelsAverage = 10
         self._RatioThetaTrackers = 1.
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.ScreenCenter = np.array(self.Geometry[:2])/2
         self.ScreenSize = np.array(self.Geometry[:2])
 

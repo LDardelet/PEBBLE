@@ -69,7 +69,7 @@ class BundleAdjustment(Module):
                                     ('Point3DSpaceWarps@NWarps', int),
                                     'CameraSpaceWarp@FirstLambdaRatio']
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.Point3DSpaceWarps = {}
         self.CameraSpaceWarp = SpaceWarp(12, self._CameraPoseNormalizationMethod, self._DefaultCameraStretch, self._DefaultCameraVector, 0.5, RetreiveMethod = 'lambdas', WarpMethod = self._CameraWarpMethod)
         # P = (r_11, r_12, r_13, r_21, r_22, r_23, r_31, r_32, r_33, t_x, t_y, t_z)

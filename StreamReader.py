@@ -1,7 +1,6 @@
 import numpy as np
 from struct import unpack
 from sys import stdout
-import atexit
 import h5py
 
 from PEBBLE import Module, CameraEvent
@@ -43,7 +42,6 @@ class Reader(Module):
         self._TxtDefaultGeometry = [240, 180, 2]
         self._TxtPosNegPolarities = False
 
-        self._Rewinded = False
         self._NeedsLogColumn = False
 
     @property
@@ -61,16 +59,10 @@ class Reader(Module):
                 self.LogWarning("Unvalid cameras index for this module")
         self.__CameraOutputRestriction__ = [self._CameraIndex]
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
 
         self._CloseFile()
 
-        if self._SaveStream:
-            self.CurrentStream = []
-            self._StorageFunction = self._StoreEvent
-        else:
-            self._StorageFunction = self._DoNothing
-            self.__RewindForbidden__ = True
         if self._AutoZeroOffset:
             self.TsOffset = None
         else:
@@ -124,18 +116,6 @@ class Reader(Module):
         except KeyboardInterrupt:
             self.LogWarning("Stopped fast forward at t = {0:.3f}".format(NextEvent.timestamp))
 
-    def _Rewind(self, tNew):
-        if tNew >= self.CurrentStream[-1].timestamp:
-            return None
-        self._Rewinded = True
-        if tNew == 0:
-            self.nEvent = 0
-            return None
-        for Event in reversed(self.CurrentStream):
-            self.nEvent -= 1
-            if Event.timestamp < tNew:
-                break
-
 # .h5 Files methods
 
     def _InitializeH5(self):
@@ -145,7 +125,6 @@ class Reader(Module):
             return False
         Path, FileName = StreamName.split("@")
         self.CurrentFile = h5py.File(FileName, mode = 'r')
-        atexit.register(self._CloseFile)
         Keys = Path.split('.')
         self.Data = self.CurrentFile[Keys.pop(0)]
         while Keys:
@@ -170,7 +149,6 @@ class Reader(Module):
 
     def _InitializeAedat(self):
         self.CurrentFile = open(self.StreamName,'rb')
-        atexit.register(self._CloseFile)
         self.nEvent = 0
         self.CurrentByteBatch = b''
 
@@ -225,8 +203,6 @@ class Reader(Module):
             return False
         
         self.yMax = self.Geometry[1] - 1
-
-        atexit.register(self._CloseFile)
 
         self.nEvent = 0 # Global counter to locate oneself in the stream
         self.nByte = -1 # Local counter for the position in the buffer
@@ -358,8 +334,6 @@ class Reader(Module):
                 return False
         self.yMax = self.Geometry[1] - 1
 
-        atexit.register(self._CloseFile)
-
         self.tMask = 0x00000000FFFFFFFF
 
         if self._DatVersion == 2:
@@ -455,7 +429,6 @@ class Reader(Module):
     def _InitializeTxt(self):
         self.Geometry = list(self._TxtDefaultGeometry)
         self.CurrentFile = open(self.StreamName,'r')
-        atexit.register(self._CloseFile)
         StartNoComment = 0
         Line = self.CurrentFile.readline()
         while Line[0] == '#':
@@ -511,11 +484,11 @@ class Reader(Module):
         
         self.CurrentByteBatch = self.CurrentByteBatch + Buffer
 
-    def _StoreEvent(self, event):
-        self.CurrentStream += [event]
-
     def _DoNothing(self, event):
         None
+
+    def _OnClosing(self):
+        self._CloseFile()
 
     def _CloseFile(self):
         try:

@@ -1,6 +1,5 @@
 from PEBBLE import Module, CameraEvent, DisparityEvent, TrackerEvent
 import numpy as np
-import atexit
 
 class StreamWriter(Module):
     def __init__(self, Name, Framework, argsCreationReferences):
@@ -11,7 +10,6 @@ class StreamWriter(Module):
         self.__Type__ = 'Output'
 
         self.__ReferencesAsked__ = []
-        self.__RewindForbidden__ = True
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = []
@@ -23,7 +21,7 @@ class StreamWriter(Module):
         self._yInvert = True
         self.CurrentFile = None
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         if self._EventType is None:
             self.LogWarning("No event type specified, no output data")
             self.Write = False
@@ -34,7 +32,6 @@ class StreamWriter(Module):
             return True
         self.CurrentFile = open(self._FileName, 'w')
         self.Write = True
-        atexit.register(self._CloseFile)
         if not self._ResetTsToZero:
             self.Offset = 0
         else:
@@ -72,7 +69,7 @@ class StreamWriter(Module):
                     Values += [str(Data)]
         self.CurrentFile.write(self._Separator.join(Values) + '\n')
 
-    def _CloseFile(self):
+    def _OnClosing(self):
         if not self.CurrentFile is None:
             self.CurrentFile.close()
             self.Log("Closed file {0}".format(self._FileName))

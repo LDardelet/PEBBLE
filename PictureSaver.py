@@ -4,7 +4,6 @@ import numpy as np
 import datetime
 import os
 
-_FOLDER = '/home/dardelet/Pictures/Recordings/'
 _PICTURES_VIEWER = "eog"
 
 class PictureSaver(Module):
@@ -22,7 +21,7 @@ class PictureSaver(Module):
         self._Outputs = ['Events', 'Disparities']
         self._Tau = 0.005
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.ScreenSize = tuple(self.Geometry[:2])
         self.StreamsContainers = {}
         self.StreamsLastFrames = {}
@@ -45,13 +44,7 @@ class PictureSaver(Module):
                 self.AddSubStreamData(subStreamIndex)
             self.Active = True
 
-        self.FolderName = _FOLDER
-        if len(self.__CameraInputRestriction__) == 1:
-            self.FolderName = self.FolderName + 'Mono_'
-        else:
-            self.FolderName = self.FolderName + 'Stereo_'
-        self.FolderName = self.FolderName + '_'.join(self.UsedContainers) + '_'
-        self.FolderName = self.FolderName + datetime.datetime.now().strftime("%d-%m-%Y_%H-%M") + '/'
+        self.FolderName = self.PicturesFolder + self.__Name__ + '/'
         try:
             os.mkdir(self.FolderName)
             self.LogSuccess("Creating pictures in folder :")

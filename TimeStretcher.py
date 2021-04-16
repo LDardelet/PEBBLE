@@ -17,7 +17,7 @@ class Stretcher(Module):
                                 'sinus': {'Amplitude':0.8, 'Period':0.05}
                                 }
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.ModFunctions = {'linear': self.LinearStretch, 'sinus':self.SinusStretch}
         
         self.SelectedFunction = self.ModFunctions[self._FuncType]

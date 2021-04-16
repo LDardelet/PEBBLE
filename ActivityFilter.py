@@ -17,7 +17,7 @@ class ActivityFilter(Module):
         self._Tau = 0.01 # in seconds
         self._Radius = 2
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
 
         self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0

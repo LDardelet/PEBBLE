@@ -38,7 +38,7 @@ class OdometerMixer(Module):
 
         self._DefaultK = 450
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         self.ReferenceOmega = np.zeros(3)
         self.ReferenceV = np.zeros(3)
 

@@ -1,4 +1,3 @@
-import atexit
 import socket
 import random
 import time
@@ -57,7 +56,6 @@ class DisplayHandler(Module):
         self.__Type__ = 'Output'
 
         self.__Started__ = False
-        self._CompulsoryModule = False
 
         self._MultiThread = False # USELESS.
         self._PostBoxLimit = 7
@@ -67,9 +65,8 @@ class DisplayHandler(Module):
 
 
         self.Socket = None
-        atexit.register(self.EndTransmission)
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         if not self.Socket is None:
             self.EndTransmission()
         self.Socket = None
@@ -78,7 +75,7 @@ class DisplayHandler(Module):
 
         if not DisplayUp:
             self.__Started__ = False
-            return not self._CompulsoryModule
+            return True
 
         self.Log("Initializing DisplayHandler sockets.")
         self._DestroySocket()
@@ -128,6 +125,9 @@ class DisplayHandler(Module):
             self.RCV(event)
             self.Check()
 
+    def _OnClosing(self):
+        self.EndTransmission()
+
     def EndTransmission(self):
         if self._MultiThread and not self._PostService is None:
             self._PostService.Running = False
@@ -170,30 +170,6 @@ class DisplayHandler(Module):
                 self.LogWarning("Could not transmit data")
         except:
             self.LogWarning("Display seems down (SendStreamData)")
-        ResponseUDP.close()
-
-    def _Rewind(self, tNew):
-        ResponseUDP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        listen_addr = ("",TransmissionInfo._ResponsePort)
-        ResponseUDP.bind(listen_addr)
-
-        id_random = random.randint(100000,200000)
-        QuestionDict = {'id': id_random, 'socket': self.Socket, 'command':'rewind', 'tNew': tNew}
-
-        QuestionUDP = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        QuestionUDP.sendto(cPickle.dumps(QuestionDict), (TransmissionInfo._Address, TransmissionInfo._QuestionPort))
-        QuestionUDP.close()
-        ResponseUDP.settimeout(1.)
-
-        try:
-            data_raw, addr = ResponseUDP.recvfrom(1064)
-            data = cPickle.loads(data_raw)
-            if data['id'] == id_random and data['answer'] == 'rewinded':
-                self.Log("Rewinded")
-            else:
-                self.LogWarning("Could not clean map")
-        except:
-            self.LogWarning("Display seems down (Rewind)")
         ResponseUDP.close()
 
     def _CleanMapForStream(self):

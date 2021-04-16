@@ -18,7 +18,7 @@ class ROI(Module):
         self._yMinOffset = 0
         self._yMaxOffset = None # Leave None for symetrical value
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
         if self._xMaxOffset is None:
             self._xMaxOffset = self._xMinOffset
         if self._yMaxOffset is None:

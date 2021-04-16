@@ -3,7 +3,6 @@ import numpy as np
 import datetime
 
 import json
-import atexit
 
 import cv2
 
@@ -23,7 +22,7 @@ class HoughCD(Module):
         self._ExpositionDt = 0.004
         self._FirstPictureAt = 0.01
 
-    def _InitializeModule(self, **kwargs):
+    def _InitializeModule(self):
 
         self.RecordedPoints = []
         self.CurrentT = self._FirstPictureAt - self._BinDt
@@ -34,8 +33,6 @@ class HoughCD(Module):
         self.Grays = []
 
         self.UnsavedData = False
-
-        atexit.register(self._OnClosing)
 
         return True
 

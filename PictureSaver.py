@@ -34,15 +34,9 @@ class PictureSaver(Module):
 
         self.TemplateContainers = {'Events':EventsContainer, 'Flows':FlowsContainer, 'Disparities':DisparitiesContainer}
 
-        if not self.__CameraInputRestriction__:
-            self.LogWarning("No camera input restriction would slow the framework down too much.")
-            self.LogWarning("No pictures will be created")
-            self.Active = False
-            return True
-        else:
-            for subStreamIndex in self.__CameraInputRestriction__:
-                self.AddSubStreamData(subStreamIndex)
-            self.Active = True
+        for subStreamIndex in self.__SubStreamInputIndexes__:
+            self.AddSubStreamData(subStreamIndex)
+        self.Active = True
 
         self.FolderName = self.PicturesFolder + self.__Name__ + '/'
         try:

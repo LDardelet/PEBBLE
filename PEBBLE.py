@@ -48,7 +48,7 @@ class Framework:
         self.Modified = False
         self.StreamHistory = []
 
-        self.PropagatedEvent = None
+        self.PropagatedContainer = None
         self.Running = False
         self._Initializing = False
         self.Paused = ''
@@ -65,7 +65,7 @@ class Framework:
 
     def Initialize(self):
         self._Initializing = True
-        self.PropagatedEvent = None
+        self.PropagatedContainer = None
         self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
         if len(self.InputEvents) == 1:
             self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
@@ -82,7 +82,7 @@ class Framework:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
                 self._DestroyFolder()
                 return False
-            for Index in self.Tools[ToolName].__CameraOutputRestriction__:
+            for Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
                 self.PropagatedIndexes.add(Index)
         self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ != 'Input']) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
@@ -94,19 +94,19 @@ class Framework:
     def _GetCameraIndexChain(self, Index):
         ToolsChain = []
         for ToolName in self.ToolsList:
-            if not self.Tools[ToolName].__CameraOutputRestriction__ or Index in self.Tools[ToolName].__CameraOutputRestriction__:
+            if not self.Tools[ToolName].__SubStreamOutputIndexes__ or Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
                 ToolsChain += [ToolName]
         return ToolsChain
 
     def _GetParentModule(self, Tool):
-        ToolEventsRestriction = Tool.__CameraInputRestriction__
+        ToolEventsRestriction = Tool.__SubStreamInputIndexes__
         for InputToolName in reversed(self.ToolsList[:Tool.__ToolIndex__]):
             InputTool = self.Tools[InputToolName]
             if not ToolEventsRestriction:
                 return InputTool
-            if not InputTool.__CameraOutputRestriction__:
+            if not InputTool.__SubStreamOutputIndexes__:
                 return InputTool
-            for CameraIndex in InputTool.__CameraOutputRestriction__:
+            for CameraIndex in InputTool.__SubStreamOutputIndexes__:
                 if CameraIndex in ToolEventsRestriction:
                     return InputTool
         self._Log("{0} was unable to find its parent module".format(Tool.__Name__), 1)
@@ -394,12 +394,11 @@ class Framework:
                 self._SendLog()
                 return False
 
-        self.PropagatedEvent = None
         self.Running = True
         self.Paused = ''
         if resume:
-            for tool_name in self.ToolsList:
-                self.Tools[tool_name]._Resume()
+            for ToolName in self.ToolsList:
+                self.Tools[ToolName]._Resume()
 
         self.t = 0.
         while not resume and start_at > -np.inf and self.Running and not self.Paused:
@@ -433,8 +432,8 @@ class Framework:
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(self.t, self.Paused), 1)
-                for tool_name in self.ToolsList:
-                    self.Tools[tool_name]._Pause(self.Paused)
+                for ToolName in self.ToolsList:
+                    self.Tools[ToolName]._Pause(self.Paused)
             return False
 
     def Resume(self, stop_at = np.inf):
@@ -491,6 +490,7 @@ class Framework:
         self._ToolsExternalParameters = {}
         self._ToolsCamerasRestrictions = {}
         self._ToolsClasses = {}
+        self._SubStreamIndexes = set()
 
         self.ToolsOrder = {}
         self.ToolsList = []
@@ -509,19 +509,19 @@ class Framework:
         if onlyRawData:
             return None
 
-        for tool_name in self._ProjectRawData.keys():
-            fileLoaded = __import__(self._ProjectRawData[tool_name]['File'])
-            self._ToolsClasses[tool_name] = getattr(fileLoaded, self._ProjectRawData[tool_name]['Class'])
+        for ToolName in self._ProjectRawData.keys():
+            fileLoaded = __import__(self._ProjectRawData[ToolName]['File'])
+            self._ToolsClasses[ToolName] = getattr(fileLoaded, self._ProjectRawData[ToolName]['Class'])
 
-            self._ToolsCreationReferences[tool_name] = self._ProjectRawData[tool_name]['CreationReferences']
-            self._ToolsExternalParameters[tool_name] = self._ProjectRawData[tool_name]['ExternalParameters']
-            if 'CamerasHandled' in self._ProjectRawData[tool_name].keys(): # For previous version support
-                self._ToolsCamerasRestrictions[tool_name] = self._ProjectRawData[tool_name]['CamerasHandled']
+            self._ToolsCreationReferences[ToolName] = self._ProjectRawData[ToolName]['CreationReferences']
+            self._ToolsExternalParameters[ToolName] = self._ProjectRawData[ToolName]['ExternalParameters']
+            if 'CamerasHandled' in self._ProjectRawData[ToolName].keys(): # For previous version support
+                self._ToolsCamerasRestrictions[ToolName] = self._ProjectRawData[ToolName]['CamerasHandled']
             else:
-                self._ToolsCamerasRestrictions[tool_name] = []
+                self._ToolsCamerasRestrictions[ToolName] = []
 
-            self.ToolsOrder[tool_name] = self._ProjectRawData[tool_name]['Order']
-            self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[tool_name]['File'], self._ProjectRawData[tool_name]['Class']))
+            self.ToolsOrder[ToolName] = self._ProjectRawData[ToolName]['Order']
+            self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[ToolName]['File'], self._ProjectRawData[ToolName]['Class']))
 
         if len(self.ToolsOrder.keys()) != 0:
             MaxOrder = max(self.ToolsOrder.values()) + 1
@@ -529,11 +529,11 @@ class Framework:
         else:
             self.ToolsList = []
 
-        for tool_name in self.ToolsOrder.keys():
-            if self.ToolsList[self.ToolsOrder[tool_name]] is None:
-                self.ToolsList[self.ToolsOrder[tool_name]] = tool_name
+        for ToolName in self.ToolsOrder.keys():
+            if self.ToolsList[self.ToolsOrder[ToolName]] is None:
+                self.ToolsList[self.ToolsOrder[ToolName]] = ToolName
             else:
-                self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[tool_name]), 2)
+                self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[ToolName]), 2)
                 return None
         while None in self.ToolsList:
             self.ToolsList.remove(None)
@@ -541,25 +541,39 @@ class Framework:
         self._Log("Successfully generated tools order", 3)
         self._Log("")
         
-        for tool_name in self.ToolsList:
-            self.Tools[tool_name] = self._ToolsClasses[tool_name](tool_name, self, self._ToolsCreationReferences[tool_name])
-            self._UpdateToolsParameters(tool_name)
+        for ToolName in self.ToolsList:
+            self.Tools[ToolName] = self._ToolsClasses[ToolName](ToolName, self, self._ToolsCreationReferences[ToolName])
+            self._UpdateToolsParameters(ToolName)
+            for Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
+                if Index not in self._SubStreamIndexes:
+                    self._SubStreamIndexes.add(Index)
+                    self._Log("Added SubStream {0}".format(Index), 3)
 
-            if enable_easy_access and tool_name not in self.__dict__.keys():
-                self.__dict__[tool_name] = self.Tools[tool_name]
+            if enable_easy_access and ToolName not in self.__dict__.keys():
+                self.__dict__[ToolName] = self.Tools[ToolName]
         self._Log("Successfully generated Framework", 3)
         self._Log("")
 
-    def _UpdateToolsParameters(self, tool_name):
-        for key, value in self._ToolsExternalParameters[tool_name].items():
-            if key in self.Tools[tool_name].__dict__.keys():
+    def _UpdateToolsParameters(self, ToolName):
+        for key, value in self._ToolsExternalParameters[ToolName].items():
+            if key in self.Tools[ToolName].__dict__.keys():
                 try:
-                    self.Tools[tool_name].__dict__[key] = type(self.Tools[tool_name].__dict__[key])(value)
+                    self.Tools[ToolName].__dict__[key] = type(self.Tools[ToolName].__dict__[key])(value)
                 except:
-                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, tool_name, type(self.Tools[tool_name].__dict__[key]), value), 1)
+                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, ToolName, type(self.Tools[ToolName].__dict__[key]), value), 1)
             else:
-                self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, tool_name), 1)
-        self.Tools[tool_name].__CameraInputRestriction__ = self._ToolsCamerasRestrictions[tool_name]
+                self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, ToolName), 1)
+        if self.Tools[ToolName].__Type__ == 'Input':
+            self.Tools[ToolName].__SubStreamInputIndexes__ = set()
+            self.Tools[ToolName].__SubStreamOutputIndexes__ = set(self._ToolsCamerasRestrictions[ToolName])
+            if not self.Tools[ToolName]._SetInputModuleSubStreamIndexes(self._ToolsCamerasRestrictions[ToolName]):
+                return False
+        else:
+            if not self._ToolsCamerasRestrictions[ToolName]:
+                self.Tools[ToolName].__SubStreamInputIndexes__ = set(self._SubStreamIndexes)
+            else:
+                self.Tools[ToolName].__SubStreamInputIndexes__ = set(self._ToolsCamerasRestrictions[ToolName])
+            self.Tools[ToolName].__SubStreamOutputIndexes__ = set(self.Tools[ToolName].__SubStreamInputIndexes__)
 
     def GetModulesParameters(self):
         ParametersDict = {}
@@ -649,19 +663,19 @@ class Framework:
             else:
                 self._Log("Input Type detected. Setting to next default index.")
                 self._ProjectRawData[Name]['Order'] = 0
-                for tool_name in self._ProjectRawData.keys():
-                    if tool_name != Name and self._ProjectRawData[tool_name]['IsInput']:
-                        self._ProjectRawData[Name]['Order'] = max(self._ProjectRawData[Name]['Order'], self._ProjectRawData[tool_name]['Order'] + 1)
+                for ToolName in self._ProjectRawData.keys():
+                    if ToolName != Name and self._ProjectRawData[ToolName]['IsInput']:
+                        self._ProjectRawData[Name]['Order'] = max(self._ProjectRawData[Name]['Order'], self._ProjectRawData[ToolName]['Order'] + 1)
             NumberTaken = False
-            for tool_name in self._ProjectRawData.keys():
-                if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[tool_name]['Order']:
+            for ToolName in self._ProjectRawData.keys():
+                if ToolName != Name and 'Order' in self._ProjectRawData[ToolName].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[ToolName]['Order']:
                     NumberTaken = True
             if NumberTaken:
                 self._Log("Compiling new order.")
-                for tool_name in self._ProjectRawData.keys():
-                    if tool_name != Name and 'Order' in self._ProjectRawData[tool_name].keys():
-                        if self._ProjectRawData[tool_name]['Order'] >= self._ProjectRawData[Name]['Order']:
-                            self._ProjectRawData[tool_name]['Order'] += 1
+                for ToolName in self._ProjectRawData.keys():
+                    if ToolName != Name and 'Order' in self._ProjectRawData[ToolName].keys():
+                        if self._ProjectRawData[ToolName]['Order'] >= self._ProjectRawData[Name]['Order']:
+                            self._ProjectRawData[ToolName]['Order'] += 1
                 self._Log("Done")
                 self._Log("")
 
@@ -682,9 +696,9 @@ class Framework:
                 self._Log("No particular reference needed for this tool.")
             self._Log("")
             if TmpClass.__Type__ == 'Input':
-                self._Log("Enter camera index for this input module, if necessary.")
+                self._Log("Enter indexes created by this module, coma separated.")
             else:
-                self._Log("Enter camera index(es) handled by this module, coma separated. Void will not create any restriction.")
+                self._Log("Enter streams index(es) handled by this module, coma separated. Void will not create any restriction.")
             entry = input(" -> ")
             self._ProjectRawData[Name]['CamerasHandled'] = []
             if entry:
@@ -748,28 +762,27 @@ class Framework:
         self._Log("")
 
         nOrder = 0
-        for tool_name in self.ToolsList:
-            filename = inspect.getfile(self.Tools[tool_name].__class__)
-            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, tool_name, str(self.Tools[tool_name].__class__).split('.')[1][:-2], filename), 3)
-            self._Log("     Type : {0}".format(self.Tools[tool_name].__Type__))
-            if self.Tools[tool_name].__CameraInputRestriction__:
-                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraInputRestriction__]))
+        for ToolName in self.ToolsList:
+            filename = inspect.getfile(self.Tools[ToolName].__class__)
+            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ToolName, str(self.Tools[ToolName].__class__).split('.')[1][:-2], filename), 3)
+            self._Log("     Type : {0}".format(self.Tools[ToolName].__Type__))
+            if self.Tools[ToolName].__SubStreamInputIndexes__:
+                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamInputIndexes__]))
             else:
                 self._Log("     Uses all cameras inputs.")
-            self.Tools[tool_name]._SetOutputCameraIndexes()
-            if self.Tools[tool_name].__CameraOutputRestriction__  and not self.Tools[tool_name].__CameraOutputRestriction__ == self.Tools[tool_name].__CameraInputRestriction__:
-                self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[tool_name].__CameraOutputRestriction__]))
+            if self.Tools[ToolName].__SubStreamOutputIndexes__  and not self.Tools[ToolName].__SubStreamOutputIndexes__ == self.Tools[ToolName].__SubStreamInputIndexes__:
+                self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamOutputIndexes__]))
             else:
                 self._Log("     Outputs the same camera indexes.")
-            if self._ToolsCreationReferences[tool_name]:
+            if self._ToolsCreationReferences[ToolName]:
                 self._Log("     Creation References:")
-                for argName, toolReference in self._ToolsCreationReferences[tool_name].items():
+                for argName, toolReference in self._ToolsCreationReferences[ToolName].items():
                     self._Log("         -> Access to {0} from tool {1}".format(argName, toolReference))
             else:
                 self._Log("     No creation reference.")
-            if self._ToolsExternalParameters[tool_name]:
+            if self._ToolsExternalParameters[ToolName]:
                 self._Log("     Modified Parameters:")
-                for var, value in  self._ToolsExternalParameters[tool_name].items():
+                for var, value in  self._ToolsExternalParameters[ToolName].items():
                     self._Log("         -> {0} = {1}".format(var, value))
             else:
                 self._Log("     Using default parameters.")
@@ -787,8 +800,8 @@ class Framework:
             else:
                 ModuleName = Module.__Name__
             if self._LogT is None:
-                if not self.PropagatedEvent is None:
-                    self._LogT = self.PropagatedEvent.timestamp
+                if not self.PropagatedContainer is None:
+                    self._LogT = self.PropagatedContainer.timestamp
                     self._Log('t = {0:.3f}s'.format(self._LogT))
 
             while len(Message) > self._MaxColumnWith:
@@ -855,8 +868,8 @@ class Module:
         self.__Type__ = None
         self.__Initialized__ = False
         self.__SavedValues__ = {}
-        self.__CameraInputRestriction__ = []
-        self.__CameraOutputRestriction__ = []
+        self.__SubStreamInputIndexes__ = []
+        self.__SubStreamOutputIndexes__ = []
         
         self._MonitoredVariables = []
         self._MonitorDt = 0
@@ -906,14 +919,6 @@ class Module:
         '''
         return self.__Framework__._GetHighestLevelTau(self._RunningEvent)
 
-    def _SetOutputCameraIndexes(self):
-        '''
-        Method that sets the output camera Indexes by that module.
-        By default, the output camera indexes are the same as the input camera indexes.
-        Override this method for specific cases
-        '''
-        self.__CameraOutputRestriction__ = list(self.__CameraInputRestriction__)
-
     def __Initialize__(self, Parameters):
         # First restore all previous values
         self.Log(" > Initializing module")
@@ -942,8 +947,6 @@ class Module:
         # Initialize the stuff corresponding to this specific module
         if not self._InitializeModule():
             return False
-
-        self._SetOutputCameraIndexes()
 
         # Finalize Module initialization
         if self.__Type__ != 'Input':
@@ -974,6 +977,15 @@ class Module:
 
         self.__Initialized__ = True
         return True
+
+    def _SetInputModuleSubStreamIndexes(self, Indexes):
+        '''
+        Specific method for input modules.
+        Upon calling when framework is created, will allow the module to set its variables accordingly to what was specified in the project file.
+        Cannot create a framework with an input module that has not its proper method.
+        Be careful to have variables that wont be overwritten during initialization of the framework
+        '''
+        return False
 
     def __UpdateParameter__(self, Key, Value):
         self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__dict__[Key], Value))
@@ -1028,7 +1040,7 @@ class Module:
             return None
 
     def __OnEventRestricted__(self, eventContainer):
-        for event in eventContainer.GetEvents(self.__CameraInputRestriction__):
+        for event in eventContainer.GetEvents(self.__SubStreamInputIndexes__):
             self._RunningEvent = event
             self._OnEventModule(event)
         return eventContainer.IsFilled
@@ -1253,7 +1265,7 @@ class _EventContainerClass: # Holds the timestamp and manages the subStreamIndex
         if not SubStreamIndex in self.Events:
             self.Events[SubStreamIndex] = []
         self.Events[SubStreamIndex].append(Extension(Container = self, SubStreamIndex = SubStreamIndex, **kwargs))
-    def GetEvents(self, SubStreamRestriction = []):
+    def GetEvents(self, SubStreamRestriction = {}):
         RequestedEvents = []
         for SubStreamIndex, Events in self.Events.items():
             if not SubStreamRestriction or SubStreamIndex in SubStreamRestriction:

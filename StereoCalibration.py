@@ -124,7 +124,7 @@ class StereoCalibration(Module):
         for ToolName, Tool in self.__Framework__.Tools.items():
             if not Tool.__Type__ == 'Input':
                 continue
-            UsedIndex = Tool.__CameraInputRestriction__[0]
+            UsedIndex = Tool.__SubStreamOutputIndexes__[0]
             if 'right' in ToolName.lower():
                 CamerasNames[UsedIndex] = 'right'
             elif 'left' in ToolName.lower():

@@ -26,7 +26,6 @@ class Reader(Module):
         Module.__init__(self, Name, Framework, argsCreationReferences)
         self.__Type__ = 'Input'
 
-        self._CameraIndex = 0
         self._DatVersion = 2
         self._RemoveNegativeTimeDifferences = True
         self._SaveStream = False
@@ -51,13 +50,15 @@ class Reader(Module):
     def Geometry(self, value):
         self._Geometry = value
 
-    def _SetOutputCameraIndexes(self):
-        if self.__CameraInputRestriction__:
-            if len(self.__CameraInputRestriction__) == 1:
-                self._CameraIndex = self.__CameraInputRestriction__[0]
-            else:
-                self.LogWarning("Unvalid cameras index for this module")
-        self.__CameraOutputRestriction__ = [self._CameraIndex]
+    def _SetInputModuleSubStreamIndexes(self, Indexes):
+        if len(Indexes) == 0:
+            self.LogWarning("No Substream index have been specified.")
+            return False
+        if len(Indexes) == 1:
+            self.SubStreamIndex = Indexes[0]
+            return True
+        self.LogWarning("Too many outputs indexes specified for this module.")
+        return False
 
     def _InitializeModule(self):
 
@@ -99,7 +100,7 @@ class Reader(Module):
         if Data is None:
             return None
         t, X, p = Data
-        BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self._CameraIndex)
+        BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self.SubStreamIndex)
 
 
     def FastForward(self, t):

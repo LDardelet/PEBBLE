@@ -988,9 +988,9 @@ class Module:
         return False
 
     def __UpdateParameter__(self, Key, Value):
-        self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__dict__[Key], Value))
         self.__SavedValues__[Key] = copy.copy(self.__dict__[Key])
         self.__dict__[Key] = Value
+        self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__SavedValues__[Key], self.__dict__[Key]))
 
     def GetSnapIndexAt(self, t):
         return (abs(np.array(self.History['t']) - t)).argmin()

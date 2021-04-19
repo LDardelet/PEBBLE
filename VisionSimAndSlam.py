@@ -268,7 +268,7 @@ class MovementSimulatorClass(Module):
         self.BaseMap = Map3DClass(self._MapType, self.BiCameraSystem)
 
         self.StreamName = self.__Framework__._GetStreamFormattedName(self)
-        self.Geometry = BiCameraClass.Definition.tolist() + [2]
+        self.Geometry = BiCameraClass.Definition.tolist()
 
         self.nEvent = 0
         self.Current3DEvent = None

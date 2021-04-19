@@ -29,7 +29,7 @@ class Mapper(Module):
     def _InitializeModule(self):
         self.Trackers = {}
         self.ActiveTrackers = set()
-        self.Pose = PoseClass(np.array(self.Geometry)[:2], self)
+        self.Pose = PoseClass(np.array(self.Geometry), self)
         self.IsComputing = False
         self.Maps = []
         self.CurrentMap = None
@@ -80,7 +80,7 @@ class Mapper(Module):
         self.IsComputing = True
         for TrackerID in self.TrustedTrackers:
             self.Trackers[TrackerID].Activate()
-        self.CurrentMap = MapClass(self, np.array(self.Geometry[:2]), event.timestamp)
+        self.CurrentMap = MapClass(self, np.array(self.Geometry), event.timestamp)
         self.Maps += [self.CurrentMap]
         self.LogSuccess("Generating map #{0}".format(len(self.Maps)))
     def StopMap(self, event):

@@ -17,8 +17,6 @@ _EVENT_TYPE_ADITIONNAL_BYTES = {0: None, 1:4, 2:4, 3:3, 4:7}
 _EVENT_TYPE_ANALYSIS_FUNCTIONS_NAMES = {0: None, 1: '_DVS_BYTES_ANALYSIS', 2: '_ATIS_BYTES_ANALYSIS', 3: None, 4:None} # All necessary variables are hardcoded in these functions, as they don't have necessarily the same output and needs
 
 class Reader(Module):
-    DefaultGeometry = [304,240,2]
-
     def __init__(self, Name, Framework, argsCreationReferences):
         '''
         Class to read events streams files.
@@ -38,7 +36,11 @@ class Reader(Module):
 
         self._TxtFileStructure = ['t', 'x', 'y', 'p']
         self._TxtTimestampMultiplier = 1.
-        self._TxtDefaultGeometry = [240, 180, 2]
+        self._TxtDefaultGeometry = [240, 180]
+        self._DatDefaultGeometry = [304, 240]
+        self._H5DefaultGeometry = [346, 260]
+        self._AedatDefaultGeometry = [346, 260]
+        self._EsDefaultGeometry = [346, 260]
         self._TxtPosNegPolarities = False
 
         self._NeedsLogColumn = False
@@ -130,8 +132,7 @@ class Reader(Module):
         self.Data = self.CurrentFile[Keys.pop(0)]
         while Keys:
             self.Data = self.Data[Keys.pop(0)]
-        #self.Geometry = np.array([self.Data[:,0].max() + 1, self.Data[:,1].max() + 1, 2], dtype = int)
-        self.Geometry = np.array([346,260,2])
+        self.Geometry = np.array(self._H5DefaultGeometry)
         self.NEvents = self.Data.shape[0]
         self.nEvent = 0
         self.tOffset = self.Data[0,2]
@@ -154,7 +155,7 @@ class Reader(Module):
         self.CurrentByteBatch = b''
 
         self.PreviousEventTs = 0
-        self.Geometry = np.array([346, 260, 2])
+        self.Geometry = np.array(self._AedatDefaultGeometry)
         self.xMax = self.Geometry[0]-1
         self._Version = self.CurrentFile.readline().split(b'AER-DAT')[1].split(b'\r')
 
@@ -283,7 +284,7 @@ class Reader(Module):
         return float(self.PreviousEventTs) * 10**-6, np.array([x, y]), int(p)
 
     def _DealWithHeaderEs(self):
-        self.Geometry = list(self.DefaultGeometry)
+        self.Geometry = list(self._EsDefaultGeometry)
 
         Header = self.CurrentFile.read(_ES_HEADER_SIZE)
         Version = Header[12]
@@ -326,7 +327,7 @@ class Reader(Module):
         self.CurrentFile = open(self.StreamName,'rb')
 
         HeaderHandled = self._DealWithHeaderDat()
-        if self.Geometry == self.DefaultGeometry:
+        if self.Geometry == self._DatDefaultGeometry:
             self.Log("No geometry found.")
             if self._TryUseDefaultGeometry:
                 self.LogWarning("Using default geometry : {0}".format(self.Geometry))
@@ -372,7 +373,7 @@ class Reader(Module):
 
     def _DealWithHeaderDat(self):
         self.Header = False
-        self.Geometry = list(self.DefaultGeometry)
+        self.Geometry = list(self._DatDefaultGeometry)
         FoundHeightOrWidth = False
         while peek(self.CurrentFile) == b'%':
             HeaderNextLine = self.CurrentFile.readline()

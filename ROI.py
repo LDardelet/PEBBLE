@@ -27,7 +27,7 @@ class ROI(Module):
         self.AllowedEvents = 0
         self.FilteredEvents = 0
         self.MinX = np.array([self._xMinOffset, self._yMinOffset])
-        self.MaxX = self.Geometry[:2] - np.array([self._xMaxOffset, self._yMaxOffset])
+        self.MaxX = self.Geometry - np.array([self._xMaxOffset, self._yMaxOffset])
 
         return True
     

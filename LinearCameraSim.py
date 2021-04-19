@@ -254,7 +254,7 @@ class MovementSimulatorClass(Module):
         self.BiCameraSystem = BiCameraClass(self, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)
         self.BaseMap = Map2DClass(self._MapType, self.BiCameraSystem)
 
-        self.Geometry = BiCameraClass.Definition.tolist() + [2]
+        self.Geometry = BiCameraClass.Definition.tolist()
 
         self.nEvent = 0
         self.Current2DEvent = None

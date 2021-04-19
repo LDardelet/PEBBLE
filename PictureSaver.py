@@ -22,7 +22,7 @@ class PictureSaver(Module):
         self._Tau = 0.005
 
     def _InitializeModule(self):
-        self.ScreenSize = tuple(self.Geometry[:2])
+        self.ScreenSize = tuple(self.Geometry)
         self.StreamsContainers = {}
         self.StreamsLastFrames = {}
         self.StreamsFAxs = {}

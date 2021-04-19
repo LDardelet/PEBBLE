@@ -27,8 +27,8 @@ class Stabilizer(Module):
         self._RatioThetaTrackers = 1.
 
     def _InitializeModule(self):
-        self.ScreenCenter = np.array(self.Geometry[:2])/2
-        self.ScreenSize = np.array(self.Geometry[:2])
+        self.ScreenCenter = np.array(self.Geometry)/2
+        self.ScreenSize = np.array(self.Geometry)
 
         self.RotationCenter = np.array(self.ScreenCenter)
         self.ADis = 0.

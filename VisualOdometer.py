@@ -38,7 +38,7 @@ class VisualOdometer(Module):
         self._Tau = 0.05
 
     def _InitializeModule(self):
-        self.ScreenSize = np.array(self.Geometry[:2])
+        self.ScreenSize = np.array(self.Geometry)
         self.ScreenCenter = self.ScreenSize / 2 - 0.5
 
         self.FlowMap = np.zeros(tuple(self.ScreenSize) + (3,), dtype = float) # fx, fy, t
@@ -178,6 +178,33 @@ class VisualOdometer(Module):
             d*(nx*dx + ny*dy)/self.K,
             (nx*dy - ny*dx)])
 
+    def Q(self, dx, dy, d):
+        return np.array([[d, self.K + dx**2/self.K, 0., dx*dy/self.K, dx*d/self.K, dy],
+                         [0., dx*dy/self.K, d, self.K + dy**2/self.K, dy*d/self.K, -dx]])
+    
+    def ExpectedVelocity(self, dx, dy, d):
+        return self.Q(dx, dy, d).dot(self.Omega)
+
+    def EventTau(self, event = None):
+        if event is None or not event.Has(CameraEvent):
+            dx, dy = self.ScreenCenter
+        else:
+            dx, dy = event.location
+        if event is None or not event.Has(DisparityEvent):
+            xs, ys = np.where(self.DisparityMap[:,:,1] > self.LastT - self._Tau)
+            ds = self.DisparityMap[xs,ys,0]
+            if ds.size != 0:
+                d = ds.mean()
+            else:
+                d = (self._DisparityRange[0] + self._DisparityRange[1])/2
+        else:
+            d = event.disparity
+        ExpectedVelocity = np.linalg.norm(self.ExpectedVelocity(dx, dy, d))
+        if not ExpectedVelocity == 0:
+            return 1./ExpectedVelocity
+        else:
+            return 0
+
     def UpdateW(self, t, location, f):
         decay = np.e**((self.LastWT - t)/self._Tau)
         self.LastWT = t
@@ -271,41 +298,3 @@ class VisualOdometer(Module):
     @property
     def UsedErrorFlow(self):
         return self.UsedErrorFlowSum / max(0.1, self.UsedAFlow)
-
-class Quat:
-    def __init__(self, w, x=None, y=None, z=None):
-        if x is None:
-            w, x, y, z = w
-        elif y is None:
-            x, y, z = x
-        self.q = np.array([w, x, y, z])
-        self.q /= np.linalg.norm(self.q)
-    @property
-    def conj(self):
-        return self.__class__(self.q * np.array([1, -1, -1, -1]))
-    @property
-    def w(self):
-        return self.q[0]
-    @property
-    def v(self):
-        return self.q[1:]
-    def __repr__(self):
-        return str(self.q)
-    def __mul__(self, rhs):
-        if type(rhs) == self.__class__:
-            return self.__class__(self.w*rhs.w - self.v.dot(rhs.v), self.w*rhs.v + rhs.w*self.v + np.cross(self.v, rhs.v))
-        elif type(rhs) == np.ndarray:
-            if rhs.shape[0] != 3:
-                raise NotImplemented
-            return self.__class__(- self.v.dot(rhs), self.w*rhs + np.cross(self.v, rhs))
-        else:
-            return self.__class__(self.q * rhs)
-    def __rmul__(self, lhs):
-        if type(lhs) == self.__class__:
-            return self.__class__(self.w*lhs.w - self.v.dot(lhs.v), self.w*lhs.v + lhs.w*self.v - np.cross(self.v, lhs.v))
-        elif type(rhs) == np.ndarray:
-            if rhs.shape[0] != 3:
-                raise NotImplemented
-            return self.__class__(- self.v.dot(lhs), self.w*lhs - np.cross(self.v, lhs))
-        else:
-            return self.__class__(self.q * lhs)

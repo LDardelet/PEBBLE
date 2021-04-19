@@ -11,13 +11,20 @@ class Memory(Module):
         self.__Type__ = 'Memory'
 
         self._MonitorDt = 0. # By default, the memory module does NOT take any shapshot, to ensure memory doesn't get filled.
-        self._MonitoredVariables = [("STContext", np.array)]
+        self._MonitoredVariables = []
         self._NeedsLogColumn = False
+
+        self._DefaultTau = 0.1
+        self._ExpectedDensity = 0.01
 
     def _InitializeModule(self):
 
-        self.STContext = -np.inf*np.ones(self.Geometry)
+        self.STContext = -np.inf*np.ones(tuple(self.Geometry) + (2,))
         self.LastEvent = None
+
+        self.AExp = np.prod(self.Geometry[:2]) * self._ExpectedDensity
+        self.A = 0.
+        self.LastT = -np.inf
 
         return True
 
@@ -26,8 +33,15 @@ class Memory(Module):
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
 
         self.STContext[position] = self.LastEvent.timestamp
+        self.A = self.A * np.e**((self.LastT - event.timestamp) / self._DefaultTau) + 1.
+        self.LastT = event.timestamp
 
         return
+
+    def EventTau(self, EventConcerned = None):
+        if self.A <= 10:
+            return 0.
+        return np.log(self.A/(self.A-1)) / np.log(self.AExp/(self.AExp-1)) * self._DefaultTau
 
     def CreateSnapshot(self):
         return np.array(self.STContext)
@@ -37,7 +51,6 @@ class Memory(Module):
 
     def GetTs(self, Tau, xy = None, R = None):
         if not xy is None:
-            x, y = xy
             Map = self.GetSquarePatch(xy, R)
         else:
             Map = self.STContext

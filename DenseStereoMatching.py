@@ -45,7 +45,7 @@ class DenseStereo(Module):
                                     ('UnmatchedEvents', float)]
 
     def _InitializeModule(self):
-        self.UsedGeometry = np.array(self.Geometry)[:2]
+        self.UsedGeometry = np.array(self.Geometry)
 
         self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}
         self.RightMemory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]

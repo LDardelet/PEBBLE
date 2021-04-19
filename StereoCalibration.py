@@ -25,7 +25,7 @@ class StereoCalibration(Module):
         self._EnhanceSTContext = True
 
     def _InitializeModule(self):
-        self.UsedGeometry = np.array(self.Geometry[:2])
+        self.UsedGeometry = np.array(self.Geometry)
         self.RectifyFunction = self.MatrixRectification
         if type(self._CalibrationInput) == str:
             if self._CalibrationInput:
@@ -124,7 +124,7 @@ class StereoCalibration(Module):
         for ToolName, Tool in self.__Framework__.Tools.items():
             if not Tool.__Type__ == 'Input':
                 continue
-            UsedIndex = Tool.__SubStreamOutputIndexes__[0]
+            UsedIndex = Tool.SubStreamIndex[0]
             if 'right' in ToolName.lower():
                 CamerasNames[UsedIndex] = 'right'
             elif 'left' in ToolName.lower():

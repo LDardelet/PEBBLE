@@ -37,7 +37,6 @@ class FlowComputer(Module):
         self._MaxFlowValue = np.inf
 
     def _InitializeModule(self):
-        self.CurrentShape = list(self.Geometry)
         self.Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.STContext = self.Memory.STContext
 
@@ -55,7 +54,7 @@ class FlowComputer(Module):
 
         self.NRecursions = 0
         self.NFlowEvents = 0
-        self.ScreenSize = np.array(self.Geometry[:2])
+        self.ScreenSize = np.array(self.Geometry)
 
         #np.seterr(all='raise')
         self.Filters = [0,0,0]

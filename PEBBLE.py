@@ -11,6 +11,7 @@ import shutil
 import _pickle as cPickle
 import json
 from datetime import datetime as dtModule
+import matplotlib.pyplot as plt
 import ast
 
 _RUNS_DIRECTORY = os.path.expanduser('~/Runs/')
@@ -124,13 +125,13 @@ class Framework:
         '''
         return self._GetParentModule(Tool).StreamName
 
-    def _GetHighestLevelTau(self, EventConcerned):
+    def _GetPreviousLevelTau(self, EventConcerned, ModuleAsking):
         NameAsking = ModuleAsking.__Name__
-        ProposedTau = None
-        for NameProposing in reversed(self.ToolsList):
-            ProposedTau = self.Tools[NameProposing]._ProposedTau(EventConcerned)
-            if not ProposedTau is None:
-                return ProposedTau
+        EventTau = None
+        for NameProposing in reversed(self.ToolsList[:ModuleAsking.__ToolIndex__]):
+            EventTau = self.Tools[NameProposing].EventTau(EventConcerned)
+            if not EventTau is None and not EventTau == 0:
+                return EventTau
 
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
@@ -757,6 +758,20 @@ class Framework:
         self.DisplayCurrentProject()
         self.Modified = True
 
+    def DelTool(self, ToolName):
+        ToolIndex = self._ProjectRawData[ToolName]['Order']
+        del self._ProjectRawData[ToolName]
+        for RemainingToolName, RemainingRawData in self._ProjectRawData.items():
+            if RemainingRawData['Order'] > ToolIndex:
+                RemainingRawData['Order'] -= 1
+
+        self._Log("DelTool finished. Reloading project.")
+        self._LoadProject()
+        self._Log("New project : ")
+        self._Log("")
+        self.DisplayCurrentProject()
+        self.Modified = True
+
     def DisplayCurrentProject(self):
         self._Log("# Framework\n", 3)
         self._Log("")
@@ -917,7 +932,7 @@ class Module:
         Method to retreive the highest level information Tau from the framework.
         If no Tau is proposed by any other module, will return None, so default value has to be Module specific
         '''
-        return self.__Framework__._GetHighestLevelTau(self._RunningEvent)
+        return self.__Framework__._GetPreviousLevelTau(self._RunningEvent, self)
 
     def __Initialize__(self, Parameters):
         # First restore all previous values
@@ -954,6 +969,11 @@ class Module:
         else:
             OnEventMethodUsed = self.__OnEventInput__
 
+        if self._MonitorDt and self._ProposesTau: # We check if that method was overloaded
+            if not self._MonitoredVariables:
+                self.LogWarning("Enabling monitoring for Tau value")
+            self._MonitoredVariables = [('AverageTau', float)] + self._MonitoredVariables
+
         if self._MonitorDt and self._MonitoredVariables:
             self.History = {'t':[]}
             self.__MonitorRetreiveMethods = {}
@@ -977,6 +997,10 @@ class Module:
 
         self.__Initialized__ = True
         return True
+
+    @property
+    def _ProposesTau(self):
+        return 'EventTau' in self.__class__.__dict__
 
     def _SetInputModuleSubStreamIndexes(self, Indexes):
         '''
@@ -1003,10 +1027,14 @@ class Module:
     def _OnEventModule(self, event):
         # Template for user-filled module event running method
         pass
-    def _ProposedTau(self, event):
+    def EventTau(self, event = None):
         # User-filled method to propose a tau for the whole framework. Ideally, thet further in the framework, the higher the information and the more acurate Tau information is
-        # Return None for default, or for non defined tau yet
+        # Return None for default, or 0 for non-defined tau yet
         pass
+    @property
+    def AverageTau(self):
+        # For monitoring purposes, a module that proposes a Tau should propose an average tau value, that does not depend on the event. Thus, EventTau(None) will be called upon monitoring
+        return self.EventTau(None)
     def _OnSnapModule(self):
         # Template for user-filled module preparation for taking a snapshot. 
         pass
@@ -1095,6 +1123,34 @@ class Module:
                 SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
 
             return lambda :UsedType(SubRetreiveMethod(self))
+
+    def PlotHistoryData(self, MonitoredVariable, fax = None):
+        t = np.array(self.History['t'])
+        Data = np.array(self.History[MonitoredVariable])
+        if len(Data.shape) == 0:
+            raise Exception("No data saved yet")
+        if len(Data.shape) == 1:
+            if fax is None:
+                f, ax = plt.subplots(1,1)
+                ax.set_title(self.__Name__ + ' : ' + MonitoredVariable)
+                ax.plot(t, Data)
+            else:
+                f, ax = fax
+                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
+                ax.legend()
+            return f, ax
+        if len(Data.shape) == 2:
+            if fax is None:
+                f, ax = plt.subplots(1,1)
+                ax.set_title(self.__Name__ + ' : ' + MonitoredVariable)
+            else:
+                f, ax = fax
+            for nCol in range(Data.shape[1]):
+                ax.plot(t, Data[:,nCol], label = str(nCol))
+            ax.legend()
+            return f, ax
+        if len(Data.shape) > 2:
+            raise Exception("Matrices unfit to be plotted")
 
     def _SaveData(self, BinDataFile, MaxHistoryChunkSizeB = 16777216):
         if self._MonitorDt and self._MonitoredVariables:
@@ -1407,10 +1463,10 @@ class PoseEvent(_EventExtensionClass):
     _Fields = ('poseHomography', 'worldHomography', 'reprojectionError')
 class TauEvent(_EventExtensionClass):
     _Key = 5
-    _Fields = ('tau')
+    _Fields = ('tau',)
 class FlowEvent(_EventExtensionClass):
     _Key = 6
-    _Fields = ('flow')
+    _Fields = ('flow',)
 class OdometryEvent(_EventExtensionClass):
     _Key = 7
     _Fields = ('omega', 'v')
@@ -1438,8 +1494,6 @@ class ParametersDictClass(dict):
                         if key in self[subKey].keys():
                             Found = True
                             self[subKey][key] = value
-                        else:
-                            raise KeyError("{0} missing in {1}".format(key, subKey))
                 if not Found:
                     raise KeyError(key)
         else:

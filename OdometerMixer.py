@@ -15,7 +15,7 @@ class OdometerMixer(Module):
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = [('D', float),
-                                    ('Omega', np.array),
+                                    ('omega', np.array),
                                     ('V', np.array)]
 
         self._ReferenceIndex = 0
@@ -39,11 +39,11 @@ class OdometerMixer(Module):
         self._DefaultK = 450
 
     def _InitializeModule(self):
-        self.ReferenceOmega = np.zeros(3)
-        self.ReferenceV = np.zeros(3)
+        self.omegaReference = np.zeros(3)
+        self.VReference = np.zeros(3)
 
-        self.StereoOmega = np.zeros(3)
-        self.StereoV = np.zeros(3)
+        self.omegaStereo = np.zeros(3)
+        self.VStereo = np.zeros(3)
 
         self.R = np.identity(3) # R denotes rotation from world to stereoBase
         self.T = np.zeros(3) # T represents the world location of the stereo base
@@ -54,7 +54,7 @@ class OdometerMixer(Module):
 
         self.StartAfter = np.inf
 
-        self.ScreenSize = np.array(self.Geometry)[:2]
+        self.ScreenSize = np.array(self.Geometry)
 
         if self._StereoBaseVector is None:
             self.StereoBaseVector = np.array([self._DefaultStereoBaseDistance, 0., 0.])
@@ -72,6 +72,7 @@ class OdometerMixer(Module):
             self._KMat = [np.array([[self._DefaultK, 0., self.ScreenSize[0]/2],
                                     [0., -self._DefaultK, self.ScreenSize[1]/2],
                                     [0., 0., 1.]]) for _ in range(2)]
+        self.K = self._DefaultK
 
         if self._KMat is None:
             self._AddVirtualFrame = False
@@ -84,7 +85,10 @@ class OdometerMixer(Module):
             self.LogWarning("Not adding virtual frame : both depth and disparity were specified")
         if self._AddVirtualFrame:
             if self._VirtualReferenceFrameDepth is None:
-                self._VirtualReferenceFrameDepth = int(abs(self.StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDisparity) + 0.5)
+                self._VirtualReferenceFrameDepth = abs(self.StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDisparity)
+            else:
+                self._VirtualReferenceFrameDisparity = abs(self.StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDepth)
+
             Z = self._VirtualReferenceFrameDepth
             X = 0
             Y = 0.
@@ -108,20 +112,28 @@ class OdometerMixer(Module):
         self.DSum = 0.
         self.LastDUpdateT = -np.inf
 
+        self.OmegaToMotionMatrix = np.array([[0.          , 0., 0.          , -1., 0.          , 0.],
+                                             [0.          , -1., 0.          , 0. , 0.          , 0.],
+                                             [0.          , 0., 0.          , 0. , 0.          , -1.],
+                                             [-self.StereoBaseDistance, 0., 0.          , 0. , 0.          , 0.],
+                                             [0.          , 0., self.StereoBaseDistance, 0. , 0.          , 0.],
+                                             [0.          , 0., 0.          , 0. , self.StereoBaseDistance, 0.]])
+        self.MotionToOmegaMatrix = np.linalg.inv(self.OmegaToMotionMatrix)
+
         return True
 
     def _OnEventModule(self, event):
         if event.Has(OdometryEvent):
             if event.SubStreamIndex == self._ReferenceIndex:
-                self.ReferenceV = np.array(event.v)
-                self.ReferenceOmega = np.array(event.omega)
+                self.VReference = np.array(event.v)
+                self.omegaReference = np.array(event.omega)
             else:
-                self.StereoV = np.array(event.v)
-                self.StereoOmega = np.array(event.omega)
+                self.VStereo = np.array(event.v)
+                self.omegaStereo = np.array(event.omega)
             if not self.Started:
                 self.IdleCams[event.SubStreamIndex] = False
                 if not True in self.IdleCams:
-                    if abs(self.ReferenceOmega - self.StereoOmega).max() <= self._MaxCamToCamRotationSpeedError:
+                    if abs(self.omegaReference - self.omegaStereo).max() <= self._MaxCamToCamRotationSpeedError:
                         if event.timestamp > self.StartAfter:
                             self.LogSuccess("Started odometry")
                             self.LastT = event.timestamp
@@ -145,30 +157,55 @@ class OdometerMixer(Module):
                         NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
         return
 
+    def EventTau(self, event = None):
+        if self._VirtualReferenceFrameDisparity is None:
+            return 0
+        if not self.Started:
+            return 0
+        if event is None or not event.Has(CameraEvent):
+            dx, dy = self.ScreenSize / 2
+        else:
+            dx, dy = event.location
+        if event is None or not event.Has(DisparityEvent):
+            d = self._VirtualReferenceFrameDisparity
+        else:
+            d = event.disparity
+        omega = self.omega
+        if event is None:
+            V = self.V + np.cross(self.omega, self.StereoBaseVector/2) # We set the observation location in the middle of the stereo rig
+        else:
+            V = self.V
+            if event.SubStreamIndex != self._ReferenceIndex:
+                V += np.cross(self.omega, self.StereoBaseVector)
+        Q = np.array([[d, self.K + dx**2/self.K, 0., dx*dy/self.K, dx*d/self.K, dy],
+                                     [0., dx*dy/self.K, d, self.K + dy**2/self.K, dy*d/self.K, -dx]])
+        ExpectedVelocity = np.linalg.norm(Q.dot(self.MotionToOmegaMatrix.dot(np.concatenate((omega, V)))))
+        if not ExpectedVelocity == 0:
+            return 1./ExpectedVelocity
+        else:
+            return 0
+
     @property
-    def Omega(self):
-        return (self.ReferenceOmega + self.StereoOmega)/2
+    def omega(self):
+        return (self.omegaReference + self.omegaStereo)/2
     @property
     def V(self):
-        return (self.ReferenceV + self.StereoV - np.cross(self.Omega, self.StereoBaseVector))/2
-        #return self.ReferenceV
+        return (self.VReference + (self.VStereo - np.cross(self.omega, self.StereoBaseVector)))/2
+        #return self.VReference
 
     @property
     def D(self):
         return self.DSum / max(0.01, self.ASum)
     @property
     def DComp(self):
-        Omega = self.Omega
-        if np.linalg.norm(self.Omega[1:]) == 0:
+        omega = self.omega
+        if np.linalg.norm(self.omega[1:]) == 0:
             return None
-        #return -(Omega[2] * (self.ReferenceV[1] - self.StereoV[1]) - Omega[1] * (self.ReferenceV[2] - self.StereoV[2])) / (Omega[1]**2 + Omega[2]**2)
-        return np.sqrt((((self.ReferenceV[1] - self.StereoV[1]) * np.array([0,1,1]))**2).sum() / (Omega[1]**2 + Omega[2]**2))
-
-
+        return np.sqrt((((self.VReference[1] - self.VStereo[1]) * np.array([0,1,1]))**2).sum() / (omega[1]**2 + omega[2]**2))
 
     def UpdateFrame(self, t):
         Delta = (t - self.LastT)
-        InstantRotation = Delta * self.Omega
+        InstantRotation = Delta * self.omega
         theta = np.linalg.norm(InstantRotation)
         self.LastT = t
         if theta == 0:

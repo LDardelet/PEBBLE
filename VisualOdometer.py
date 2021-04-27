@@ -31,11 +31,13 @@ class VisualOdometer(Module):
         self._MinDetRatioToSolve = np.inf
 
         self._ValidDisparityTauRatio = 1.
-        self._ValidFlowTauRatio = 0.4
+        self._ValidFlowTauRatio = 1.
 
         self._RejectMaxErrorRatio = 1.
+        self._MinActivity = 20.
 
         self._Tau = 0.05
+        self._FrameworkTauRatio = 4
 
     def _InitializeModule(self):
         self.ScreenSize = np.array(self.Geometry)
@@ -105,7 +107,7 @@ class VisualOdometer(Module):
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
             #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
-            if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self._Tau*self._ValidDisparityTauRatio:
+            if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self.Tau*self._ValidDisparityTauRatio:
                 IsValidEvent = True
         if event.Has(DisparityEvent): # We assume here that there is a CameraEvent, since we have a Disparity event.
             if not self.Started:
@@ -118,18 +120,19 @@ class VisualOdometer(Module):
                 else:
                     return
             self.DisparityMap[event.location[0], event.location[1], :] = np.array([event.disparity, event.timestamp])
-            if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self._Tau*self._ValidFlowTauRatio:
+            if event.timestamp - self.FlowMap[event.location[0], event.location[1], 2] < self.Tau*self._ValidFlowTauRatio:
                 IsValidEvent = True
         
         if IsValidEvent:
             f = self.FlowMap[event.location[0], event.location[1], :2]
             disparity = self.DisparityMap[event.location[0], event.location[1], 0]
             self.Update(event.timestamp, event.location, f, disparity)
-            event.Attach(OdometryEvent, v = self.V, omega = self.omega)
+            if self.A >= self._MinActivity:
+                event.Attach(OdometryEvent, v = self.V, omega = self.omega)
         return
 
     def Update(self, t, location, f, disparity):
-        decay = np.e**((self.LastT - t)/self._Tau)
+        decay = np.e**((self.LastT - t)/self.Tau)
         self.LastT = t
 
 
@@ -189,9 +192,9 @@ class VisualOdometer(Module):
         if event is None or not event.Has(CameraEvent):
             dx, dy = self.ScreenCenter
         else:
-            dx, dy = event.location
+            dx, dy = np.array(event.location) - self.ScreenCenter
         if event is None or not event.Has(DisparityEvent):
-            xs, ys = np.where(self.DisparityMap[:,:,1] > self.LastT - self._Tau)
+            xs, ys = np.where(self.DisparityMap[:,:,1] > self.LastT - self.Tau*self._ValidDisparityTauRatio)
             ds = self.DisparityMap[xs,ys,0]
             if ds.size != 0:
                 d = ds.mean()
@@ -205,8 +208,18 @@ class VisualOdometer(Module):
         else:
             return 0
 
+    @property
+    def Tau(self):
+        if self._FrameworkTauRatio == 0:
+            return self._Tau
+        Tau = self.FrameworkTau
+        if Tau is None:
+            return self._Tau
+        else:
+            return Tau * self._FrameworkTauRatio
+
     def UpdateW(self, t, location, f):
-        decay = np.e**((self.LastWT - t)/self._Tau)
+        decay = np.e**((self.LastWT - t)/self.Tau)
         self.LastWT = t
 
         Nf = np.linalg.norm(f)

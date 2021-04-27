@@ -36,7 +36,7 @@ class FlowMemory(Module):
         if EventConcerned is None:
             Flows = self.GetFlows(self._DefaultTau)
         else:
-            Flows = self.GetFlows(self._DefaultTau, event.location, self._RTau)
+            Flows = self.GetFlows(self._DefaultTau, EventConcerned.location, self._RTau)
         if Flows.size == 0:
             return 0
         NFlows = np.linalg.norm(Flows, axis = 1)

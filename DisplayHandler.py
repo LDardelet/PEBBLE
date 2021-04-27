@@ -60,10 +60,9 @@ class DisplayHandler(Module):
         self._MultiThread = False # USELESS.
         self._PostBoxLimit = 7
 
-        self._PostService = None
         self._NeedsLogColumn = False
 
-
+        self.PostService = None
         self.Socket = None
 
     def _InitializeModule(self):
@@ -87,8 +86,8 @@ class DisplayHandler(Module):
 
         if self._MultiThread:
             self.PostBox = Queue()
-            self._PostService = PostServiceClass(self.Socket, self._PostBoxLimit, self.PostBox)
-            self._PostService.start()
+            self.PostService = PostServiceClass(self.Socket, self._PostBoxLimit, self.PostBox)
+            self.PostService.start()
             def RCV(self, event):
                 self.PostBox.put(event.AsDict())
             def Check(self):
@@ -115,10 +114,10 @@ class DisplayHandler(Module):
         self._InitializeModule()
     def _Pause(self, Origin):
         if self._MultiThread:
-            self._PostService.Running = False
+            self.PostService.Running = False
     def _Resume(self):
         if self._MultiThread:
-            self._PostService.run()
+            self.PostService.run()
 
     def _OnEventModule(self, event):
         if self.__Started__:
@@ -129,8 +128,8 @@ class DisplayHandler(Module):
         self.EndTransmission()
 
     def EndTransmission(self):
-        if self._MultiThread and not self._PostService is None:
-            self._PostService.Running = False
+        if self._MultiThread and not self.PostService is None:
+            self.PostService.Running = False
         if not self.Socket is None:
             self._DestroySocket()
 

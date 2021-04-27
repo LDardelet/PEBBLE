@@ -18,10 +18,17 @@ class PictureSaver(Module):
         self._NeedsLogColumn = False
 
         self._FramesDt = 0.01
+        self._TauOutputs = ['Default', 'Framework']
         self._Outputs = ['Events', 'Disparities']
         self._Tau = 0.005
 
     def _InitializeModule(self):
+        if self._FramesDt == 0:
+            self.LogWarning("Sampling interval (_FramesDt) is null")
+            self.LogWarning("No pictures will be created")
+            self.Active = False
+            return True
+
         self.ScreenSize = tuple(self.Geometry)
         self.StreamsContainers = {}
         self.StreamsLastFrames = {}
@@ -71,22 +78,30 @@ class PictureSaver(Module):
 
     def Draw(self, subStreamIndex, t):
         FrameIndexes = self.StreamsLastFrames[subStreamIndex][1] + 1
-        for output in self._Outputs:
-            self.StreamsFAxs[subStreamIndex][output][1].cla()
-            for Container in output.split('+'):
-                self.StreamsContainers[subStreamIndex][Container].Draw(t, self._Tau, self.StreamsFAxs[subStreamIndex][output][1])
-            self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
-            self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
-            self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
-            self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}_{1}.png'.format(subStreamIndex, FrameIndexes))
-        self.StreamsLastFrames[subStreamIndex] = (t, FrameIndexes)
+        for TauName in self._TauOutputs:
+            if TauName == 'Default':
+                Tau = self._Tau
+            elif TauName == 'Framework':
+                Tau = self.FrameworkTau
+                if Tau is None or Tau == 0:
+                    Tau = self._Tau
+            for output in self._Outputs:
+                self.StreamsFAxs[subStreamIndex][output][1].cla()
+                for Container in output.split('+'):
+                    self.StreamsContainers[subStreamIndex][Container].Draw(t, Tau, self.StreamsFAxs[subStreamIndex][output][1])
+                self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
+                self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
+                self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
+                self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_{1}.png'.format(subStreamIndex, FrameIndexes))
+            self.StreamsLastFrames[subStreamIndex] = (t, FrameIndexes)
 
-    def OpenPictures(self, output = None, subStreamIndex = 0):
+    def OpenPictures(self, output = None, subStreamIndex = 0, TauName = 'Default'):
         if output is None:
             output = self._Outputs[0]
-        os.system(_PICTURES_VIEWER + ' ' + self.FolderName + output + '_{0}_0.png'.format(subStreamIndex))
+        os.system(_PICTURES_VIEWER + ' ' + self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_0.png'.format(subStreamIndex))
 
 class EventsContainer:
+    _TauMultiplier = 2
     def __init__(self, ScreenSize):
         self.STContext = np.zeros(ScreenSize + (2,))
 
@@ -97,10 +112,11 @@ class EventsContainer:
     def Draw(self, t, Tau, ax):
         Map = np.zeros(self.STContext.shape[:2])
         for Polarity in range(2):
-            Map = (Map + ((t - self.STContext[:,:,Polarity]) < Tau))
+            Map = (Map + ((t - self.STContext[:,:,Polarity]) < Tau*self._TauMultiplier))
         ax.imshow(np.transpose(Map), origin = 'lower', cmap = 'binary', vmin = 0, vmax = 2)
 
 class FlowsContainer:
+    _TauMultiplier = 1
     def __init__(self, ScreenSize):
         self.FlowsList = []
 
@@ -110,7 +126,7 @@ class FlowsContainer:
         self.FlowsList += [(event.timestamp, event.location, event.flow)]
 
     def Draw(self, t, Tau, ax):
-        while self.FlowsList and self.FlowsList[0][0] < t - Tau:
+        while self.FlowsList and self.FlowsList[0][0] < t - Tau*self._TauMultiplier:
             self.FlowsList.pop(0)
         for _, (x, y), flow in self.FlowsList:
             n = np.linalg.norm(flow)
@@ -121,10 +137,11 @@ class FlowsContainer:
             g = max(0., (nf * np.array([-1, np.sqrt(3)])).sum()/2)
             b = max(0., (nf * np.array([-1, -np.sqrt(3)])).sum()/2)
             color = np.sqrt(np.minimum(np.array([r, g, b, 1]), np.ones(4, dtype = float)))
-            df = flow * Tau
+            df = flow * Tau*self._TauMultiplier
             ax.plot([x,x+df[0]], [y, y+df[1]], color = color)
 
 class DisparitiesContainer:
+    _TauMultiplier = 2
     def __init__(self, ScreenSize):
         self.STDContext = np.zeros(ScreenSize + (2,))
         self.MaxD = 5
@@ -135,6 +152,6 @@ class DisparitiesContainer:
         self.STDContext[event.location[0], event.location[1],:] = np.array([event.disparity, event.timestamp])
 
     def Draw(self, t, Tau, ax):
-        Map = self.STDContext[:,:,0] * ((t - self.STDContext[:,:,1]) < Tau)
+        Map = self.STDContext[:,:,0] * ((t - self.STDContext[:,:,1]) < Tau*self._TauMultiplier)
         self.MaxD = max(self.MaxD, self.STDContext[:,:,0].max())
         ax.imshow(np.transpose(Map), origin = 'lower', vmin = 0, vmax = self.MaxD, cmap = 'hot')

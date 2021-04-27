@@ -55,6 +55,7 @@ class OdometerMixer(Module):
         self.StartAfter = np.inf
 
         self.ScreenSize = np.array(self.Geometry)
+        self.ScreenCenter = self.ScreenSize / 2
 
         if self._StereoBaseVector is None:
             self.StereoBaseVector = np.array([self._DefaultStereoBaseDistance, 0., 0.])
@@ -163,9 +164,9 @@ class OdometerMixer(Module):
         if not self.Started:
             return 0
         if event is None or not event.Has(CameraEvent):
-            dx, dy = self.ScreenSize / 2
+            dx, dy = self.ScreenCenter
         else:
-            dx, dy = event.location
+            dx, dy = np.array(event.location) - self.ScreenCenter
         if event is None or not event.Has(DisparityEvent):
             d = self._VirtualReferenceFrameDisparity
         else:

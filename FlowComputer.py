@@ -15,6 +15,7 @@ class FlowComputer(Module):
 
         self._R = 5
         self._Tau = np.inf
+        self._TauRatio = 5
         self._MinDetRatio = 0.00000001
         self._MinNEdges = 2.5
         self._MaxNEdgesRatio = 0.8
@@ -83,7 +84,10 @@ class FlowComputer(Module):
         if t == -np.inf:
             return None
         dtm = t - tm
-        ValidMap = dtm < np.inf
+        Tau = self.FrameworkTau
+        if Tau is None or Tau == 0:
+            Tau = self._Tau
+        ValidMap = dtm < Tau * self._TauRatio
         NValids = ValidMap.sum()
         if NValids < self.NEventsMin:
             return None

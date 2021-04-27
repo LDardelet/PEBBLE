@@ -8,6 +8,7 @@ import types
 import copy
 import os
 import shutil
+import pathlib
 import _pickle as cPickle
 import json
 from datetime import datetime as dtModule
@@ -16,16 +17,39 @@ import ast
 
 _RUNS_DIRECTORY = os.path.expanduser('~/Runs/')
         
-_TYPE_TO_STR = {np.array:'np.array', float:'float', int:'int', str:'str'}
+_TYPE_TO_STR = {np.array:'np.array', float:'float', int:'int', str:'str', tuple:'tuple', list:'list'}
 _STR_TO_TYPE = {value:key for key, value in _TYPE_TO_STR.items()}
+_SPECIAL_NPARRAY_CAST_MESSAGE = '$ASNPARRAY$'
 
 def LoadParametersFromFile(FileName):
     with open(FileName, 'r') as fParamsJSON:
         Parameters = json.load(fParamsJSON)
     for ModuleName, ModuleParameters in Parameters.items():
-        for nVar, (Name, StrType) in enumerate(ModuleParameters['_MonitoredVariables']):
-            ModuleParameters['_MonitoredVariables'][nVar] = (Name, _STR_TO_TYPE[StrType])
+        for Key, Value in ModuleParameters.items():
+            if Key == '_MonitoredVariables':
+                for nVar, (Name, StrType) in enumerate(list(Value)):
+                    Value[nVar] = (Name, _STR_TO_TYPE[StrType])
+            else:
+                ModuleParameters[Key] = UnSerialize(Value)
     return ParametersDictClass(Parameters)
+
+def Serialize(Value):
+    tValue = type(Value)
+    if tValue == np.ndarray:
+        return [_SPECIAL_NPARRAY_CAST_MESSAGE, Value.tolist()]
+    elif tValue in (list, tuple):
+        return [_TYPE_TO_STR[tValue]]+[Serialize(Item) for Item in Value]
+    else:
+        return Value
+def UnSerialize(Data):
+    tData = type(Data)
+    if tData == list:
+        if Data[0] == _SPECIAL_NPARRAY_CAST_MESSAGE:
+            return np.array(Data[1])
+        else:
+            return _STR_TO_TYPE[Data[0]]([UnSerialize(Item) for Item in Data[1:]])
+    else:
+        return Data
 
 class Framework:
     _Default_Color = '\033[0m'
@@ -125,13 +149,15 @@ class Framework:
         '''
         return self._GetParentModule(Tool).StreamName
 
-    def _GetPreviousLevelTau(self, EventConcerned, ModuleAsking):
+    def _GetLowerLevelTau(self, EventConcerned, ModuleAsking):
         NameAsking = ModuleAsking.__Name__
         EventTau = None
         for NameProposing in reversed(self.ToolsList[:ModuleAsking.__ToolIndex__]):
-            EventTau = self.Tools[NameProposing].EventTau(EventConcerned)
-            if not EventTau is None and not EventTau == 0:
-                return EventTau
+            ModuleProposing = self.Tools[NameProposing]
+            if (not EventConcerned is None and EventConcerned.SubStreamIndex in ModuleProposing.__SubStreamOutputIndexes__) or (EventConcerned is None and ModuleProposing._IsParent(ModuleAsking)):
+                EventTau = ModuleProposing.EventTau(EventConcerned)
+                if not EventTau is None and not EventTau == 0:
+                    return EventTau
 
     def ReRun(self, stop_at = np.inf):
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at)
@@ -163,13 +189,12 @@ class Framework:
 
             self._InitiateFolder()
             self._SaveParameters(ParametersDict)
+            self._SaveRunStreamData(StreamName, start_at, stop_at, resume)
         else:
             ParametersDict = None
         if self._LogType == 'columns':
             self._LogInit(resume)
-        FinishedProperly = self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod)
-        if FinishedProperly:
-            self.SaveCSVData()
+        self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod)
         self._LogType = 'raw'
 
     def _GetCommitValue(self):
@@ -196,8 +221,18 @@ class Framework:
                 ans = input('Unsaved changes. Please enter a file name with extension .{0}, or leave blank to discard : '.format(self._PROJECT_FILE_EXTENSION))
             if ans != '':
                 self.SaveProject(ans)
+
+        if '_LastStartWarning' in self.__dict__: # If warp was stopped midway, we delete everything, nothing must have been produced
+            for ToolName in self.ToolsList:
+                self.Tools[ToolName]._OnClosing()
+            self._SessionLogs.pop(1).close()
+            return
+
         if self._FolderData['home'] is None:
             return
+
+        if not self._CSVDataSaved:
+            self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ToolName in self.ToolsList:
             self.Tools[ToolName]._OnClosing()
         self._SessionLogs.pop(1).close()
@@ -216,15 +251,34 @@ class Framework:
                     for Name, Type in Value:
                         PickableParameters[ModuleName][Key] += [(Name, _TYPE_TO_STR[Type])]
                     continue
-                if type(Value) == np.ndarray:
-                    PickableParameters[ModuleName][Key] = Value.tolist()
-                else:
-                    PickableParameters[ModuleName][Key] = Value
-        with open(self._FolderData['home']+'params.json', 'w') as fParamsJSON:
+                PickableParameters[ModuleName][Key] = Serialize(Value)
+        with open(self.ParamsLogFile, 'w') as fParamsJSON:
             try:
                 json.dump(PickableParameters, fParamsJSON, indent=4, sort_keys=True)
+                self._Log("Saved parameters in file {0}".format(self.ParamsLogFile), 3)
             except TypeError:
-                self._Log("Unable to save parameters as non serializable object was present")
+                self._Log("Unable to save parameters as non serializable object was present", 1)
+
+    def _SaveRunStreamData(self, InputStreams, start_at, stop_at, resume):
+        if not resume:
+            fInputs = open(self.InputsLogFile, 'w')
+            for Module, InputFile in InputStreams.items():
+                fInputs.write("{0} : {1}\n".format(Module, str(pathlib.Path(InputFile).resolve())))
+            fInputs.write('\n')
+            fInputs.write("Starting at {0:.3f}s, ".format(start_at))
+            if stop_at == np.inf:
+                fInputs.write("stops at end of stream\n")
+            else:
+                fInputs.write("stops at {0:.3f}s\n".format(stop_at))
+        else:
+            fInputs = open(self.InputsLogFile, 'a')
+            fInputs.write("Resuming at {0:.3f}s".format(self.t))
+            if stop_at == np.inf:
+                fInputs.write("stops at end of stream\n")
+            else:
+                fInputs.write("stops at {0:.3f}s\n".format(stop_at))
+        self._Log("Saved input parameters in {0}".format(self.InputsLogFile), 3)
+        fInputs.close()
 
     @property
     def HistoryFolder(self):
@@ -238,6 +292,12 @@ class Framework:
             self._FolderData['pictures'] = self._FolderData['home']+'Pictures/'
             os.mkdir(self._FolderData['pictures'])
         return self._FolderData['pictures']
+    @property
+    def ParamsLogFile(self):
+        return self._FolderData['home']+'params.json'
+    @property
+    def InputsLogFile(self):
+        return self._FolderData['home']+'inputs.txt'
 
     def SaveData(self, Filename, forceOverwrite = False):
         GivenExtention = Filename.split('.')[-1]
@@ -279,6 +339,7 @@ class Framework:
         for ToolName in self.ToolsList:
             FileName = Folder + ToolName + '.csv'
             self.Tools[ToolName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
+        self._CSVDataSaved = True
     
     def _LoadFiles(self, File1, File2, onlyRawData):
         if File1 is None:
@@ -394,6 +455,7 @@ class Framework:
             if not InitializationAnswer or BareInit:
                 self._SendLog()
                 return False
+            self._CSVDataSaved = False
 
         self.Running = True
         self.Paused = ''
@@ -427,6 +489,7 @@ class Framework:
                     self.Paused = 'user'
             if self.t is None or self.t > stop_at:
                 self.Paused = 'Framework'
+        self.SaveCSVData()
         if not self.Running:
             self._Log("Main loop finished without error.")
             return True
@@ -552,6 +615,7 @@ class Framework:
 
             if enable_easy_access and ToolName not in self.__dict__.keys():
                 self.__dict__[ToolName] = self.Tools[ToolName]
+        self._CSVDataSaved = True
         self._Log("Successfully generated Framework", 3)
         self._Log("")
 
@@ -772,7 +836,7 @@ class Framework:
         self.DisplayCurrentProject()
         self.Modified = True
 
-    def DisplayCurrentProject(self):
+    def Project(self):
         self._Log("# Framework\n", 3)
         self._Log("")
 
@@ -805,8 +869,48 @@ class Framework:
             
             nOrder += 1
 
+    def VisualProject(self):
+        f, ax = plt.subplots(1,1)
+        ax.tick_params('both', left = False, labelleft = False, bottom = False, labelbottom = False)
+        SubStreamsToolLevels = {Index:0 for Index in self._SubStreamIndexes}
+        SubStreamsToolsOutput = {Index:None for Index in self._SubStreamIndexes}
+        SubStreamsColors = {Index:None for Index in self._SubStreamIndexes}
+        ToolWidth = 0.6
+        ToolHeight = 0.5
+        from matplotlib.patches import Rectangle
+        def DrawConnexion(ax, Start, End, Index):
+            if SubStreamsColors[Index] is None:
+                SubStreamsColors[Index] = ax.plot([Start[1], End[1]], [Start[0], End[0]], label = str(Index))[0].get_color()
+            else:
+                ax.plot([Start[1], End[1]], [Start[0], End[0]], color = SubStreamsColors[Index])
+        for ToolName in self.ToolsList:
+            Tool = self.Tools[ToolName]
+            if not Tool.__SubStreamInputIndexes__:
+                Col = list(Tool.__SubStreamOutputIndexes__)[0]
+                Level = 0
+            else:
+                Col = np.mean(list(Tool.__SubStreamInputIndexes__))
+                Level = max([SubStreamsToolLevels[Index] for Index in Tool.__SubStreamInputIndexes__])
+            R = Rectangle((Col-ToolWidth/2, (Level-ToolHeight/2)), ToolWidth, ToolHeight, color = 'k', fill = False)
+            ax.add_artist(R)
+            ax.text(Col, Level, ToolName, color = 'k', va= 'center', ha = 'center')
+            for nIndex, Index in enumerate(np.sort(list(Tool.__SubStreamInputIndexes__))):
+                DrawConnexion(ax, SubStreamsToolsOutput[Index], ((Level-ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamInputIndexes__)+1)), Index)
+                SubStreamsToolsOutput[Index] = ((Level+ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamOutputIndexes__)+1))
+            for nIndex, Index in enumerate(np.sort(list(Tool.__SubStreamOutputIndexes__))):
+                SubStreamsToolLevels[Index] = Level+1
+                if SubStreamsToolsOutput[Index] is None:
+                    SubStreamsToolsOutput[Index] = ((Level+ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamOutputIndexes__)+1))
+        ax.set_xlim(min(list(self._SubStreamIndexes)) - ToolWidth, max(list(self._SubStreamIndexes)) + ToolWidth)
+        ax.set_ylim(max(list(SubStreamsToolLevels.values()))-ToolHeight, -ToolHeight)
+        ax.legend()
+
     def _Log(self, Message, MessageType = 0, Module = None, Raw = False, AutoSendIfPaused = True):
         if self._LogType == 'columns' and not Raw:
+            if '\n' in Message:
+                for Line in Message.split('\n'):
+                    self._Log(Line, MessageType, Module, Raw, AutoSendIfPaused)
+                return
             if Module is None:
                 ModuleName = 'Framework'
             elif not Module._NeedsLogColumn:
@@ -814,7 +918,7 @@ class Framework:
                 Message = Module.__Name__ + ": " + Message
             else:
                 ModuleName = Module.__Name__
-            if self._LogT is None:
+            if self._LogT is None and self.Running:
                 if not self.PropagatedContainer is None:
                     self._LogT = self.PropagatedContainer.timestamp
                     self._Log('t = {0:.3f}s'.format(self._LogT))
@@ -888,6 +992,7 @@ class Module:
         
         self._MonitoredVariables = []
         self._MonitorDt = 0
+        self._ProposesTau = ('EventTau' in self.__class__.__dict__) # We set this as a variable, for user to change it at runtime. It can be accessed as a public variable through 'self.ProposesTau'
         self._NeedsLogColumn = True
         self.__LastMonitoredTimestamp = -np.inf
         
@@ -932,7 +1037,7 @@ class Module:
         Method to retreive the highest level information Tau from the framework.
         If no Tau is proposed by any other module, will return None, so default value has to be Module specific
         '''
-        return self.__Framework__._GetPreviousLevelTau(self._RunningEvent, self)
+        return self.__Framework__._GetLowerLevelTau(self._RunningEvent, self)
 
     def __Initialize__(self, Parameters):
         # First restore all previous values
@@ -995,12 +1100,13 @@ class Module:
         else:
             self.__OnEvent__ = OnEventMethodUsed
 
+        self._RunningEvent = None
         self.__Initialized__ = True
         return True
 
     @property
-    def _ProposesTau(self):
-        return 'EventTau' in self.__class__.__dict__
+    def ProposesTau(self):
+        return self._ProposesTau
 
     def _SetInputModuleSubStreamIndexes(self, Indexes):
         '''
@@ -1035,6 +1141,15 @@ class Module:
     def AverageTau(self):
         # For monitoring purposes, a module that proposes a Tau should propose an average tau value, that does not depend on the event. Thus, EventTau(None) will be called upon monitoring
         return self.EventTau(None)
+    @property
+    def MapTau(self):
+        if not self._ProposesTau:
+            return
+        Map = np.zeros(self.Geometry)
+        for x in range(Map.shape[0]):
+            for y in range(Map.shape[1]):
+                Map[x,y] = self.EventTau(CameraEvent(timestamp = self.__Framework__.t, location = [x,y], polarity = None, SubStreamIndex = None))
+        return Map
     def _OnSnapModule(self):
         # Template for user-filled module preparation for taking a snapshot. 
         pass
@@ -1082,6 +1197,22 @@ class Module:
             for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
                 self.History[VarName] += [RetreiveMethod()]
         return eventContainer.IsFilled
+
+    def _IsParent(self, ChildModule):
+        if ChildModule.__ToolIndex__ < self.__ToolIndex__:
+            return False
+        for SubStreamIndex in self.__SubStreamOutputIndexes__:
+            if SubStreamIndex in ChildModule.__SubStreamInputIndexes__:
+                return True
+        return False
+
+    def _IsChile(self, ParentModule):
+        if ParentModule.__ToolIndex__ > self.__ToolIndex__:
+            return False
+        for SubStreamIndex in self.__SubStreamInputIndexes__:
+            if SubStreamIndex in ParentModule.__SubStreamOutputIndexes__:
+                return True
+        return False
 
     @property
     def PicturesFolder(self):
@@ -1245,7 +1376,7 @@ class Module:
                 else:
                     FormatFunctions.append(FloatToStr)
         if len(CSVVariables) == 1:
-            self.LogWarning("No CSV export as no data was kept into CSV")
+            self.LogWarning("No CSV export as no monitored data was kept")
             return
         with open(FileName, 'w') as fCSV:
             fCSV.write("# "+Separator.join(CSVVariables) + "\n")

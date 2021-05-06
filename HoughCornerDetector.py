@@ -9,13 +9,12 @@ import cv2
 from PEBBLE import Module
 
 class HoughCD(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to record points in a sequence
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__ReferencesAsked__ = ['Memory']
-        self.__Type__ = 'Analysis'
+        Module.__init__(self, Name, Framework, ModulesLinked)
+        self.__ModulesLinksRequested__ = ['Memory']
 
         self._BinDt = 0.002
 
@@ -27,7 +26,7 @@ class HoughCD(Module):
         self.RecordedPoints = []
         self.CurrentT = self._FirstPictureAt - self._BinDt
 
-        self.Mem = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
+        self.Mem = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
         self.Tini = 100
         self.Edges = []
         self.Grays = []

@@ -4,18 +4,16 @@ import matplotlib.pyplot as plt
 import cv2
 
 class Mapper(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Module that creates a stable 2D map from trackers
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self._MinActiveTrackers = 8
         self._MaxErrorAllowed = 4.
         self._MaxMapValue = 10
 
-        self.__ReferencesAsked__ = []
         self._MonitorDt = 0.001 # By default, a module does not stode any date over time.
         self._MonitoredVariables = [('Pose.Pose', np.array),
                                     ('CamToWH', np.array),

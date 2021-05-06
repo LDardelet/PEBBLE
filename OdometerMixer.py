@@ -4,14 +4,13 @@ import numpy as np
 import random
 
 class OdometerMixer(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
-        Module template to be filled foe specific purpose
+        Computed stereo-rig odometry from stereo cameras odometry input
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
-        self.__ReferencesAsked__ = []
+        self.__GeneratesSubStream__ = True
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = [('D', float),

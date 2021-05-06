@@ -32,13 +32,10 @@ def NonZero(x):
         return NonZeroNumber(x)
 
 class TrackerTRS(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
-        Class to handle ST-context memory.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__ReferencesAsked__ = ['Memory']
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self._SendTrackerEventForStatuses = [StateClass._STATUS_STABILIZING,
                                               StateClass._STATUS_CONVERGED,

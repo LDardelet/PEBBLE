@@ -7,14 +7,12 @@ import os
 _PICTURES_VIEWER = "eog"
 
 class PictureSaver(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Creates PNG images of anything plottable that comes though
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
-        self.__ReferencesAsked__ = []
         self._NeedsLogColumn = False
 
         self._FramesDt = 0.01

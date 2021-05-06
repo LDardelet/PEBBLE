@@ -61,8 +61,8 @@ class Framework:
     '''
     Main event-based framework file.
     '''
-    def __init__(self, File1 = None, File2 = None, onlyRawData = False):
-        self.__Type__ = 'Framework'
+    def __init__(self, File1 = None, File2 = None, onlyRawData = False, globals_data = globals()):
+        self._Globals_Data = globals_data
         self._LogType = 'raw'
         self._SessionLogs = [sys.stdout]
         try:
@@ -91,7 +91,7 @@ class Framework:
     def Initialize(self):
         self._Initializing = True
         self.PropagatedContainer = None
-        self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
+        self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__IsInput__}
         if len(self.InputEvents) == 1:
             self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
             del self.__dict__['InputEvents']
@@ -100,16 +100,13 @@ class Framework:
 
         self._LogType = 'columns'
         self._LogInit()
-        self.PropagatedIndexes = set()
         for ToolName in self.ToolsList:
             InitializationAnswer = Module.__Initialize__(self.Tools[ToolName], self.RunParameters[ToolName])
             if not InitializationAnswer:
                 self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
                 self._DestroyFolder()
                 return False
-            for Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
-                self.PropagatedIndexes.add(Index)
-        self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ != 'Input']) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
+        self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if not self.Tools[ToolName].__IsInput__]) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
         self._SendLog()
@@ -235,6 +232,7 @@ class Framework:
             self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ToolName in self.ToolsList:
             self.Tools[ToolName]._OnClosing()
+        self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
     def _DestroyFolder(self):
@@ -280,6 +278,18 @@ class Framework:
         self._Log("Saved input parameters in {0}".format(self.InputsLogFile), 3)
         fInputs.close()
 
+    def _SaveInterpreterData(self):
+        if not 'Out' in globals() or not 'In' in globals():
+            self._Log("Unable to save interpreter data", 1)
+            return globals()
+        with open(self.InterpreterLogFile, 'w') as fInterpreter:
+            for nInput, Input in enumerate(In):
+                fInterpreter.write(Input + '\n')
+                if nInput in Out:
+                    fInterpreter.write(Out[nInput] + '\n')
+                fInterpreter.write('\n'+10*'#'+'\n\n')
+            self._Log("Saved interpreter commands in {0}".format(self.InterpreterLogFile), 3)
+
     @property
     def HistoryFolder(self):
         if self._FolderData['history'] is None:
@@ -298,6 +308,10 @@ class Framework:
     @property
     def InputsLogFile(self):
         return self._FolderData['home']+'inputs.txt'
+    @property 
+    def InterpreterLogFile(self):
+        # Stores any ipython interpreter I/O into a file. Might be quite messy, but allows to fully save what has been done within the session
+        return self._FolderData['home']+'interpreter.txt'
 
     def SaveData(self, Filename, forceOverwrite = False):
         GivenExtention = Filename.split('.')[-1]
@@ -429,7 +443,7 @@ class Framework:
         if not resume:
             self._LastStartWarning = 0
             self.RunParameters = dict(ParametersDict)
-            self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__Type__ == 'Input'}
+            self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__IsInput__}
             if type(StreamName) == str:
                 for ToolName in self.CurrentInputStreams.keys():
                     self.CurrentInputStreams[ToolName] = StreamName
@@ -550,9 +564,10 @@ class Framework:
 
     def _GenerateEmptyProject(self):
         self.Tools = {}
-        self._ToolsCreationReferences = {}
-        self._ToolsExternalParameters = {}
-        self._ToolsCamerasRestrictions = {}
+        self._ToolsModulesLinks = {}
+        self._ToolsProjectParameters = {}
+        self._ToolsSubStreamsHandled = {}
+        self._ToolsSubStreamsCreated = {}
         self._ToolsClasses = {}
         self._SubStreamIndexes = set()
 
@@ -577,12 +592,10 @@ class Framework:
             fileLoaded = __import__(self._ProjectRawData[ToolName]['File'])
             self._ToolsClasses[ToolName] = getattr(fileLoaded, self._ProjectRawData[ToolName]['Class'])
 
-            self._ToolsCreationReferences[ToolName] = self._ProjectRawData[ToolName]['CreationReferences']
-            self._ToolsExternalParameters[ToolName] = self._ProjectRawData[ToolName]['ExternalParameters']
-            if 'CamerasHandled' in self._ProjectRawData[ToolName].keys(): # For previous version support
-                self._ToolsCamerasRestrictions[ToolName] = self._ProjectRawData[ToolName]['CamerasHandled']
-            else:
-                self._ToolsCamerasRestrictions[ToolName] = []
+            self._ToolsModulesLinks[ToolName] = self._ProjectRawData[ToolName]['ModulesLinks']
+            self._ToolsProjectParameters[ToolName] = self._ProjectRawData[ToolName]['ProjectParameters']
+            self._ToolsSubStreamsHandled[ToolName] = self._ProjectRawData[ToolName]['SubStreamsHandled']
+            self._ToolsSubStreamsCreated[ToolName] = self._ProjectRawData[ToolName]['SubStreamsCreated']
 
             self.ToolsOrder[ToolName] = self._ProjectRawData[ToolName]['Order']
             self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[ToolName]['File'], self._ProjectRawData[ToolName]['Class']))
@@ -606,7 +619,7 @@ class Framework:
         self._Log("")
         
         for ToolName in self.ToolsList:
-            self.Tools[ToolName] = self._ToolsClasses[ToolName](ToolName, self, self._ToolsCreationReferences[ToolName])
+            self.Tools[ToolName] = self._ToolsClasses[ToolName](ToolName, self, self._ToolsModulesLinks[ToolName])
             self._UpdateToolsParameters(ToolName)
             for Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
                 if Index not in self._SubStreamIndexes:
@@ -620,25 +633,31 @@ class Framework:
         self._Log("")
 
     def _UpdateToolsParameters(self, ToolName):
-        for key, value in self._ToolsExternalParameters[ToolName].items():
-            if key in self.Tools[ToolName].__dict__.keys():
+        Tool = self.Tools[ToolName]
+        for key, value in self._ToolsProjectParameters[ToolName].items():
+            if key in Tool.__dict__.keys():
                 try:
-                    self.Tools[ToolName].__dict__[key] = type(self.Tools[ToolName].__dict__[key])(value)
+                    Tool.__dict__[key] = type(Tool.__dict__[key])(value)
                 except:
-                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, ToolName, type(self.Tools[ToolName].__dict__[key]), value), 1)
+                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, ToolName, type(Tool.__dict__[key]), value), 1)
             else:
                 self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, ToolName), 1)
-        if self.Tools[ToolName].__Type__ == 'Input':
-            self.Tools[ToolName].__SubStreamInputIndexes__ = set()
-            self.Tools[ToolName].__SubStreamOutputIndexes__ = set(self._ToolsCamerasRestrictions[ToolName])
-            if not self.Tools[ToolName]._SetInputModuleSubStreamIndexes(self._ToolsCamerasRestrictions[ToolName]):
+        if Tool.__IsInput__:
+            Tool.__SubStreamInputIndexes__ = set()
+            Tool.__SubStreamOutputIndexes__ = set(self._ToolsSubStreamsCreated[ToolName])
+            if not Tool._SetInputModuleSubStreamIndexes(self._ToolsSubStreamsCreated[ToolName]):
                 return False
         else:
-            if not self._ToolsCamerasRestrictions[ToolName]:
-                self.Tools[ToolName].__SubStreamInputIndexes__ = set(self._SubStreamIndexes)
+            if not self._ToolsSubStreamsHandled[ToolName]:
+                Tool.__SubStreamInputIndexes__ = set(self._SubStreamIndexes)
             else:
-                self.Tools[ToolName].__SubStreamInputIndexes__ = set(self._ToolsCamerasRestrictions[ToolName])
-            self.Tools[ToolName].__SubStreamOutputIndexes__ = set(self.Tools[ToolName].__SubStreamInputIndexes__)
+                Tool.__SubStreamInputIndexes__ = set(self._ToolsSubStreamsHandled[ToolName])
+            Tool.__SubStreamOutputIndexes__ = set(Tool.__SubStreamInputIndexes__)
+            if Tool.__GeneratesSubStream__:
+                for SubStreamIndex in self._ToolsSubStreamsCreated[ToolName]:
+                    Tool.__SubStreamOutputIndexes__.add(SubStreamIndex)
+                if not Tool._SetInputModuleSubStreamIndexes(self._ToolsSubStreamsCreated[ToolName]):
+                    return False
 
     def GetModulesParameters(self):
         ParametersDict = {}
@@ -657,15 +676,15 @@ class Framework:
 
     def AddTool(self):
         self._Log("Current project :")
-        self.DisplayCurrentProject()
+        self.Project
         self._Log("")
-        FieldList = [('File', str, False), ('Class', str, False), ('Order', int, True), ('CreationReferences', str, False), ('ExternalParameters', list, True)]
         
         Name = input('Enter the name of the new tool : ')                   # Tool name 
         if Name == '' or Name in self._ProjectRawData.keys():
             self._Log("Invalid entry (empty or already existing).", 2)
             return None
-        self._ProjectRawData[Name] = {}
+        self._ProjectRawData[Name] = {'File':None, 'Class':None, 'ModulesLinks':{}, 'ProjectParameters':{}, 'SubStreamsHandled':[], 'Order':None}
+        ModuleProjectDict = self._ProjectRawData[Name]
         try:
             entry = ''
             while entry == '' :                                                 # Filename and Class definition
@@ -673,25 +692,23 @@ class Framework:
                 entry = input('')
             if '.py' in entry:
                 entry = entry.split('.py')[0]
-            self._ProjectRawData[Name]['File'] = entry
+            ModuleProjectDict['File'] = entry
             fileLoaded = __import__(entry)
             classFound = False
             PossibleClasses = []
             if not 'Module' in fileLoaded.__dict__.keys():
                 self._Log("File does not contain any class derived from 'Module'. Aborting entry", 2)
-                del self._ProjectRawData[Name]
-                return None
+                raise Exception
             for key in fileLoaded.__dict__.keys():
                 if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_' and fileLoaded.__dict__['Module'] in fileLoaded.__dict__[key].__bases__:
                     PossibleClasses += [key]
             if not classFound:
                 if len(PossibleClasses) == 0:
                     self._Log("No possible Class is available in this file. Aborting.", 2)
-                    del self._ProjectRawData[Name]
-                    return None
+                    raise Exception
                 elif len(PossibleClasses) == 1:
                     self._Log("Using class {0}".format(PossibleClasses[0]))
-                    self._ProjectRawData[Name]['Class'] = PossibleClasses[0]
+                    ModuleProjectDict['Class'] = PossibleClasses[0]
                 else:
                     entry = ''
                     while entry == '' :
@@ -701,76 +718,78 @@ class Framework:
                         entry = input('')
                     if entry not in PossibleClasses:
                         self._Log("Invalid class, absent from tool file or not a ClassType.", 2)
-                        del self._ProjectRawData[Name]
-                        return None
-                    self._ProjectRawData[Name]['Class'] = entry
+                        raise Exception
+                    ModuleProjectDict['Class'] = entry
             self._Log("")
                                                                                   # Loading the class to get the references needed and parameters
 
-            TmpClass = fileLoaded.__dict__[self._ProjectRawData[Name]['Class']](Name, self, {})
-            ReferencesAsked = TmpClass.__ReferencesAsked__
-            self._ProjectRawData[Name]['IsInput'] = (TmpClass.__Type__ == 'Input')
+            TmpClass = fileLoaded.__dict__[ModuleProjectDict['Class']](Name, self, {})
+            ModulesLinksRequested = TmpClass.__ModulesLinksRequested__
+
+            if not TmpClass.__IsInput__:
+                self._Log("Enter the tool order number. Void will add that tool at the end of the current framework.")                             # Order definition
+                entry = input('')
+                if entry:
+                    if int(entry) >= len(self._ProjectRawData):
+                        self._Log("Excessive tool number, assuming last position")
+                        ModuleProjectDict['Order'] = len(self._ProjectRawData)-1
+                    else:
+                        ModuleProjectDict['Order'] = int(entry)
+                else:
+                    ModuleProjectDict['Order'] = len(self._ProjectRawData)-1
+            else:
+                self._Log("Input Type detected. Setting to next default index.")
+                ModuleProjectDict['Order'] = 0
+                for OtherToolName in self._ProjectRawData.keys():
+                    if OtherToolName != Name and TmpClass.__IsInput__ :
+                        ModuleProjectDict['Order'] = max(ModuleProjectDict['Order'], self._ProjectRawData[OtherToolName]['Order'] + 1)
+            NumberTaken = False
+            for OtherToolName in self._ProjectRawData.keys():
+                if OtherToolName != Name and 'Order' in self._ProjectRawData[OtherToolName].keys() and ModuleProjectDict['Order'] == self._ProjectRawData[OtherToolName]['Order']:
+                    NumberTaken = True
+            if NumberTaken:
+                self._Log("Compiling new order.")
+                for OtherToolName in self._ProjectRawData.keys():
+                    if OtherToolName != Name:
+                        if self._ProjectRawData[OtherToolName]['Order'] >= ModuleProjectDict['Order']:
+                            self._ProjectRawData[OtherToolName]['Order'] += 1
+                self._Log("Done")
+                self._Log("")
+
+            if ModulesLinksRequested:
+                self._Log("Fill tool name for the needed links. Currently available tool names:")
+                for key in self._ProjectRawData.keys():
+                    if key == Name:
+                        continue
+                    self._Log(" * {0}".format(key))
+                for ModuleLinkRequested in ModulesLinksRequested:
+                    self._Log("Reference for '" + ModuleLinkRequested + "'")
+                    entry = ''
+                    while entry == '':
+                        entry = input('-> ')
+                    ModuleProjectDict['ModulesLinks'][ModuleLinkRequested] = entry
+            else:
+                self._Log("No particular reference needed for this tool.")
+            self._Log("")
+            if not TmpClass.__IsInput__:
+                self._Log("Enter streams index(es) handled by this module, coma separated. Void will not create any restriction.")
+                entry = input(" -> ")
+                if entry:
+                    ModuleProjectDict['SubStreamsHandled'] = [int(index.strip()) for index in entry.split(',')]
+
+            if TmpClass.__IsInput__ or TmpClass.__GeneratesSubStream__:
+                self._Log("Enter indexes created by this module, coma separated.")
+                entry = ''
+                while entry == '':
+                    entry = input('-> ')
+                ModuleProjectDict['SubStreamsCreated'] = [int(index.strip()) for index in entry.split(',')]
+            else:
+                ModuleProjectDict['SubStreamsCreated'] = []
 
             PossibleVariables = []
             for var in TmpClass.__dict__.keys():
                 if var[0] == '_' and var[1] != '_':
                     PossibleVariables += [var]
-            if TmpClass.__Type__ != 'Input':
-                self._Log("Enter the tool order number :")                             # Order definition
-                entry = ''
-                while entry == '':
-                    entry = input('')
-                if int(entry) >= len(self._ProjectRawData):
-                    self._Log("Excessive tool number, assuming last position")
-                    self._ProjectRawData[Name]['Order'] = len(self._ProjectRawData[Name]['Order'])-1
-                else:
-                    self._ProjectRawData[Name]['Order'] = int(entry)
-            else:
-                self._Log("Input Type detected. Setting to next default index.")
-                self._ProjectRawData[Name]['Order'] = 0
-                for ToolName in self._ProjectRawData.keys():
-                    if ToolName != Name and self._ProjectRawData[ToolName]['IsInput']:
-                        self._ProjectRawData[Name]['Order'] = max(self._ProjectRawData[Name]['Order'], self._ProjectRawData[ToolName]['Order'] + 1)
-            NumberTaken = False
-            for ToolName in self._ProjectRawData.keys():
-                if ToolName != Name and 'Order' in self._ProjectRawData[ToolName].keys() and self._ProjectRawData[Name]['Order'] == self._ProjectRawData[ToolName]['Order']:
-                    NumberTaken = True
-            if NumberTaken:
-                self._Log("Compiling new order.")
-                for ToolName in self._ProjectRawData.keys():
-                    if ToolName != Name and 'Order' in self._ProjectRawData[ToolName].keys():
-                        if self._ProjectRawData[ToolName]['Order'] >= self._ProjectRawData[Name]['Order']:
-                            self._ProjectRawData[ToolName]['Order'] += 1
-                self._Log("Done")
-                self._Log("")
-
-            self._ProjectRawData[Name]['CreationReferences'] = {}
-            if ReferencesAsked:
-                self._Log("Fill tool name for the needed references. Currently available tool names:")
-                for key in self._ProjectRawData.keys():
-                    if key == Name:
-                        continue
-                    self._Log(" * {0}".format(key))
-                for Reference in ReferencesAsked:
-                    self._Log("Reference for '" + Reference + "'")
-                    entry = ''
-                    while entry == '':
-                        entry = input('-> ')
-                    self._ProjectRawData[Name]['CreationReferences'][Reference] = entry
-            else:
-                self._Log("No particular reference needed for this tool.")
-            self._Log("")
-            if TmpClass.__Type__ == 'Input':
-                self._Log("Enter indexes created by this module, coma separated.")
-            else:
-                self._Log("Enter streams index(es) handled by this module, coma separated. Void will not create any restriction.")
-            entry = input(" -> ")
-            self._ProjectRawData[Name]['CamerasHandled'] = []
-            if entry:
-                for index in entry.split(','):
-                    self._ProjectRawData[Name]['CamerasHandled'] += [int(index.strip())]
-
-            self._ProjectRawData[Name]['ExternalParameters'] = {}
             if PossibleVariables:
                 self._Log("Current tool parameters :")
                 for var in PossibleVariables:
@@ -790,16 +809,16 @@ class Framework:
                                         aimedType = type(TmpClass.__dict__[entryvar][0])
                                     else:
                                         aimedType = float
-                                    self._ProjectRawData[Name]['ExternalParameters'][entryvar] = [aimedType(value) for value in values]
+                                    ModuleProjectDict['ProjectParameters'][entryvar] = [aimedType(value) for value in values]
                                 else:
-                                    self._ProjectRawData[Name]['ExternalParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
+                                    ModuleProjectDict['ProjectParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
                             except ValueError:
                                 self._Log("Could not parse entry into the correct type", 1)
                     elif '=' in entryvar:
                         entryvar, entryvalue = entryvar.split('=')
                         if entryvar.strip() in PossibleVariables:
                             try:
-                                self._ProjectRawData[Name]['ExternalParameters'][entryvar.strip()] = type(TmpClass.__dict__[entryvar.strip()])(entryvalue.strip())
+                                ModuleProjectDict['ProjectParameters'][entryvar.strip()] = type(TmpClass.__dict__[entryvar.strip()])(entryvalue.strip())
                             except ValueError:
                                 self._Log("Could not parse entry into the correct type", 1)
                     elif entryvar != '':
@@ -814,12 +833,15 @@ class Framework:
             self._Log("No such file found. Canceling entries", 2)
             del self._ProjectRawData[Name]
             return None
+        except Exception:
+            del self._ProjectRawData[Name]
+            return None
 
         self._Log("AddTool finished. Reloading project.")
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
-        self.DisplayCurrentProject()
+        self.Project
         self.Modified = True
 
     def DelTool(self, ToolName):
@@ -833,9 +855,10 @@ class Framework:
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
-        self.DisplayCurrentProject()
+        self.Project
         self.Modified = True
 
+    @property
     def Project(self):
         self._Log("# Framework\n", 3)
         self._Log("")
@@ -844,24 +867,28 @@ class Framework:
         for ToolName in self.ToolsList:
             filename = inspect.getfile(self.Tools[ToolName].__class__)
             self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ToolName, str(self.Tools[ToolName].__class__).split('.')[1][:-2], filename), 3)
-            self._Log("     Type : {0}".format(self.Tools[ToolName].__Type__))
-            if self.Tools[ToolName].__SubStreamInputIndexes__:
-                self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamInputIndexes__]))
+            if not self.Tools[ToolName].__IsInput__:
+                if self.Tools[ToolName].__SubStreamInputIndexes__:
+                    self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamInputIndexes__])+".")
+                else:
+                    self._Log("     Uses all cameras inputs.")
             else:
-                self._Log("     Uses all cameras inputs.")
+                self._Log("     Does not consider incomming events.")
+            if self.Tools[ToolName].__IsInput__ or self.Tools[ToolName].__GeneratesSubStream__:
+                self._Log("     Generates SubStream "+", ".join(self.Tools[ToolName].__GeneratedSubStreams__))
             if self.Tools[ToolName].__SubStreamOutputIndexes__  and not self.Tools[ToolName].__SubStreamOutputIndexes__ == self.Tools[ToolName].__SubStreamInputIndexes__:
                 self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamOutputIndexes__]))
             else:
                 self._Log("     Outputs the same camera indexes.")
-            if self._ToolsCreationReferences[ToolName]:
-                self._Log("     Creation References:")
-                for argName, toolReference in self._ToolsCreationReferences[ToolName].items():
-                    self._Log("         -> Access to {0} from tool {1}".format(argName, toolReference))
+            if self._ToolsModulesLinks[ToolName]:
+                self._Log("     Modules Linked:")
+                for argName, toolLinked in self._ToolsModulesLinks[ToolName].items():
+                    self._Log("         -> Access to {0} from tool {1}".format(argName, toolLinked))
             else:
-                self._Log("     No creation reference.")
-            if self._ToolsExternalParameters[ToolName]:
+                self._Log("     No module linked.")
+            if self._ToolsProjectParameters[ToolName]:
                 self._Log("     Modified Parameters:")
-                for var, value in  self._ToolsExternalParameters[ToolName].items():
+                for var, value in  self._ToolsProjectParameters[ToolName].items():
                     self._Log("         -> {0} = {1}".format(var, value))
             else:
                 self._Log("     Using default parameters.")
@@ -972,7 +999,7 @@ class Framework:
         self._HasLogs = 0
 
 class Module:
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Default module class.
         Each module in the Framework should inherit this class, whose 3 main methods and main parameters are required annd defined here.
@@ -982,13 +1009,15 @@ class Module:
         self.__Name__ = Name
 
         self.Log("Generating module")
-        self.__ReferencesAsked__ = []
-        self.__CreationReferences__ = dict(argsCreationReferences)
-        self.__Type__ = None
+        self.__ModulesLinksRequested__ = []
+        self.__ModulesLinked__ = dict(ModulesLinked)
+        self.__IsInput__ = False
+        self.__GeneratesSubStream__ = False
         self.__Initialized__ = False
         self.__SavedValues__ = {}
-        self.__SubStreamInputIndexes__ = []
-        self.__SubStreamOutputIndexes__ = []
+        self.__SubStreamInputIndexes__ = set()
+        self.__SubStreamOutputIndexes__ = set()
+        self.__GeneratedSubStreams__ = []
         
         self._MonitoredVariables = []
         self._MonitorDt = 0
@@ -1016,7 +1045,7 @@ class Module:
         Method to recover the name of the stream fed to this module.
         Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
         '''
-        if self.__Type__ == 'Input':
+        if self.__IsInput__:
             return self.__Framework__.CurrentInputStreams[self.__Name__]
         else:
             return self.__Framework__._GetStreamFormattedName(self)
@@ -1069,7 +1098,7 @@ class Module:
             return False
 
         # Finalize Module initialization
-        if self.__Type__ != 'Input':
+        if not self.__IsInput__:
             OnEventMethodUsed = self.__OnEventRestricted__
         else:
             OnEventMethodUsed = self.__OnEventInput__

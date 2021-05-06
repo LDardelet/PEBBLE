@@ -7,13 +7,12 @@ import json
 from PEBBLE import Module
 
 class Clicker(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to record points in a sequence
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__ReferencesAsked__ = ['Memory']
-        self.__Type__ = 'Analysis'
+        Module.__init__(self, Name, Framework, ModulesLinked)
+        self.__ModulesLinksRequested__ = ['Memory']
 
         self._TW = 0.01
         self._BinDt = 0.05
@@ -21,7 +20,7 @@ class Clicker(Module):
 
     def _InitializeModule(self):
 
-        self._Mem = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
+        self._Mem = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
 
         self.RecordedPoints = []
         self.PreviousFramePoints = []

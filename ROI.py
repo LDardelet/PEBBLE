@@ -3,15 +3,12 @@ import numpy as np
 from PEBBLE import Module
 
 class ROI(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to implement a simple spatial ROI.
         Expects nothing.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-
-        self.__ReferencesAsked__ = []
-        self.__Type__ = 'Filter'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self._xMinOffset = 0
         self._xMaxOffset = None # Leave None for symetrical value

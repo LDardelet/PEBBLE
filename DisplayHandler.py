@@ -48,12 +48,11 @@ class PostServiceClass(threading.Thread):
         self.MainUDP.sendto(data, (TransmissionInfo._Address, TransmissionInfo._EventPort))
 
 class DisplayHandler(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to handle the stream Display.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Output'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self.__Started__ = False
 

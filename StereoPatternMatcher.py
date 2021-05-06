@@ -2,13 +2,12 @@ import numpy as np
 from PEBBLE import Module, CameraEvent, TrackerEvent
 
 class StereoPatternMatcher(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Module that given a tracker tries to match the corresponding location on another camera
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
-        self.__ReferencesAsked__ = ['Tracker']
+        Module.__init__(self, Name, Framework, ModulesLinked)
+        self.__ModulesLinksRequested__ = ['Tracker']
 
         self._ActivityRadius = 6
         self._CleanupEvery = 0.1
@@ -22,7 +21,7 @@ class StereoPatternMatcher(Module):
         self._MatchedCameraIndex = 0
 
     def _InitializeModule(self):
-        self.TrackerModule = self.__Framework__.Tools[self.__CreationReferences__['Tracker']]
+        self.TrackerModule = self.__Framework__.Tools[self.__ModulesLinked__['Tracker']]
 
         self._EpipolarMatrix = np.array(self._EpipolarMatrix)
 

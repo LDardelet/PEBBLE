@@ -5,14 +5,13 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 
 class DenseStereo(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Module that given two input streams creates a dense disparity map.
         For now, works only with rectified square cameras?
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
-        self.__ReferencesAsked__ = ['LeftMemory', 'RightMemory']
+        Module.__init__(self, Name, Framework, ModulesLinked)
+        self.__ModulesLinksRequested__ = []
 
         self._ComparisonRadius = 10
         self._OfflineRadiusRatio = 0.
@@ -48,8 +47,6 @@ class DenseStereo(Module):
         self.UsedGeometry = np.array(self.Geometry)
 
         self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}
-        self.RightMemory = self.__Framework__.Tools[self.__CreationReferences__['RightMemory']]
-        self.LeftMemory = self.__Framework__.Tools[self.__CreationReferences__['LeftMemory']]
 
         self.OfflineRadius = int(self._ComparisonRadius * self._OfflineRadiusRatio)
         self.MinAverageActivity = self._ComparisonRadius * self._MinAverageActivityRadiusRatio
@@ -351,7 +348,7 @@ class DenseStereo(Module):
             f.savefig(SaveLocationPrefix + suffix + ".png")
         return f, axs, StoredImages
 
-    def PlotGTAnalysis(self, DataH5File, GTH5File, PastIndex = None, f_axs_images = None, Cam = 'right', Sensor = 'davis', Sigma = 0, DisparityRange = None, Tau = None, DataOffset = 0):
+    def PlotGTAnalysis(self, DataH5File, GTH5File, STMemories, PastIndex = None, f_axs_images = None, Cam = 'right', Sensor = 'davis', Sigma = 0, DisparityRange = None, Tau = None, DataOffset = 0):
         CamIndex = ['left', 'right'].index(Cam)
         if DisparityRange is None:
             DisparityRange = self._DisparityRange
@@ -411,7 +408,7 @@ class DenseStereo(Module):
         else:
             t = self.History['t'][PastIndex]
         tData = t + DataOffset
-        Mem = [self.__Framework__.LeftMemory, self.__Framework__.RightMemory][CamIndex]
+        Mem = STMemories[CamIndex]
         if Images is None:
             StoredImages[0][0] = axs[0,0].imshow(np.transpose(Mem.GetTs(Tau)), origin = 'lower', cmap = 'binary')
         else:

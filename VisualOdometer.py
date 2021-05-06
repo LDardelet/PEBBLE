@@ -2,14 +2,12 @@ from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
 import numpy as np
 
 class VisualOdometer(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Uses disparity events and optical flow events to recover a visual odometry
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
-        self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('V', np.array),

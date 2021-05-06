@@ -3,12 +3,11 @@ import numpy as np
 from PEBBLE import Module, Event
 
 class Stretcher(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to modify timestamps, mofifying speed norms
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Filter'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self.__Started__ = False
 

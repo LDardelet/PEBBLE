@@ -232,12 +232,12 @@ class Map3DClass:
                     self.EventsGenerators += [EventGeneratorClass(len(self.EventsGenerators), X, np.array([x,y,z]), BiCameraSystem, self.Voxels)]
 
 class MovementSimulatorClass(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to emulate stereo system moving with artificial map
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Input'
+        Module.__init__(self, Name, Framework, ModulesLinked)
+        self.__IsInput__ = True
 
 
         self._MapType = 'cubes'

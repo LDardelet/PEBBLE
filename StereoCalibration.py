@@ -6,14 +6,12 @@ import matplotlib.pyplot as plt
 import imageio
 
 class StereoCalibration(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Module template to be filled foe specific purpose
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
-        self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not store any data over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = []
@@ -122,7 +120,7 @@ class StereoCalibration(Module):
             RyInvertInv = np.identity(3)
         CamerasNames = [None, None]
         for ToolName, Tool in self.__Framework__.Tools.items():
-            if not Tool.__Type__ == 'Input':
+            if not Tool.__IsInput__:
                 continue
             UsedIndex = Tool.SubStreamIndex
             if 'right' in ToolName.lower():

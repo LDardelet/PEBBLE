@@ -3,12 +3,11 @@ import numpy as np
 from PEBBLE import Module
 
 class Memory(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to handle ST-context memory.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Memory'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self._MonitorDt = 0. # By default, the memory module does NOT take any shapshot, to ensure memory doesn't get filled.
         self._MonitoredVariables = []

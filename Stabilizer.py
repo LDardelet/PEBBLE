@@ -3,14 +3,12 @@ from PEBBLE import Module, CameraEvent, TrackerEvent, TauEvent
 import numpy as np
 
 class Stabilizer(Module):
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Module stabilizing an event stream spatially from tracker events, and temporally with tau events
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
 
-        self.__ReferencesAsked__ = []
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = [('Tau', float),

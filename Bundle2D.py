@@ -39,12 +39,11 @@ def _GenerateSubSpaceBasisFrom(Vectors):
 class BundleAdjustmentWarp(Module):
     _DISTANCE_NORMALIZATION_FACTOR = 1.
 
-    def __init__(self, Name, Framework, argsCreationReferences):
+    def __init__(self, Name, Framework, ModulesLinked):
         '''
         Class to handle ST-context memory.
         '''
-        Module.__init__(self, Name, Framework, argsCreationReferences)
-        self.__Type__ = 'Computation'
+        Module.__init__(self, Name, Framework, ModulesLinked)
         
         self._ScreenCenter = [320., 0]
         self._ScreenRatio = [640., 640.]

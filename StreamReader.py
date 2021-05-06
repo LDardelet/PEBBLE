@@ -17,12 +17,10 @@ _EVENT_TYPE_ADITIONNAL_BYTES = {0: None, 1:4, 2:4, 3:3, 4:7}
 _EVENT_TYPE_ANALYSIS_FUNCTIONS_NAMES = {0: None, 1: '_DVS_BYTES_ANALYSIS', 2: '_ATIS_BYTES_ANALYSIS', 3: None, 4:None} # All necessary variables are hardcoded in these functions, as they don't have necessarily the same output and needs
 
 class Reader(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to read events streams files.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self.__IsInput__ = True
 
         self._DatVersion = 2
@@ -53,7 +51,7 @@ class Reader(Module):
     def Geometry(self, value):
         self._Geometry = value
 
-    def _SetInputModuleSubStreamIndexes(self, Indexes):
+    def _SetGeneratedSubStreamsIndexes(self, Indexes):
         self.__SubStreamInputIndexes__ = set()
         self.__SubStreamOutputIndexes__ = set(Indexes)
         if len(Indexes) == 0:
@@ -65,7 +63,7 @@ class Reader(Module):
         self.LogWarning("Too many outputs indexes specified for this module.")
         return False
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
 
         self._CloseFile()
 

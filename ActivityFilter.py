@@ -3,22 +3,18 @@ import numpy as np
 from PEBBLE import Module
 
 class ActivityFilter(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to implement an activity filter (also known as Background Activity filter).
         Expects nothing.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self.__ModulesLinksRequested__ = ['Memory']
 
         self._MinNeighbors = 3
         self._Tau = 0.01 # in seconds
         self._Radius = 2
 
-    def _InitializeModule(self):
-
-        self.Memory = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
+    def _OnInitialization(self):
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 

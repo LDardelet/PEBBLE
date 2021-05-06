@@ -3,22 +3,17 @@ import numpy as np
 from PEBBLE import Module
 
 class Refractory(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to filter events from spike trains.
         Expects nothing.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self.__ModulesLinksRequested__ = ['Memory']
-
-        self._NeedsLogColumn = False
 
         self._Period = 0.03 # Given is seconds
         self._Active = True
 
-    def _InitializeModule(self):
-        self.Memory = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
+    def _OnInitialization(self):
         self.AllowedEvents = 0
         self.FilteredEvents = 0
 

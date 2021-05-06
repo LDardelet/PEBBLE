@@ -9,24 +9,23 @@ import cv2
 from PEBBLE import Module
 
 class HoughCD(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
-        Class to record points in a sequence
+        Module to detect corners with the Hough Corner Detection algorithm.
+        Never used, handle with care
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
         self.__ModulesLinksRequested__ = ['Memory']
 
-        self._BinDt = 0.002
+        self._Tau = 0.002
 
         self._ExpositionDt = 0.004
         self._FirstPictureAt = 0.01
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
 
         self.RecordedPoints = []
-        self.CurrentT = self._FirstPictureAt - self._BinDt
+        self.CurrentT = self._FirstPictureAt - self._Tau
 
-        self.Mem = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
         self.Tini = 100
         self.Edges = []
         self.Grays = []
@@ -36,10 +35,10 @@ class HoughCD(Module):
         return True
 
     def _OnEventModule(self, event):
-        if event.timestamp > self.CurrentT + self._BinDt:
+        if event.timestamp > self.CurrentT + self._Tau:
             self.CurrentT = event.timestamp
 
-            self.gray_image = np.array(np.transpose(self.Mem.STContext.max(axis = 2) > event.timestamp - self._ExpositionDt)*200, dtype = np.uint8)
+            self.gray_image = np.array(np.transpose(self.Memory.STContext.max(axis = 2) > event.timestamp - self._ExpositionDt)*200, dtype = np.uint8)
 
             Corners, edges = GetCorners(np.array(self.gray_image), self.Tini)
             self.Edges += [edges]

@@ -218,11 +218,10 @@ class Map2DClass:
 
 
 class MovementSimulatorClass(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to emulate stereo system moving with artificial map
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
         self.__IsInput__ = True
 
         self._MapType = 'cubes'
@@ -248,7 +247,7 @@ class MovementSimulatorClass(Module):
     def Geometry(self, value):
         self._Geometry = value
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.LogError("Events handling not updated with containers. Will not work as such")
 
         self.BiCameraSystem = BiCameraClass(self, self._CreateTrackerEvents, self._TrackersLocationGaussianNoise, self._SingleCameraMode)

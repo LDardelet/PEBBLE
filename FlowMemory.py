@@ -3,22 +3,16 @@ import numpy as np
 from PEBBLE import Module, FlowEvent
 
 class FlowMemory(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
-        Class to handle ST-context memory.
+        Class to handle optical flow memory.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
-        self._MonitorDt = 0. # By default, the memory module does NOT take any shapshot, to ensure memory doesn't get filled.
-        self._MonitoredVariables = []
-        self._NeedsLogColumn = False
-
         self._DefaultTau = 0.1
         self._RTau = 7
         self._FrameworkTauRatio = 4
         self._EnableEventTau = True
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.FlowContext = np.zeros(tuple(self.Geometry) + (3,))
         self.FlowContext[:,:,2] = -np.inf
         self.LastT = -np.inf
@@ -32,7 +26,7 @@ class FlowMemory(Module):
         if not event.Has(FlowEvent):
             return
         
-        Tau = self.FrameworkTau
+        Tau = self.FrameworkAverageTau
         if Tau is None or Tau == 0:
             Tau = self._DefaultTau
         Tau = min(1., Tau) * self._FrameworkTauRatio

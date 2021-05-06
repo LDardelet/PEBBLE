@@ -5,12 +5,11 @@ import numpy as np
 _MAX_DEPTH = 1e3
 
 class PoseEstimator(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Event-based pose estimator.
         Uses a simulator mechanical system that combines all the constraints, such as points tracked on screen and visual odometry
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
 
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False

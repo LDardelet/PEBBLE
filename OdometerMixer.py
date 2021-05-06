@@ -4,15 +4,12 @@ import numpy as np
 import random
 
 class OdometerMixer(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Computed stereo-rig odometry from stereo cameras odometry input
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self.__GeneratesSubStream__ = True
-        self._MonitorDt = 0. # By default, a module does not stode any date over time.
-        self._NeedsLogColumn = False
+        self._MonitorDt = 0.
         self._MonitoredVariables = [('D', float),
                                     ('omega', np.array),
                                     ('V', np.array)]
@@ -37,7 +34,7 @@ class OdometerMixer(Module):
 
         self._DefaultK = 450
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.omegaReference = np.zeros(3)
         self.VReference = np.zeros(3)
 

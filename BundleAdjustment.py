@@ -30,11 +30,9 @@ def _GenerateSubSpaceBasisFrom(Vectors):
 class BundleAdjustment(Module):
     _DISTANCE_NORMALIZATION_FACTOR = 1.
 
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-        
         self._ScreenCenter = [320., 240.]
         self._ScreenRatio = [640., 640.]
         self._EventsConsideredRatio = 1.
@@ -57,9 +55,6 @@ class BundleAdjustment(Module):
 
         self._CameraWarpDecayPerEvent = 0.0001 / self._EventsConsideredRatio
         self._Point3DWarpDecayPerEvent = 0 * self._CameraWarpDecayPerEvent/100
-        self.LastConsideredEventTs = 0.
-
-        self.Determined3DPointsLocations = {}
 
         self._MonitorDt = 0.01
         self._MonitoredVariables = [('CameraSpaceWarp@Value', np.array),
@@ -67,7 +62,10 @@ class BundleAdjustment(Module):
                                     ('Point3DSpaceWarps@NWarps', int),
                                     'CameraSpaceWarp@FirstLambdaRatio']
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
+        self.LastConsideredEventTs = 0.
+        self.Determined3DPointsLocations = {}
+
         self.Point3DSpaceWarps = {}
         self.CameraSpaceWarp = SpaceWarp(12, self._CameraPoseNormalizationMethod, self._DefaultCameraStretch, self._DefaultCameraVector, 0.5, RetreiveMethod = 'lambdas', WarpMethod = self._CameraWarpMethod)
         # P = (r_11, r_12, r_13, r_21, r_22, r_23, r_31, r_32, r_33, t_x, t_y, t_z)

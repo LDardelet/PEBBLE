@@ -7,20 +7,16 @@ import os
 _PICTURES_VIEWER = "eog"
 
 class PictureSaver(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Creates PNG images of anything plottable that comes though
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
-        self._NeedsLogColumn = False
-
         self._FramesDt = 0.01
         self._TauOutputs = ['Default', 'Framework']
         self._Outputs = ['Events', 'Disparities']
         self._Tau = 0.005
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         if self._FramesDt == 0:
             self.LogWarning("Sampling interval (_FramesDt) is null")
             self.LogWarning("No pictures will be created")
@@ -80,7 +76,7 @@ class PictureSaver(Module):
             if TauName == 'Default':
                 Tau = self._Tau
             elif TauName == 'Framework':
-                Tau = self.FrameworkTau
+                Tau = self.FrameworkAverageTau
                 if Tau is None or Tau == 0:
                     Tau = self._Tau
             for output in self._Outputs:

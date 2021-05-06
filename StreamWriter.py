@@ -2,16 +2,10 @@ from PEBBLE import Module, CameraEvent, DisparityEvent, TrackerEvent
 import numpy as np
 
 class StreamWriter(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Module to write an event stream (as .txt for now). Useful to re-write filtered or cut portions of streams
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
-        self._MonitorDt = 0. # By default, a module does not stode any date over time.
-        self._NeedsLogColumn = False
-        self._MonitoredVariables = []
-
         self._EventType = None
         self._ResetTsToZero = True
         self._FileName = ''
@@ -19,7 +13,7 @@ class StreamWriter(Module):
         self._yInvert = True
         self.CurrentFile = None
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         if self._EventType is None:
             self.LogWarning("No event type specified, no output data")
             self.Write = False

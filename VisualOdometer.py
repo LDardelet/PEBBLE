@@ -2,12 +2,10 @@ from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
 import numpy as np
 
 class VisualOdometer(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Uses disparity events and optical flow events to recover a visual odometry
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('V', np.array),
@@ -37,7 +35,7 @@ class VisualOdometer(Module):
         self._Tau = 0.05
         self._FrameworkTauRatio = 4
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.ScreenSize = np.array(self.Geometry)
         self.ScreenCenter = self.ScreenSize / 2 - 0.5
 
@@ -210,7 +208,7 @@ class VisualOdometer(Module):
     def Tau(self):
         if self._FrameworkTauRatio == 0:
             return self._Tau
-        Tau = self.FrameworkTau
+        Tau = self.FrameworkAverageTau
         if Tau is None:
             return self._Tau
         else:

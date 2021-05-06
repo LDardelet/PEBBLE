@@ -3,20 +3,14 @@ import numpy as np
 from PEBBLE import Module
 
 class Memory(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to handle ST-context memory.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
-        self._MonitorDt = 0. # By default, the memory module does NOT take any shapshot, to ensure memory doesn't get filled.
-        self._MonitoredVariables = []
-        self._NeedsLogColumn = False
-
         self._DefaultTau = 0.1
         self._ExpectedDensity = 0.01
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
 
         self.STContext = -np.inf*np.ones(tuple(self.Geometry) + (2,))
         self.LastEvent = None

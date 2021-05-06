@@ -3,19 +3,17 @@ import numpy as np
 from PEBBLE import Module
 
 class ROI(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to implement a simple spatial ROI.
         Expects nothing.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self._xMinOffset = 0
         self._xMaxOffset = None # Leave None for symetrical value
         self._yMinOffset = 0
         self._yMaxOffset = None # Leave None for symetrical value
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         if self._xMaxOffset is None:
             self._xMaxOffset = self._xMinOffset
         if self._yMaxOffset is None:

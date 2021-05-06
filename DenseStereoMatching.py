@@ -5,14 +5,11 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 
 class DenseStereo(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Module that given two input streams creates a dense disparity map.
         For now, works only with rectified square cameras?
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-        self.__ModulesLinksRequested__ = []
-
         self._ComparisonRadius = 10
         self._OfflineRadiusRatio = 0.
         self._Tau = 0.05
@@ -43,7 +40,7 @@ class DenseStereo(Module):
                                     ('MatchedEvents', float),
                                     ('UnmatchedEvents', float)]
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.UsedGeometry = np.array(self.Geometry)
 
         self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}

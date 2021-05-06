@@ -39,12 +39,9 @@ def _GenerateSubSpaceBasisFrom(Vectors):
 class BundleAdjustmentWarp(Module):
     _DISTANCE_NORMALIZATION_FACTOR = 1.
 
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
-        Class to handle ST-context memory.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-        
         self._ScreenCenter = [320., 0]
         self._ScreenRatio = [640., 640.]
         self._EventsConsideredRatio = 1.
@@ -66,8 +63,6 @@ class BundleAdjustmentWarp(Module):
         self._Point2DForcedDepthStretch = 0.9
         self._DefaultUnknownDepthDistance = 2.5
         self._NPointsForDistanceDefinition = 10
-        self.UsedPointsForDistanceDefinition = {}
-        self.AveragedDistance = self._DefaultUnknownDepthDistance
 
         self._DefaultCameraStretch = 0.9
         self._Default2DPointStretch = 0.9
@@ -94,7 +89,9 @@ class BundleAdjustmentWarp(Module):
         self._CheatGaussianNoise = 0.01
         self._NControlPoints = 10
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
+        self.UsedPointsForDistanceDefinition = {}
+        self.AveragedDistance = self._DefaultUnknownDepthDistance
         self.Point2DSpaceWarps = {}
         self.LastPointsReceived = {}
         self.LastTs = -np.inf

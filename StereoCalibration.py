@@ -6,23 +6,17 @@ import matplotlib.pyplot as plt
 import imageio
 
 class StereoCalibration(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Module template to be filled foe specific purpose
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
-        self._MonitorDt = 0. # By default, a module does not store any data over time.
-        self._NeedsLogColumn = False
-        self._MonitoredVariables = []
-
         self._CalibrationInput = ''
         self._CalibrationStoredPoints = [[],[]]
         self._SendUncalibratedEvents = False
         self._TriggerCalibrationAfterRatio = 0.1
         self._EnhanceSTContext = True
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.UsedGeometry = np.array(self.Geometry)
         self.RectifyFunction = self.MatrixRectification
         if type(self._CalibrationInput) == str:

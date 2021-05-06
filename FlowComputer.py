@@ -5,11 +5,10 @@ import matplotlib.pyplot as plt
 from PEBBLE import Module, CameraEvent, FlowEvent
 
 class FlowComputer(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Tool to compute the optical flow.
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
         self.__ModulesLinksRequested__ = ['Memory']
 
         self._R = 5
@@ -36,8 +35,7 @@ class FlowComputer(Module):
 
         self._MaxFlowValue = np.inf
 
-    def _InitializeModule(self):
-        self.Memory = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
+    def _OnInitialization(self):
         self.STContext = self.Memory.STContext
 
         self.D = (2*self._R+1)
@@ -83,7 +81,7 @@ class FlowComputer(Module):
         if t == -np.inf:
             return None
         dtm = t - tm
-        Tau = self.FrameworkTau
+        Tau = self.FrameworkAverageTau
         if Tau is None or Tau == 0:
             Tau = self._Tau
         ValidMap = dtm < Tau * self._TauRatio

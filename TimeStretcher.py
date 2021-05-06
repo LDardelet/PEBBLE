@@ -3,12 +3,10 @@ import numpy as np
 from PEBBLE import Module, Event
 
 class Stretcher(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to modify timestamps, mofifying speed norms
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self.__Started__ = False
 
         self._FuncType__ = 'sinus'
@@ -16,7 +14,7 @@ class Stretcher(Module):
                                 'sinus': {'Amplitude':0.8, 'Period':0.05}
                                 }
 
-    def _InitializeModule(self):
+        def _OnInitialization(self):
         self.ModFunctions = {'linear': self.LinearStretch, 'sinus':self.SinusStretch}
         
         self.SelectedFunction = self.ModFunctions[self._FuncType]

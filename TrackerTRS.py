@@ -32,11 +32,10 @@ def NonZero(x):
         return NonZeroNumber(x)
 
 class TrackerTRS(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
+        Main algorithm described in "MASCOT : Multi-Asynchronous event-based Continuous Detection and Tracking"
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self._SendTrackerEventForStatuses = [StateClass._STATUS_STABILIZING,
                                               StateClass._STATUS_CONVERGED,
                                               StateClass._STATUS_LOCKED]
@@ -132,7 +131,7 @@ class TrackerTRS(Module):
                                      ]
         self._StateClass = StateClass
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.FeatureManager = FeatureManagerClass(self)
         self.GTMaker = GTMakerClass(self)
         if self._DetectorAutoRestart: #  One cannot expect all trackers to die if they auto restart

@@ -232,13 +232,11 @@ class Map3DClass:
                     self.EventsGenerators += [EventGeneratorClass(len(self.EventsGenerators), X, np.array([x,y,z]), BiCameraSystem, self.Voxels)]
 
 class MovementSimulatorClass(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to emulate stereo system moving with artificial map
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
         self.__IsInput__ = True
-
 
         self._MapType = 'cubes'
         self._dt = 0.0001
@@ -255,8 +253,9 @@ class MovementSimulatorClass(Module):
         self._MaxStepsNoEvents = 100
         self._AddAxes = False
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.LogError("Events handling not updated to containers. Unable to proceed")
+        return False
 
         if self._AddAxes:
             self.PoseGraphs, self.PoseAxs = plt.subplots(2,1)

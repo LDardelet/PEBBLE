@@ -7,20 +7,18 @@ import json
 from PEBBLE import Module
 
 class Clicker(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Class to record points in a sequence
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
         self.__ModulesLinksRequested__ = ['Memory']
 
         self._TW = 0.01
         self._BinDt = 0.05
         self._FirstPictureAt = 0.01
 
-    def _InitializeModule(self):
-
-        self._Mem = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
+    def _OnInitialization(self):
+        self.Memory = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
 
         self.RecordedPoints = []
         self.PreviousFramePoints = []
@@ -39,9 +37,9 @@ class Clicker(Module):
         if event.timestamp > self.CurrentT + self._BinDt:
             self.CurrentT = event.timestamp
             if self.Image is None:
-                self.Image = self.Ax.imshow(np.transpose(self._Mem.STContext.max(axis = 2) > event.timestamp - self._TW), origin = 'lower')
+                self.Image = self.Ax.imshow(np.transpose(self.Memory.STContext.max(axis = 2) > event.timestamp - self._TW), origin = 'lower')
             else:
-                self.Image.set_data(np.transpose(self._Mem.STContext.max(axis = 2) > event.timestamp - self._TW))
+                self.Image.set_data(np.transpose(self.Memory.STContext.max(axis = 2) > event.timestamp - self._TW))
             
             self.PreviousPs = [self.Ax.plot(Point[2], Point[3], 'vg'*(nPoint > 0) + '*b'*(nPoint == 0))[0] for nPoint, Point in enumerate(self.PreviousFramePoints)]
             self.PreviousLinks = []
@@ -55,12 +53,12 @@ class Clicker(Module):
             self._NextID()
 
             self.Recording = True
-            self.NewPoints += [[None, self._Mem.LastEvent.timestamp, 0, 0]]
+            self.NewPoints += [[None, self.Memory.LastEvent.timestamp, 0, 0]]
 
             self.Ps += [self.Ax.plot(self.NewPoints[-1][2], self.NewPoints[-1][3], 'vr')[0]]
             self.PreviousFramePoints = []
 
-            self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
+            self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self.Memory.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
 
             self.CurrentCIDButt = self.Figure.canvas.mpl_connect('button_press_event', self.RecordEvent)
             self.CurrentCIDKey = self.Figure.canvas.mpl_connect('key_press_event', self.RecordEvent)
@@ -89,7 +87,7 @@ class Clicker(Module):
                 PossibleIDs = [ID for ID in self.WasActive if ID > self.NewID]
                 self.NewID = min(PossibleIDs)
                 for i in range(self.NewID - len(self.NewPoints)):
-                    self.NewPoints += [[None, self._Mem.LastEvent.timestamp, 0, 0]]
+                    self.NewPoints += [[None, self.Memory.LastEvent.timestamp, 0, 0]]
                     self.Ps += [self.Ax.plot(self.NewPoints[-1][2], self.NewPoints[-1][3], 'vr')[0]]
                 return None
 
@@ -100,23 +98,23 @@ class Clicker(Module):
                 self.NewPoints[self.NewID][2] = event.xdata
                 self.NewPoints[self.NewID][3] = event.ydata
                 self.Ps[self.NewID].set_data(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3])
-                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
+                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self.Memory.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
         else:
             if event.key == 'right':
                 self.Ps[self.NewID].set_color('k')
                 self._NextID()
                 if len(self.NewPoints) == self.NewID:
-                    self.NewPoints += [[None, self._Mem.LastEvent.timestamp, 0, 0]]
+                    self.NewPoints += [[None, self.Memory.LastEvent.timestamp, 0, 0]]
                     self.Ps += [self.Ax.plot(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3], 'vr')[0]]
                 else:
                     self.Ps[self.NewID].set_color('r')
 
-                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
+                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self.Memory.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
             elif event.key == 'left' and self.NewID >= 1:
                 self.Ps[self.NewID].set_color('k')
                 self.NewID -= 1
                 self.Ps[self.NewID].set_color('r')
-                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
+                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self.Memory.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
             elif event.key == 'down':
                 self.Ax.set_title("Generating next frame")
                 self.WasActive = []
@@ -139,7 +137,7 @@ class Clicker(Module):
                 self.NewPoints[self.NewID][0] = None
                 self.NewPoints[self.NewID][2] = 0
                 self.NewPoints[self.NewID][3] = 0
-                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self._Mem.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
+                self.Ax.set_title("Setting NewID = {0} ({2}) at t = {1:.2f}".format(self.NewID, self.Memory.LastEvent.timestamp, 'None'*int(self.NewPoints[self.NewID][0] is None) + 'Set'*(1 - int(self.NewPoints[self.NewID][0] is None))))
                 self.Ps[self.NewID].set_data(self.NewPoints[self.NewID][2], self.NewPoints[self.NewID][3])
 
     def SaveRecordedData(self):

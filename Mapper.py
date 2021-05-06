@@ -4,12 +4,10 @@ import matplotlib.pyplot as plt
 import cv2
 
 class Mapper(Module):
-    def __init__(self, Name, Framework, ModulesLinked):
+    def _OnCreation(self):
         '''
         Module that creates a stable 2D map from trackers
         '''
-        Module.__init__(self, Name, Framework, ModulesLinked)
-
         self._MinActiveTrackers = 8
         self._MaxErrorAllowed = 4.
         self._MaxMapValue = 10
@@ -24,7 +22,7 @@ class Mapper(Module):
                                     ('TrustedAverageErrorNorm', float),
                                     ('TrustedSigmaErrorNorm', float)]
 
-    def _InitializeModule(self):
+    def _OnInitialization(self):
         self.Trackers = {}
         self.ActiveTrackers = set()
         self.Pose = PoseClass(np.array(self.Geometry), self)

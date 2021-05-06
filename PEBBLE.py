@@ -126,8 +126,6 @@ class Framework:
             InputTool = self.Tools[InputToolName]
             if not ToolEventsRestriction:
                 return InputTool
-            if not InputTool.__SubStreamOutputIndexes__:
-                return InputTool
             for CameraIndex in InputTool.__SubStreamOutputIndexes__:
                 if CameraIndex in ToolEventsRestriction:
                     return InputTool
@@ -645,7 +643,7 @@ class Framework:
         if Tool.__IsInput__:
             Tool.__SubStreamInputIndexes__ = set()
             Tool.__SubStreamOutputIndexes__ = set(self._ToolsSubStreamsCreated[ToolName])
-            if not Tool._SetInputModuleSubStreamIndexes(self._ToolsSubStreamsCreated[ToolName]):
+            if not Tool._SetGeneratedSubStreamsIndexes(self._ToolsSubStreamsCreated[ToolName]):
                 return False
         else:
             if not self._ToolsSubStreamsHandled[ToolName]:
@@ -656,7 +654,7 @@ class Framework:
             if Tool.__GeneratesSubStream__:
                 for SubStreamIndex in self._ToolsSubStreamsCreated[ToolName]:
                     Tool.__SubStreamOutputIndexes__.add(SubStreamIndex)
-                if not Tool._SetInputModuleSubStreamIndexes(self._ToolsSubStreamsCreated[ToolName]):
+                if not Tool._SetGeneratedSubStreamsIndexes(self._ToolsSubStreamsCreated[ToolName]):
                     return False
 
     def GetModulesParameters(self):
@@ -1002,33 +1000,43 @@ class Module:
     def __init__(self, Name, Framework, ModulesLinked):
         '''
         Default module class.
-        Each module in the Framework should inherit this class, whose 3 main methods and main parameters are required annd defined here.
-        Type should be set manually.
+        Each module in the Framework should inherit this class. More information is given in ModuleTemplate.py
         '''
+        self.__ModulesLinksRequested__ = []
+
+        self._NeedsLogColumn = False
+
+        self.__IsInput__ = False
+        self.__GeneratesSubStream__ = False
+
+        self._MonitoredVariables = []
+        self._MonitorDt = 0
+
+        ####
+
         self.__Framework__ = Framework
         self.__Name__ = Name
 
         self.Log("Generating module")
-        self.__ModulesLinksRequested__ = []
         self.__ModulesLinked__ = dict(ModulesLinked)
-        self.__IsInput__ = False
-        self.__GeneratesSubStream__ = False
         self.__Initialized__ = False
         self.__SavedValues__ = {}
         self.__SubStreamInputIndexes__ = set()
         self.__SubStreamOutputIndexes__ = set()
         self.__GeneratedSubStreams__ = []
         
-        self._MonitoredVariables = []
-        self._MonitorDt = 0
         self._ProposesTau = ('EventTau' in self.__class__.__dict__) # We set this as a variable, for user to change it at runtime. It can be accessed as a public variable through 'self.ProposesTau'
-        self._NeedsLogColumn = True
         self.__LastMonitoredTimestamp = -np.inf
         
         try:
             self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
         except:
             None
+
+        self._OnCreation()
+
+    def __repr__(self):
+        return self.__Name__
 
     def _GetParameters(self):
         InputDict = {}
@@ -1061,12 +1069,19 @@ class Module:
     def OutputGeometry(self):
         return self.Geometry
     @property
-    def FrameworkTau(self):
+    def FrameworkEventTau(self):
         '''
-        Method to retreive the highest level information Tau from the framework.
+        Method to retreive the highest level information Tau from the framework, depending on all the information of the current event running..
         If no Tau is proposed by any other module, will return None, so default value has to be Module specific
         '''
         return self.__Framework__._GetLowerLevelTau(self._RunningEvent, self)
+    @property
+    def FrameworkAverageTau(self):
+        '''
+        Method to retreive the highest level information Tau from the framework, with no information about the current event.
+        If no Tau is proposed by any other module, will return None, so default value has to be Module specific
+        '''
+        return self.__Framework__._GetLowerLevelTau(None, self)
 
     def __Initialize__(self, Parameters):
         # First restore all previous values
@@ -1093,8 +1108,12 @@ class Module:
                         self.__UpdateParameter__(Key, Value)
                         continue
         
+        # We can only link modules at this point, since the framework must have created them all before
+        for ModuleLinkRequested, ModuleLinked in self.__ModulesLinked__.items():
+            self.__dict__[ModuleLinkRequested] = self.__Framework__.Tools[ModuleLinked]
+
         # Initialize the stuff corresponding to this specific module
-        if not self._InitializeModule():
+        if not self._OnInitialization():
             return False
 
         # Finalize Module initialization
@@ -1107,6 +1126,7 @@ class Module:
             if not self._MonitoredVariables:
                 self.LogWarning("Enabling monitoring for Tau value")
             self._MonitoredVariables = [('AverageTau', float)] + self._MonitoredVariables
+            self.__class__.AverageTau = property(lambda self: self.EventTau(None))
 
         if self._MonitorDt and self._MonitoredVariables:
             self.History = {'t':[]}
@@ -1137,7 +1157,7 @@ class Module:
     def ProposesTau(self):
         return self._ProposesTau
 
-    def _SetInputModuleSubStreamIndexes(self, Indexes):
+    def _SetGeneratedSubStreamsIndexes(self, Indexes):
         '''
         Specific method for input modules.
         Upon calling when framework is created, will allow the module to set its variables accordingly to what was specified in the project file.
@@ -1156,20 +1176,22 @@ class Module:
     def _Restart(self):
         # Template method for restarting modules, for instant display handler. Quite specific for now
         pass
-    def _InitializeModule(self):
+    def _OnCreation(self):
+        # Main method for defining parameters of the module, monitored variables, etc...
+        # It must be formatted following the ModuleTemplate.py model, for the creation of the module to work smoothly. All predefined lines can be either modified, or removed
+        pass
+    def _OnInitialization(self):
         # Template for user-filled module initialization
+        # Should return True if everything went normal
         return True
     def _OnEventModule(self, event):
         # Template for user-filled module event running method
+        # Should not return anything, as the Framework takes care of events handling
         pass
     def EventTau(self, event = None):
         # User-filled method to propose a tau for the whole framework. Ideally, thet further in the framework, the higher the information and the more acurate Tau information is
         # Return None for default, or 0 for non-defined tau yet
         pass
-    @property
-    def AverageTau(self):
-        # For monitoring purposes, a module that proposes a Tau should propose an average tau value, that does not depend on the event. Thus, EventTau(None) will be called upon monitoring
-        return self.EventTau(None)
     @property
     def MapTau(self):
         if not self._ProposesTau:
@@ -1235,7 +1257,7 @@ class Module:
                 return True
         return False
 
-    def _IsChile(self, ParentModule):
+    def _IsChild(self, ParentModule):
         if ParentModule.__ToolIndex__ > self.__ToolIndex__:
             return False
         for SubStreamIndex in self.__SubStreamInputIndexes__:

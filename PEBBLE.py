@@ -230,7 +230,7 @@ class Framework:
             self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ToolName in self.ToolsList:
             self.Tools[ToolName]._OnClosing()
-        self._SaveInterpreterData()
+        #self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
     def _DestroyFolder(self):
@@ -863,8 +863,7 @@ class Framework:
 
         nOrder = 0
         for ToolName in self.ToolsList:
-            filename = inspect.getfile(self.Tools[ToolName].__class__)
-            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ToolName, str(self.Tools[ToolName].__class__).split('.')[1][:-2], filename), 3)
+            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ToolName, str(self.Tools[ToolName].__class__).split('.')[1][:-2], self._ProjectRawData[ToolName]['File']), 3)
             if not self.Tools[ToolName].__IsInput__:
                 if self.Tools[ToolName].__SubStreamInputIndexes__:
                     self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamInputIndexes__])+".")
@@ -878,6 +877,17 @@ class Framework:
                 self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamOutputIndexes__]))
             else:
                 self._Log("     Outputs the same camera indexes.")
+            SortedAttachments = self._AnalyzeModule(ToolName)
+            if not SortedAttachments:
+                #self._Log("     Does not add event data.")
+                pass
+            else:
+                if SortedAttachments['DefaultEvent'][1]:
+                    self._Log("     Attaches {0} information to the running event.".format(', '.join(SortedAttachments['DefaultEvent'][1])))
+                for NewEventName, (SubStream, NewEventData) in SortedAttachments.items():
+                    if NewEventName == 'DefaultEvent':
+                        continue
+                    self._Log("     Adds a new event with {0} for substream {1}.".format(', '.join(SortedAttachments[NewEventName][1]), SubStream))
             if self._ToolsModulesLinks[ToolName]:
                 self._Log("     Modules Linked:")
                 for argName, toolLinked in self._ToolsModulesLinks[ToolName].items():
@@ -894,6 +904,7 @@ class Framework:
             
             nOrder += 1
 
+    @property
     def VisualProject(self):
         f, ax = plt.subplots(1,1)
         ax.tick_params('both', left = False, labelleft = False, bottom = False, labelbottom = False)
@@ -929,6 +940,108 @@ class Framework:
         ax.set_xlim(min(list(self._SubStreamIndexes)) - ToolWidth, max(list(self._SubStreamIndexes)) + ToolWidth)
         ax.set_ylim(max(list(SubStreamsToolLevels.values()))-ToolHeight, -ToolHeight)
         ax.legend()
+
+    def _AnalyzeModule(self, ModuleName):
+        ModuleClassName, ModuleFile = self._ProjectRawData[ModuleName]['Class'], self._ProjectRawData[ModuleName]['File']
+        def AddEventMod(RawArguments, FoundAttachments, KW, nHLine, AttachedEvent, CreatedEvent, Module):
+            Arguments = [Argument.strip() for Argument in RawArguments.strip().strip('(').strip(')').split(',')]
+            if not Arguments[0] in _AvailableEventsClassesNames:
+                return
+            SubStreamSpec = 'running'
+            if KW == 'Join':
+                for RawKwarg in Arguments[1:]:
+                    try:
+                        Key, Value = [part.strip() for part in RawKwarg.split('=')]
+                    except ValueError:
+                        pass
+                    if Key == 'SubStreamIndex':
+                        try:
+                            if AttachedEvent in Value and Value != AttachedEvent+'.SubStreamIndex':
+                                raise Exception
+                            else:
+                                if 'self' not in Value:
+                                    raise Exception
+                                Value = Value.split('self.')[-1]
+                                if Value in Module.__dict__:
+                                    SubStreamSpec = "{0}".format(Module.__dict__[Value])
+                                else:
+                                    raise Exception
+                        except:
+                            SubStreamSpec = '?'
+            FoundAttachments[KW].add((Arguments[0], SubStreamSpec, AttachedEvent, CreatedEvent))
+            FoundAttachments['Mods'] = True
+        with open(ModuleFile+'.py', 'r') as f:
+            lines = f.readlines()
+        InClass = False
+        ModuleIndent = 0
+        InEventModification = ''
+        FoundAttachments = {'Join':set(), 'Attach':set(), 'Mods':False}
+        CreatedEvents = set()
+        for nLine, line in enumerate(lines):
+            nHLine = nLine + 1
+            if (not InClass) and ('class '+ModuleClassName not in line):
+                continue
+            if not InClass:
+                InClass = True
+                continue
+            LineIndent = line.index(line.strip())
+            if ModuleIndent == 0:
+                ModuleIndent = LineIndent
+            if not line.strip() or line.strip()[0] == '#':
+                continue
+            if LineIndent < ModuleIndent:
+                InClass = False
+                break
+            for CreatedEvent in set(CreatedEvents):
+                if CreatedEvent[1] > LineIndent:
+                    CreatedEvents.discard(CreatedEvent)
+            if not InEventModification:
+                if 'Attach' in line:
+                    InEventModification = 'Attach'
+                    CreatedEvent = ''
+                elif 'Join' in line:
+                    InEventModification = 'Join'
+                    PreModRawData = line.strip().split(InEventModification)[0]
+                    if '=' in PreModRawData:
+                        CreatedEvent = PreModRawData.split('=')[0].strip()
+                    else:
+                        MinValue = 0
+                        PrefixDefaultName = 'RandomEvent#'
+                        for (_, _, _, AlreadyCreatedEvent) in FoundAttachments['Join']:
+                            if PrefixDefaultName in AlreadyCreatedEvent:
+                                MinValue = int(AlreadyCreatedEvent.split(PrefixDefaultName)[-1]) + 1
+                        CreatedEvent = 'RandomEvent_{0}'.format(MinValue)
+                if InEventModification:
+                    AttachedEvent = line.strip().split(InEventModification)[0].split('=')[-1].strip()[:-1]
+                    RawArguments = line.strip().split(InEventModification)[1]
+                    if RawArguments.count('(') == RawArguments.count(')'):
+                        AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Tools[ModuleName])
+                        InEventModification = ''
+                    continue
+            else:
+                Finished = False
+                for char in line.strip():
+                    RawArguments = RawArguments + char
+                    if RawArguments.count('(') == RawArguments.count(')'):
+                        Finished = True
+                        break
+                if not Finished:
+                    continue
+                AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Tools[ModuleName])
+                InEventModification = ''
+
+        if not FoundAttachments['Mods']:
+            return []
+        SortedAttachments = {'DefaultEvent':(None, [])}
+        for (EventType, SubStreamSpec, AttachedEvent, CreatedEvent) in FoundAttachments['Join']:
+            SortedAttachments[CreatedEvent] = (SubStreamSpec, [EventType])
+        for (EventType, SubStreamSpec, AttachedEvent, CreatedEvent) in FoundAttachments['Attach']:
+            if AttachedEvent not in SortedAttachments:
+                Key = 'DefaultEvent'
+            else:
+                Key = AttachedEvent
+            SortedAttachments[Key][1].append(EventType)
+        return SortedAttachments
 
     def _Log(self, Message, MessageType = 0, Module = None, Raw = False, AutoSendIfPaused = True):
         if self._LogType == 'columns' and not Raw:
@@ -1680,3 +1793,6 @@ class ParametersDictClass(dict):
                     raise KeyError(key)
         else:
             super().__setitem__(key, value)
+
+_AvailableEventsClassesNames = [EventType.__name__ for EventType in _EventExtensionClass.__subclasses__()]
+

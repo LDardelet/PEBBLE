@@ -44,9 +44,9 @@ class ModuleTemplate(Module):
 
     def _SetGeneratedSubStreamsIndexes(self, Indexes):
         '''
-        Method necessary for all modules that are at the base of a SubStream (self.__IsInput__ = True or self.__GeneratesSubStream__ = True
+        Method necessary for all modules that are at the base of a SubStream (self.__IsInput__ = True or self.__GeneratesSubStream__ = True).
         Allows to set the variables according to the specified data of the project file.
-        Return True if all is set and done.
+        Return True if all is set and done. Leave unchanged for unconcerned modules.
         '''
         return False
 

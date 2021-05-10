@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class ROI(Module):
+class ROI(ModuleBase):
     def _OnCreation(self):
         '''
         Class to implement a simple spatial ROI.
@@ -18,7 +18,6 @@ class ROI(Module):
             self._xMaxOffset = self._xMinOffset
         if self._yMaxOffset is None:
             self._yMaxOffset = self._yMinOffset
-        # self._Memory = self.__Framework__.Tools[self.__CreationReferences__['Memory']]
         self.AllowedEvents = 0
         self.FilteredEvents = 0
         self.MinX = np.array([self._xMinOffset, self._yMinOffset])

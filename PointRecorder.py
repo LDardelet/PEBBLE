@@ -4,9 +4,9 @@ import datetime
 
 import json
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class Clicker(Module):
+class Clicker(ModuleBase):
     def _OnCreation(self):
         '''
         Class to record points in a sequence
@@ -18,8 +18,6 @@ class Clicker(Module):
         self._FirstPictureAt = 0.01
 
     def _OnInitialization(self):
-        self.Memory = self.__Framework__.Tools[self.__ModulesLinked__['Memory']]
-
         self.RecordedPoints = []
         self.PreviousFramePoints = []
         self.CurrentT = self._FirstPictureAt - self._BinDt

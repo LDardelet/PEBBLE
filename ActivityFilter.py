@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class ActivityFilter(Module):
+class ActivityFilter(ModuleBase):
     def _OnCreation(self):
         '''
         Class to implement an activity filter (also known as Background Activity filter).

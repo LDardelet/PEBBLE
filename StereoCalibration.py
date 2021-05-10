@@ -1,11 +1,11 @@
-from PEBBLE import Module, CameraEvent
+from PEBBLE import ModuleBase, CameraEvent
 import cv2
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 import imageio
 
-class StereoCalibration(Module):
+class StereoCalibration(ModuleBase):
     def _OnCreation(self):
         '''
         Module template to be filled foe specific purpose
@@ -113,13 +113,13 @@ class StereoCalibration(Module):
             RyInvert = np.identity(3)
             RyInvertInv = np.identity(3)
         CamerasNames = [None, None]
-        for ToolName, Tool in self.__Framework__.Tools.items():
-            if not Tool.__IsInput__:
+        for ModuleName, Module in self.__Framework__.Modules.items():
+            if not Module.__IsInput__:
                 continue
-            UsedIndex = Tool.SubStreamIndex
-            if 'right' in ToolName.lower():
+            UsedIndex = Module.SubStreamIndex
+            if 'right' in ModuleName.lower():
                 CamerasNames[UsedIndex] = 'right'
-            elif 'left' in ToolName.lower():
+            elif 'left' in ModuleName.lower():
                 CamerasNames[UsedIndex] = 'left'
             else:
                 raise Exception("Unable to automatically set camera indexes to camera names")

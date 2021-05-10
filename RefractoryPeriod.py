@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class Refractory(Module):
+class Refractory(ModuleBase):
     def _OnCreation(self):
         '''
         Class to filter events from spike trains.

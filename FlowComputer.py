@@ -2,12 +2,12 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, CameraEvent, FlowEvent
+from PEBBLE import ModuleBase, CameraEvent, FlowEvent
 
-class FlowComputer(Module):
+class FlowComputer(ModuleBase):
     def _OnCreation(self):
         '''
-        Tool to compute the optical flow.
+        Module to compute the optical flow.
         '''
         self.__ModulesLinksRequested__ = ['Memory']
 

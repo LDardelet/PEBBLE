@@ -1,4 +1,4 @@
-from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent
+from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent
 import matplotlib.pyplot as plt
 import numpy as np
 import datetime
@@ -6,7 +6,7 @@ import os
 
 _PICTURES_VIEWER = "eog"
 
-class PictureSaver(Module):
+class PictureSaver(ModuleBase):
     def _OnCreation(self):
         '''
         Creates PNG images of anything plottable that comes though

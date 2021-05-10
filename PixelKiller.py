@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class PixelKiller(Module):
+class PixelKiller(ModuleBase):
     def _OnCreation(self):
         '''
         Randomly kills pixels from generating events.

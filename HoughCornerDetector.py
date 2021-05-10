@@ -6,9 +6,9 @@ import json
 
 import cv2
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class HoughCD(Module):
+class HoughCD(ModuleBase):
     def _OnCreation(self):
         '''
         Module to detect corners with the Hough Corner Detection algorithm.

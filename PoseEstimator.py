@@ -1,10 +1,10 @@
-from PEBBLE import Module, OdometryEvent, TrackerEvent, DisparityEvent, PoseEvent
+from PEBBLE import ModuleBase, OdometryEvent, TrackerEvent, DisparityEvent, PoseEvent
 from functools import lru_cache
 import numpy as np
 
 _MAX_DEPTH = 1e3
 
-class PoseEstimator(Module):
+class PoseEstimator(ModuleBase):
     def _OnCreation(self):
         '''
         Event-based pose estimator.
@@ -26,6 +26,10 @@ class PoseEstimator(Module):
         self._MuV = 1.
         self._MuOmega = 1.
 
+        self._RightCameraSubStreamIndex = 0
+        self._LeftCameraSubStreamIndex = 1
+        self._MixerSubStreamIndex = 2
+
     def _InitializeModule(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
         self.Anchors = {}
@@ -46,9 +50,20 @@ class PoseEstimator(Module):
         self.EnvironmentV = np.zeros(3)
         self.EnvironmentOmega = np.zeros(3)
 
+        self.LastUpdateT = 0.
+
         return True
 
     def _OnEventModule(self, event):
+        if event.Has(OdometryEvent) and event.SubStreamIndex == self._MixerSubStreamIndex:
+            self.EnvironmentV = event.v
+            self.EnvironmentOmega = event.omega
+        elif event.Has(TrackerEvent):
+            if event.TrackerColor == 'k':
+                self.DelAnchor((event.SubStreamIndex, event.TrackerID))
+            else:
+                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation - self.ScreenCenter, event.TrackerID)
+        self.Update(event.timestamp)
         return
 
     def UpdateRigLocationAndLinesOfSights(self, dt):
@@ -90,6 +105,13 @@ class PoseEstimator(Module):
             return _MAX_DEPTH
         return self.StereoBaseDistance * self.K / disparity
 
+    def UpdateFromTracker(self, SubStreamIndex, ScreenLocation, TID):
+        ID = (TID, SubStreamIndex)
+        if ID not in self.Anchors:
+            self.AddAnchor(ID, ScreenLocation, disparity)
+        else:
+            self.TrackersLocationsAndDisparities[ID] = (np.array(ScreenLocation), disparity)
+
     def AddAnchor(self, ID, ScreenLocation, disparity):
         self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, ID[1]), self.RigFrame.X, (self.GetWorldLocation(ScreenLocation, disparity+0.5), self.GetWorldPresenceSegment(ScreenLocation, disparity-0.5, ID[1])))
         self.TrackersLocationsAndDisparities[ID] = (np.array(ScreenLocation), disparity)
@@ -103,7 +125,6 @@ class PoseEstimator(Module):
         self.Anchors[ID].CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+0.5, ID[1]), self.GetWorldPresenceSegment(ScreenLocation, disparity-0.5, ID[1]))
 
     def UpdateTracker(self, ID, ScreenLocation, disparity):
-        self.TrackersLocationsAndDisparities[ID] = (np.array(ScreenLocation), disparity)
 
     def GetWorldLocation(self, ScreenLocation, disparity, CameraIndex):
         return self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))  * self.DepthOf(disparity) + self.CameraOffsetLocations[CameraIndex])

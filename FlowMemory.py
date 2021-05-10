@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module, FlowEvent
+from PEBBLE import ModuleBase, FlowEvent
 
-class FlowMemory(Module):
+class FlowMemory(ModuleBase):
     def _OnCreation(self):
         '''
         Class to handle optical flow memory.

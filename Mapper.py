@@ -1,9 +1,9 @@
-from PEBBLE import Module, CameraEvent, TrackerEvent, PoseEvent
+from PEBBLE import ModuleBase, CameraEvent, TrackerEvent, PoseEvent
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 
-class Mapper(Module):
+class Mapper(ModuleBase):
     def _OnCreation(self):
         '''
         Module that creates a stable 2D map from trackers

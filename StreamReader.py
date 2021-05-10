@@ -3,7 +3,7 @@ from struct import unpack
 from sys import stdout
 import h5py
 
-from PEBBLE import Module, CameraEvent
+from PEBBLE import ModuleBase, CameraEvent
 
 _ES_HEADER_SIZE = 15
 
@@ -16,7 +16,7 @@ _EVENT_TYPE_NAME = {0:'Generic events', 1:'DVS events', 2:'ATIS events', 3:'Asyn
 _EVENT_TYPE_ADITIONNAL_BYTES = {0: None, 1:4, 2:4, 3:3, 4:7}
 _EVENT_TYPE_ANALYSIS_FUNCTIONS_NAMES = {0: None, 1: '_DVS_BYTES_ANALYSIS', 2: '_ATIS_BYTES_ANALYSIS', 3: None, 4:None} # All necessary variables are hardcoded in these functions, as they don't have necessarily the same output and needs
 
-class Reader(Module):
+class Reader(ModuleBase):
     def _OnCreation(self):
         '''
         Class to read events streams files.

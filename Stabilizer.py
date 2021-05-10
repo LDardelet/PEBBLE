@@ -1,8 +1,8 @@
-from PEBBLE import Module, CameraEvent, TrackerEvent, TauEvent
+from PEBBLE import ModuleBase, CameraEvent, TrackerEvent, TauEvent
 
 import numpy as np
 
-class Stabilizer(Module):
+class Stabilizer(ModuleBase):
     def _OnCreation(self):
         '''
         Module stabilizing an event stream spatially from tracker events, and temporally with tau events

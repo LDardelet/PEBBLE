@@ -1,7 +1,7 @@
 import numpy as np
-from PEBBLE import Module, CameraEvent, TrackerEvent
+from PEBBLE import ModuleBase, CameraEvent, TrackerEvent
 
-class StereoPatternMatcher(Module):
+class StereoPatternMatcher(ModuleBase):
     def _OnCreation(self):
         '''
         Module that given a tracker tries to match the corresponding location on another camera

@@ -11,7 +11,7 @@ import shutil
 import pathlib
 import _pickle as cPickle
 import json
-from datetime import datetime as dtModule
+from datetime import datetime
 import matplotlib.pyplot as plt
 import ast
 
@@ -91,7 +91,7 @@ class Framework:
     def Initialize(self):
         self._Initializing = True
         self.PropagatedContainer = None
-        self.InputEvents = {ToolName: None for ToolName in self.ToolsList if self.Tools[ToolName].__IsInput__}
+        self.InputEvents = {ModuleName: None for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__}
         if len(self.InputEvents) == 1:
             self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
             del self.__dict__['InputEvents']
@@ -100,13 +100,13 @@ class Framework:
 
         self._LogType = 'columns'
         self._LogInit()
-        for ToolName in self.ToolsList:
-            InitializationAnswer = Module.__Initialize__(self.Tools[ToolName], self.RunParameters[ToolName])
+        for ModuleName in self.ModulesList:
+            InitializationAnswer = ModuleBase.__Initialize__(self.Modules[ModuleName], self.RunParameters[ModuleName])
             if not InitializationAnswer:
-                self._Log("Tool {0} failed to initialize. Aborting.".format(ToolName), 2)
+                self._Log("Module {0} failed to initialize. Aborting.".format(ModuleName), 2)
                 self._DestroyFolder()
                 return False
-        self._RunToolsMethodTuple = tuple([self.Tools[ToolName].__OnEvent__ for ToolName in self.ToolsList if not self.Tools[ToolName].__IsInput__]) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
+        self._RunModulesMethodTuple = tuple([self.Modules[ModuleName].__OnEvent__ for ModuleName in self.ModulesList if not self.Modules[ModuleName].__IsInput__]) # Faster way to access tools in the right order, and only not input modules as they are dealt with through _NextInputEvent
         self._Log("Framework initialized", 3, AutoSendIfPaused = False)
         self._Log("")
         self._SendLog()
@@ -114,41 +114,41 @@ class Framework:
         return True
 
     def _GetCameraIndexChain(self, Index):
-        ToolsChain = []
-        for ToolName in self.ToolsList:
-            if not self.Tools[ToolName].__SubStreamOutputIndexes__ or Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
-                ToolsChain += [ToolName]
-        return ToolsChain
+        ModulesChain = []
+        for ModuleName in self.ModulesList:
+            if not self.Modules[ModuleName].__SubStreamOutputIndexes__ or Index in self.Modules[ModuleName].__SubStreamOutputIndexes__:
+                ModulesChain += [ModuleName]
+        return ModulesChain
 
-    def _GetParentModule(self, Tool):
-        ToolEventsRestriction = Tool.__SubStreamInputIndexes__
-        for InputToolName in reversed(self.ToolsList[:Tool.__ToolIndex__]):
-            InputTool = self.Tools[InputToolName]
-            if not ToolEventsRestriction:
-                return InputTool
-            for CameraIndex in InputTool.__SubStreamOutputIndexes__:
-                if CameraIndex in ToolEventsRestriction:
-                    return InputTool
-        self._Log("{0} was unable to find its parent module".format(Tool.__Name__), 1)
+    def _GetParentModule(self, Module):
+        ModuleEventsRestriction = Module.__SubStreamInputIndexes__
+        for InputModuleName in reversed(self.ModulesList[:Module.__ModuleIndex__]):
+            InputModule = self.Modules[InputModuleName]
+            if not ModuleEventsRestriction:
+                return InputModule
+            for CameraIndex in InputModule.__SubStreamOutputIndexes__:
+                if CameraIndex in ModuleEventsRestriction:
+                    return InputModule
+        self._Log("{0} was unable to find its parent module".format(Module.__Name__), 1)
 
-    def _GetStreamGeometry(self, Tool):
+    def _GetStreamGeometry(self, Module):
         '''
         Method to retreive the geometry of the events handled by a tool
         '''
-        return self._GetParentModule(Tool).OutputGeometry
+        return self._GetParentModule(Module).OutputGeometry
 
-    def _GetStreamFormattedName(self, Tool):
+    def _GetStreamFormattedName(self, Module):
         '''
         Method to retreive a formatted name depending on the files providing events to this tool.
         Specifically useful for an Input type tool to get the file it has to process.
         '''
-        return self._GetParentModule(Tool).StreamName
+        return self._GetParentModule(Module).StreamName
 
     def _GetLowerLevelTau(self, EventConcerned, ModuleAsking):
         NameAsking = ModuleAsking.__Name__
         EventTau = None
-        for NameProposing in reversed(self.ToolsList[:ModuleAsking.__ToolIndex__]):
-            ModuleProposing = self.Tools[NameProposing]
+        for NameProposing in reversed(self.ModulesList[:ModuleAsking.__ModuleIndex__]):
+            ModuleProposing = self.Modules[NameProposing]
             if (not EventConcerned is None and EventConcerned.SubStreamIndex in ModuleProposing.__SubStreamOutputIndexes__) or (EventConcerned is None and ModuleProposing._IsParent(ModuleAsking)):
                 EventTau = ModuleProposing.EventTau(EventConcerned)
                 if not EventTau is None and not EventTau == 0:
@@ -202,7 +202,7 @@ class Framework:
         return commit_value
 
     def _InitiateFolder(self):
-        self._FolderData = {'home':_RUNS_DIRECTORY + dtModule.now().strftime("%d-%m-%Y_%H-%M") + '/',
+        self._FolderData = {'home':_RUNS_DIRECTORY + datetime.now().strftime("%d-%m-%Y_%H-%M") + '/',
                             'history':None,
                             'pictures':None}
         os.mkdir(self._FolderData['home'])
@@ -218,8 +218,8 @@ class Framework:
                 self.SaveProject(ans)
 
         if '_LastStartWarning' in self.__dict__: # If warp was stopped midway, we delete everything, nothing must have been produced
-            for ToolName in self.ToolsList:
-                self.Tools[ToolName]._OnClosing()
+            for ModuleName in self.ModulesList:
+                self.Modules[ModuleName]._OnClosing()
             self._SessionLogs.pop(1).close()
             return
 
@@ -228,8 +228,8 @@ class Framework:
 
         if not self._CSVDataSaved:
             self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
-        for ToolName in self.ToolsList:
-            self.Tools[ToolName]._OnClosing()
+        for ModuleName in self.ModulesList:
+            self.Modules[ModuleName]._OnClosing()
         #self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
@@ -328,19 +328,19 @@ class Framework:
         with open(Filename, 'wb') as BinDataFile:
             def BinWrite(data_str):
                 BinDataFile.write(str.encode(data_str))
-            now = dtModule.now()
+            now = datetime.now()
             dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
             BinWrite("# Edited on -> "+ dt_string + "\n")
             commit_value = self._GetCommitValue()
             BinWrite("# Framework git commit -> " + commit_value + "\n")
             BinWrite("# Project File -> " + os.path.abspath(self.ProjectFile) + '\n')
             BinWrite("# Project Hash -> " + str(hash(json.dumps(self._ProjectRawData, sort_keys=True))) + "\n")
-            BinWrite("# Input Files -> " + str({InputTool : os.path.abspath(InputFile) for InputTool, InputFile in self.CurrentInputStreams.items()}) + "\n")
+            BinWrite("# Input Files -> " + str({InputModule : os.path.abspath(InputFile) for InputModule, InputFile in self.CurrentInputStreams.items()}) + "\n")
             BinWrite("# Run arguments -> " + str(self.RunKwargs) + '\n')
             BinWrite("#########\n")
 
-            for ToolName in self.ToolsList:
-                self.Tools[ToolName]._SaveData(BinDataFile)
+            for ModuleName in self.ModulesList:
+                self.Modules[ModuleName]._SaveData(BinDataFile)
 
     def SaveCSVData(self, Folder = None, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' '):
         if Folder is None:
@@ -348,9 +348,9 @@ class Framework:
         else:
             if Folder[-1] != '/':
                 Folder = Folder + '/'
-        for ToolName in self.ToolsList:
-            FileName = Folder + ToolName + '.csv'
-            self.Tools[ToolName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
+        for ModuleName in self.ModulesList:
+            FileName = Folder + ModuleName + '.csv'
+            self.Modules[ModuleName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
         self._CSVDataSaved = True
     
     def _LoadFiles(self, File1, File2, onlyRawData):
@@ -425,8 +425,8 @@ class Framework:
             while True:
                 try:
                     Identifier, Data = cPickle.load(BinDataFile)
-                    ToolName = Identifier.split('.')[0]
-                    self.Tools[ToolName]._RecoverData(Identifier[len(ToolName)+1:], Data)
+                    ModuleName = Identifier.split('.')[0]
+                    self.Modules[ModuleName]._RecoverData(Identifier[len(ModuleName)+1:], Data)
                 except EOFError:
                     break
             self._Log("Successfully recovered data", 3)
@@ -441,10 +441,10 @@ class Framework:
         if not resume:
             self._LastStartWarning = 0
             self.RunParameters = dict(ParametersDict)
-            self.CurrentInputStreams = {ToolName:None for ToolName in self.ToolsList if self.Tools[ToolName].__IsInput__}
+            self.CurrentInputStreams = {ModuleName:None for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__}
             if type(StreamName) == str:
-                for ToolName in self.CurrentInputStreams.keys():
-                    self.CurrentInputStreams[ToolName] = StreamName
+                for ModuleName in self.CurrentInputStreams.keys():
+                    self.CurrentInputStreams[ModuleName] = StreamName
             elif type(StreamName) == dict:
                 if len(StreamName) != len(self.CurrentInputStreams):
                     self._Log("Wrong number of stream names specified :", 2)
@@ -472,8 +472,8 @@ class Framework:
         self.Running = True
         self.Paused = ''
         if resume:
-            for ToolName in self.ToolsList:
-                self.Tools[ToolName]._Resume()
+            for ModuleName in self.ModulesList:
+                self.Modules[ModuleName]._Resume()
 
         self.t = 0.
         while not resume and start_at > -np.inf and self.Running and not self.Paused:
@@ -508,8 +508,8 @@ class Framework:
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(self.t, self.Paused), 1)
-                for ToolName in self.ToolsList:
-                    self.Tools[ToolName]._Pause(self.Paused)
+                for ModuleName in self.ModulesList:
+                    self.Modules[ModuleName]._Pause(self.Paused)
             return False
 
     def Resume(self, stop_at = np.inf):
@@ -517,15 +517,15 @@ class Framework:
         self.RunStream(self.StreamHistory[-1], stop_at = stop_at, resume = True)
 
     def DisplayRestart(self):
-        for ToolName in self.ToolsList:
-            self.Tools[ToolName]._Restart()
+        for ModuleName in self.ModulesList:
+            self.Modules[ModuleName]._Restart()
 
     def Next(self, AtEventMethod = None):
         self.PropagatedContainer = self._NextInputEventMethod()
         if self.PropagatedContainer is None:
             return None
         t = self.PropagatedContainer.timestamp
-        for RunMethod in self._RunToolsMethodTuple:
+        for RunMethod in self._RunModulesMethodTuple:
             if not AtEventMethod is None:
                 AtEventMethod(self.PropagatedContainer)
             if not RunMethod(self.PropagatedContainer):
@@ -536,13 +536,13 @@ class Framework:
         return t
 
     def _SingleInputModuleNextInputEventMethod(self):
-        return self.Tools[self.ToolsList[0]].__OnEvent__(_EventContainerClass(Bare = True))
+        return self.Modules[self.ModulesList[0]].__OnEvent__(_EventContainerClass(Bare = True))
 
     def _MultipleInputModulesNextInputEventMethod(self):
         OldestEvent, ModuleSelected = None, None
         for InputName, EventAwaiting in self.InputEvents.items():
             if EventAwaiting is None:
-                EventAwaiting = self.Tools[InputName].__OnEvent__(_EventContainerClass(Bare = True))
+                EventAwaiting = self.Modules[InputName].__OnEvent__(_EventContainerClass(Bare = True))
             else:
                 self.InputEvents[InputName] = None
             if not EventAwaiting is None:
@@ -561,16 +561,16 @@ class Framework:
 #### Project Management ####
 
     def _GenerateEmptyProject(self):
-        self.Tools = {}
-        self._ToolsModulesLinks = {}
-        self._ToolsProjectParameters = {}
-        self._ToolsSubStreamsHandled = {}
-        self._ToolsSubStreamsCreated = {}
-        self._ToolsClasses = {}
+        self.Modules = {}
+        self._ModulesModulesLinks = {}
+        self._ModulesProjectParameters = {}
+        self._ModulesSubStreamsHandled = {}
+        self._ModulesSubStreamsCreated = {}
+        self._ModulesClasses = {}
         self._SubStreamIndexes = set()
 
-        self.ToolsOrder = {}
-        self.ToolsList = []
+        self.ModulesOrder = {}
+        self.ModulesList = []
 
     def _LoadProject(self, ProjectFile = None, enable_easy_access = True, onlyRawData = False):
         self._LogType = 'raw'
@@ -586,81 +586,81 @@ class Framework:
         if onlyRawData:
             return None
 
-        for ToolName in self._ProjectRawData.keys():
-            fileLoaded = __import__(self._ProjectRawData[ToolName]['File'])
-            self._ToolsClasses[ToolName] = getattr(fileLoaded, self._ProjectRawData[ToolName]['Class'])
+        for ModuleName in self._ProjectRawData.keys():
+            fileLoaded = __import__(self._ProjectRawData[ModuleName]['File'])
+            self._ModulesClasses[ModuleName] = getattr(fileLoaded, self._ProjectRawData[ModuleName]['Class'])
 
-            self._ToolsModulesLinks[ToolName] = self._ProjectRawData[ToolName]['ModulesLinks']
-            self._ToolsProjectParameters[ToolName] = self._ProjectRawData[ToolName]['ProjectParameters']
-            self._ToolsSubStreamsHandled[ToolName] = self._ProjectRawData[ToolName]['SubStreamsHandled']
-            self._ToolsSubStreamsCreated[ToolName] = self._ProjectRawData[ToolName]['SubStreamsCreated']
+            self._ModulesModulesLinks[ModuleName] = self._ProjectRawData[ModuleName]['ModulesLinks']
+            self._ModulesProjectParameters[ModuleName] = self._ProjectRawData[ModuleName]['ProjectParameters']
+            self._ModulesSubStreamsHandled[ModuleName] = self._ProjectRawData[ModuleName]['SubStreamsHandled']
+            self._ModulesSubStreamsCreated[ModuleName] = self._ProjectRawData[ModuleName]['SubStreamsCreated']
 
-            self.ToolsOrder[ToolName] = self._ProjectRawData[ToolName]['Order']
-            self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[ToolName]['File'], self._ProjectRawData[ToolName]['Class']))
+            self.ModulesOrder[ModuleName] = self._ProjectRawData[ModuleName]['Order']
+            self._Log("Imported tool {1} from file {0}.".format(self._ProjectRawData[ModuleName]['File'], self._ProjectRawData[ModuleName]['Class']))
 
-        if len(self.ToolsOrder.keys()) != 0:
-            MaxOrder = max(self.ToolsOrder.values()) + 1
-            self.ToolsList = [None] * MaxOrder
+        if len(self.ModulesOrder.keys()) != 0:
+            MaxOrder = max(self.ModulesOrder.values()) + 1
+            self.ModulesList = [None] * MaxOrder
         else:
-            self.ToolsList = []
+            self.ModulesList = []
 
-        for ToolName in self.ToolsOrder.keys():
-            if self.ToolsList[self.ToolsOrder[ToolName]] is None:
-                self.ToolsList[self.ToolsOrder[ToolName]] = ToolName
+        for ModuleName in self.ModulesOrder.keys():
+            if self.ModulesList[self.ModulesOrder[ModuleName]] is None:
+                self.ModulesList[self.ModulesOrder[ModuleName]] = ModuleName
             else:
-                self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ToolsOrder[ToolName]), 2)
+                self._Log("Double assignement of number {0}. Aborting ProjectFile loading".format(self.ModulesOrder[ModuleName]), 2)
                 return None
-        while None in self.ToolsList:
-            self.ToolsList.remove(None)
+        while None in self.ModulesList:
+            self.ModulesList.remove(None)
 
         self._Log("Successfully generated tools order", 3)
         self._Log("")
         
-        for ToolName in self.ToolsList:
-            self.Tools[ToolName] = self._ToolsClasses[ToolName](ToolName, self, self._ToolsModulesLinks[ToolName])
-            self._UpdateToolsParameters(ToolName)
-            for Index in self.Tools[ToolName].__SubStreamOutputIndexes__:
+        for ModuleName in self.ModulesList:
+            self.Modules[ModuleName] = self._ModulesClasses[ModuleName](ModuleName, self, self._ModulesModulesLinks[ModuleName])
+            self._UpdateModulesParameters(ModuleName)
+            for Index in self.Modules[ModuleName].__SubStreamOutputIndexes__:
                 if Index not in self._SubStreamIndexes:
                     self._SubStreamIndexes.add(Index)
                     self._Log("Added SubStream {0}".format(Index), 3)
 
-            if enable_easy_access and ToolName not in self.__dict__.keys():
-                self.__dict__[ToolName] = self.Tools[ToolName]
+            if enable_easy_access and ModuleName not in self.__dict__.keys():
+                self.__dict__[ModuleName] = self.Modules[ModuleName]
         self._CSVDataSaved = True
         self._Log("Successfully generated Framework", 3)
         self._Log("")
 
-    def _UpdateToolsParameters(self, ToolName):
-        Tool = self.Tools[ToolName]
-        for key, value in self._ToolsProjectParameters[ToolName].items():
-            if key in Tool.__dict__.keys():
+    def _UpdateModulesParameters(self, ModuleName):
+        Module = self.Modules[ModuleName]
+        for key, value in self._ModulesProjectParameters[ModuleName].items():
+            if key in Module.__dict__.keys():
                 try:
-                    Tool.__dict__[key] = type(Tool.__dict__[key])(value)
+                    Module.__dict__[key] = type(Module.__dict__[key])(value)
                 except:
-                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, ToolName, type(Tool.__dict__[key]), value), 1)
+                    self._Log("Issue with setting the new value of {0} for tool {1}, should be {2}, impossible from {3}".format(key, ModuleName, type(Module.__dict__[key]), value), 1)
             else:
-                self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, ToolName), 1)
-        if Tool.__IsInput__:
-            Tool.__SubStreamInputIndexes__ = set()
-            Tool.__SubStreamOutputIndexes__ = set(self._ToolsSubStreamsCreated[ToolName])
-            if not Tool._SetGeneratedSubStreamsIndexes(self._ToolsSubStreamsCreated[ToolName]):
+                self._Log("Key {0} for tool {1} doesn't exist. Please check ProjectFile integrity.".format(key, ModuleName), 1)
+        if Module.__IsInput__:
+            Module.__SubStreamInputIndexes__ = set()
+            Module.__SubStreamOutputIndexes__ = set(self._ModulesSubStreamsCreated[ModuleName])
+            if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
                 return False
         else:
-            if not self._ToolsSubStreamsHandled[ToolName]:
-                Tool.__SubStreamInputIndexes__ = set(self._SubStreamIndexes)
+            if not self._ModulesSubStreamsHandled[ModuleName]:
+                Module.__SubStreamInputIndexes__ = set(self._SubStreamIndexes)
             else:
-                Tool.__SubStreamInputIndexes__ = set(self._ToolsSubStreamsHandled[ToolName])
-            Tool.__SubStreamOutputIndexes__ = set(Tool.__SubStreamInputIndexes__)
-            if Tool.__GeneratesSubStream__:
-                for SubStreamIndex in self._ToolsSubStreamsCreated[ToolName]:
-                    Tool.__SubStreamOutputIndexes__.add(SubStreamIndex)
-                if not Tool._SetGeneratedSubStreamsIndexes(self._ToolsSubStreamsCreated[ToolName]):
+                Module.__SubStreamInputIndexes__ = set(self._ModulesSubStreamsHandled[ModuleName])
+            Module.__SubStreamOutputIndexes__ = set(Module.__SubStreamInputIndexes__)
+            if Module.__GeneratesSubStream__:
+                for SubStreamIndex in self._ModulesSubStreamsCreated[ModuleName]:
+                    Module.__SubStreamOutputIndexes__.add(SubStreamIndex)
+                if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
                     return False
 
     def GetModulesParameters(self):
         ParametersDict = {}
-        for ToolName in self.ToolsList:
-            ParametersDict[ToolName] = self.Tools[ToolName]._GetParameters()
+        for ModuleName in self.ModulesList:
+            ParametersDict[ModuleName] = self.Modules[ModuleName]._GetParameters()
         return ParametersDictClass(ParametersDict)
 
     def SaveProject(self, ProjectFile):
@@ -672,12 +672,12 @@ class Framework:
         self.Modified = False
         self._Log("Project saved.", 3)
 
-    def AddTool(self):
+    def AddModule(self):
         self._Log("Current project :")
         self.Project
         self._Log("")
         
-        Name = input('Enter the name of the new tool : ')                   # Tool name 
+        Name = input('Enter the name of the new tool : ')                   # Module name 
         if Name == '' or Name in self._ProjectRawData.keys():
             self._Log("Invalid entry (empty or already existing).", 2)
             return None
@@ -738,19 +738,19 @@ class Framework:
             else:
                 self._Log("Input Type detected. Setting to next default index.")
                 ModuleProjectDict['Order'] = 0
-                for OtherToolName in self._ProjectRawData.keys():
-                    if OtherToolName != Name and TmpClass.__IsInput__ :
-                        ModuleProjectDict['Order'] = max(ModuleProjectDict['Order'], self._ProjectRawData[OtherToolName]['Order'] + 1)
+                for OtherModuleName in self._ProjectRawData.keys():
+                    if OtherModuleName != Name and TmpClass.__IsInput__ :
+                        ModuleProjectDict['Order'] = max(ModuleProjectDict['Order'], self._ProjectRawData[OtherModuleName]['Order'] + 1)
             NumberTaken = False
-            for OtherToolName in self._ProjectRawData.keys():
-                if OtherToolName != Name and 'Order' in self._ProjectRawData[OtherToolName].keys() and ModuleProjectDict['Order'] == self._ProjectRawData[OtherToolName]['Order']:
+            for OtherModuleName in self._ProjectRawData.keys():
+                if OtherModuleName != Name and 'Order' in self._ProjectRawData[OtherModuleName].keys() and ModuleProjectDict['Order'] == self._ProjectRawData[OtherModuleName]['Order']:
                     NumberTaken = True
             if NumberTaken:
                 self._Log("Compiling new order.")
-                for OtherToolName in self._ProjectRawData.keys():
-                    if OtherToolName != Name:
-                        if self._ProjectRawData[OtherToolName]['Order'] >= ModuleProjectDict['Order']:
-                            self._ProjectRawData[OtherToolName]['Order'] += 1
+                for OtherModuleName in self._ProjectRawData.keys():
+                    if OtherModuleName != Name:
+                        if self._ProjectRawData[OtherModuleName]['Order'] >= ModuleProjectDict['Order']:
+                            self._ProjectRawData[OtherModuleName]['Order'] += 1
                 self._Log("Done")
                 self._Log("")
 
@@ -835,21 +835,21 @@ class Framework:
             del self._ProjectRawData[Name]
             return None
 
-        self._Log("AddTool finished. Reloading project.")
+        self._Log("AddModule finished. Reloading project.")
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
         self.Project
         self.Modified = True
 
-    def DelTool(self, ToolName):
-        ToolIndex = self._ProjectRawData[ToolName]['Order']
-        del self._ProjectRawData[ToolName]
-        for RemainingToolName, RemainingRawData in self._ProjectRawData.items():
-            if RemainingRawData['Order'] > ToolIndex:
+    def DelModule(self, ModuleName):
+        ModuleIndex = self._ProjectRawData[ModuleName]['Order']
+        del self._ProjectRawData[ModuleName]
+        for RemainingModuleName, RemainingRawData in self._ProjectRawData.items():
+            if RemainingRawData['Order'] > ModuleIndex:
                 RemainingRawData['Order'] -= 1
 
-        self._Log("DelTool finished. Reloading project.")
+        self._Log("DelModule finished. Reloading project.")
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
@@ -862,22 +862,22 @@ class Framework:
         self._Log("")
 
         nOrder = 0
-        for ToolName in self.ToolsList:
-            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ToolName, str(self.Tools[ToolName].__class__).split('.')[1][:-2], self._ProjectRawData[ToolName]['File']), 3)
-            if not self.Tools[ToolName].__IsInput__:
-                if self.Tools[ToolName].__SubStreamInputIndexes__:
-                    self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamInputIndexes__])+".")
+        for ModuleName in self.ModulesList:
+            self._Log("# {0} : {1}, from class {2} in file {3}.".format(nOrder, ModuleName, str(self.Modules[ModuleName].__class__).split('.')[1][:-2], self._ProjectRawData[ModuleName]['File']), 3)
+            if not self.Modules[ModuleName].__IsInput__:
+                if self.Modules[ModuleName].__SubStreamInputIndexes__:
+                    self._Log("     Uses cameras indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Modules[ModuleName].__SubStreamInputIndexes__])+".")
                 else:
                     self._Log("     Uses all cameras inputs.")
             else:
                 self._Log("     Does not consider incomming events.")
-            if self.Tools[ToolName].__IsInput__ or self.Tools[ToolName].__GeneratesSubStream__:
-                self._Log("     Generates SubStream "+", ".join(self.Tools[ToolName].__GeneratedSubStreams__))
-            if self.Tools[ToolName].__SubStreamOutputIndexes__  and not self.Tools[ToolName].__SubStreamOutputIndexes__ == self.Tools[ToolName].__SubStreamInputIndexes__:
-                self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Tools[ToolName].__SubStreamOutputIndexes__]))
+            if self.Modules[ModuleName].__IsInput__ or self.Modules[ModuleName].__GeneratesSubStream__:
+                self._Log("     Generates SubStream "+", ".join(self.Modules[ModuleName].__GeneratedSubStreams__))
+            if self.Modules[ModuleName].__SubStreamOutputIndexes__  and not self.Modules[ModuleName].__SubStreamOutputIndexes__ == self.Modules[ModuleName].__SubStreamInputIndexes__:
+                self._Log("     Outputs specific indexes " + ", ".join([str(CameraIndex) for CameraIndex in self.Modules[ModuleName].__SubStreamOutputIndexes__]))
             else:
                 self._Log("     Outputs the same camera indexes.")
-            SortedAttachments = self._AnalyzeModule(ToolName)
+            SortedAttachments = self._AnalyzeModuleAttachements(ModuleName)
             if not SortedAttachments:
                 #self._Log("     Does not add event data.")
                 pass
@@ -888,15 +888,15 @@ class Framework:
                     if NewEventName == 'DefaultEvent':
                         continue
                     self._Log("     Adds a new event with {0} for substream {1}.".format(', '.join(SortedAttachments[NewEventName][1]), SubStream))
-            if self._ToolsModulesLinks[ToolName]:
+            if self._ModulesModulesLinks[ModuleName]:
                 self._Log("     Modules Linked:")
-                for argName, toolLinked in self._ToolsModulesLinks[ToolName].items():
+                for argName, toolLinked in self._ModulesModulesLinks[ModuleName].items():
                     self._Log("         -> Access to {0} from tool {1}".format(argName, toolLinked))
             else:
                 self._Log("     No module linked.")
-            if self._ToolsProjectParameters[ToolName]:
+            if self._ModulesProjectParameters[ModuleName]:
                 self._Log("     Modified Parameters:")
-                for var, value in  self._ToolsProjectParameters[ToolName].items():
+                for var, value in  self._ModulesProjectParameters[ModuleName].items():
                     self._Log("         -> {0} = {1}".format(var, value))
             else:
                 self._Log("     Using default parameters.")
@@ -908,40 +908,40 @@ class Framework:
     def VisualProject(self):
         f, ax = plt.subplots(1,1)
         ax.tick_params('both', left = False, labelleft = False, bottom = False, labelbottom = False)
-        SubStreamsToolLevels = {Index:0 for Index in self._SubStreamIndexes}
-        SubStreamsToolsOutput = {Index:None for Index in self._SubStreamIndexes}
+        SubStreamsModuleLevels = {Index:0 for Index in self._SubStreamIndexes}
+        SubStreamsModulesOutput = {Index:None for Index in self._SubStreamIndexes}
         SubStreamsColors = {Index:None for Index in self._SubStreamIndexes}
-        ToolWidth = 0.6
-        ToolHeight = 0.5
+        ModuleWidth = 0.6
+        ModuleHeight = 0.5
         from matplotlib.patches import Rectangle
         def DrawConnexion(ax, Start, End, Index):
             if SubStreamsColors[Index] is None:
                 SubStreamsColors[Index] = ax.plot([Start[1], End[1]], [Start[0], End[0]], label = str(Index))[0].get_color()
             else:
                 ax.plot([Start[1], End[1]], [Start[0], End[0]], color = SubStreamsColors[Index])
-        for ToolName in self.ToolsList:
-            Tool = self.Tools[ToolName]
-            if not Tool.__SubStreamInputIndexes__:
-                Col = list(Tool.__SubStreamOutputIndexes__)[0]
+        for ModuleName in self.ModulesList:
+            Module = self.Modules[ModuleName]
+            if not Module.__SubStreamInputIndexes__:
+                Col = list(Module.__SubStreamOutputIndexes__)[0]
                 Level = 0
             else:
-                Col = np.mean(list(Tool.__SubStreamInputIndexes__))
-                Level = max([SubStreamsToolLevels[Index] for Index in Tool.__SubStreamInputIndexes__])
-            R = Rectangle((Col-ToolWidth/2, (Level-ToolHeight/2)), ToolWidth, ToolHeight, color = 'k', fill = False)
+                Col = np.mean(list(Module.__SubStreamInputIndexes__))
+                Level = max([SubStreamsModuleLevels[Index] for Index in Module.__SubStreamInputIndexes__])
+            R = Rectangle((Col-ModuleWidth/2, (Level-ModuleHeight/2)), ModuleWidth, ModuleHeight, color = 'k', fill = False)
             ax.add_artist(R)
-            ax.text(Col, Level, ToolName, color = 'k', va= 'center', ha = 'center')
-            for nIndex, Index in enumerate(np.sort(list(Tool.__SubStreamInputIndexes__))):
-                DrawConnexion(ax, SubStreamsToolsOutput[Index], ((Level-ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamInputIndexes__)+1)), Index)
-                SubStreamsToolsOutput[Index] = ((Level+ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamOutputIndexes__)+1))
-            for nIndex, Index in enumerate(np.sort(list(Tool.__SubStreamOutputIndexes__))):
-                SubStreamsToolLevels[Index] = Level+1
-                if SubStreamsToolsOutput[Index] is None:
-                    SubStreamsToolsOutput[Index] = ((Level+ToolHeight/2), Col - ToolWidth / 2 + (nIndex + 1) * ToolWidth / (len(Tool.__SubStreamOutputIndexes__)+1))
-        ax.set_xlim(min(list(self._SubStreamIndexes)) - ToolWidth, max(list(self._SubStreamIndexes)) + ToolWidth)
-        ax.set_ylim(max(list(SubStreamsToolLevels.values()))-ToolHeight, -ToolHeight)
+            ax.text(Col, Level, ModuleName, color = 'k', va= 'center', ha = 'center')
+            for nIndex, Index in enumerate(np.sort(list(Module.__SubStreamInputIndexes__))):
+                DrawConnexion(ax, SubStreamsModulesOutput[Index], ((Level-ModuleHeight/2), Col - ModuleWidth / 2 + (nIndex + 1) * ModuleWidth / (len(Module.__SubStreamInputIndexes__)+1)), Index)
+                SubStreamsModulesOutput[Index] = ((Level+ModuleHeight/2), Col - ModuleWidth / 2 + (nIndex + 1) * ModuleWidth / (len(Module.__SubStreamOutputIndexes__)+1))
+            for nIndex, Index in enumerate(np.sort(list(Module.__SubStreamOutputIndexes__))):
+                SubStreamsModuleLevels[Index] = Level+1
+                if SubStreamsModulesOutput[Index] is None:
+                    SubStreamsModulesOutput[Index] = ((Level+ModuleHeight/2), Col - ModuleWidth / 2 + (nIndex + 1) * ModuleWidth / (len(Module.__SubStreamOutputIndexes__)+1))
+        ax.set_xlim(min(list(self._SubStreamIndexes)) - ModuleWidth, max(list(self._SubStreamIndexes)) + ModuleWidth)
+        ax.set_ylim(max(list(SubStreamsModuleLevels.values()))-ModuleHeight, -ModuleHeight)
         ax.legend()
 
-    def _AnalyzeModule(self, ModuleName):
+    def _AnalyzeModuleAttachements(self, ModuleName):
         ModuleClassName, ModuleFile = self._ProjectRawData[ModuleName]['Class'], self._ProjectRawData[ModuleName]['File']
         def AddEventMod(RawArguments, FoundAttachments, KW, nHLine, AttachedEvent, CreatedEvent, Module):
             Arguments = [Argument.strip() for Argument in RawArguments.strip().strip('(').strip(')').split(',')]
@@ -1015,7 +1015,7 @@ class Framework:
                     AttachedEvent = line.strip().split(InEventModification)[0].split('=')[-1].strip()[:-1]
                     RawArguments = line.strip().split(InEventModification)[1]
                     if RawArguments.count('(') == RawArguments.count(')'):
-                        AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Tools[ModuleName])
+                        AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Modules[ModuleName])
                         InEventModification = ''
                     continue
             else:
@@ -1027,7 +1027,7 @@ class Framework:
                         break
                 if not Finished:
                     continue
-                AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Tools[ModuleName])
+                AddEventMod(RawArguments, FoundAttachments, InEventModification, nHLine, AttachedEvent, CreatedEvent, self.Modules[ModuleName])
                 InEventModification = ''
 
         if not FoundAttachments['Mods']:
@@ -1086,9 +1086,9 @@ class Framework:
                 CurrentLine += self._EventLogs['Framework'].pop(0)
             else:
                 CurrentLine += self._MaxColumnWith*' '
-            for ToolName in self._LogsColumns[1:]:
-                if self._EventLogs[ToolName]:
-                    CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ToolName].pop(0)
+            for ModuleName in self._LogsColumns[1:]:
+                if self._EventLogs[ModuleName]:
+                    CurrentLine += self._Default_Color + ' | ' + self._EventLogs[ModuleName].pop(0)
                 else:
                     CurrentLine += self._Default_Color + ' | ' + self._MaxColumnWith*' '
             for Log in self._SessionLogs:
@@ -1098,18 +1098,18 @@ class Framework:
     def _LogInit(self, Resume = False):
         self._HasLogs = 2
         self._LogT = None
-        self._LogsColumns = [ToolName for ToolName in ['Framework'] + self.ToolsList if (ToolName == 'Framework' or self.Tools[ToolName]._NeedsLogColumn)]
+        self._LogsColumns = [ModuleName for ModuleName in ['Framework'] + self.ModulesList if (ModuleName == 'Framework' or self.Modules[ModuleName]._NeedsLogColumn)]
         self._MaxColumnWith = int((self._Terminal_Width - len(self._LogsColumns)*3 ) / len(self._LogsColumns))
         if not Resume:
-            self._EventLogs = {ToolName:[' '*((self._MaxColumnWith - len(ToolName))//2) + self._LogColors[1] + ToolName + (self._MaxColumnWith - len(ToolName) - (self._MaxColumnWith - len(ToolName))//2)*' ', self._MaxColumnWith*' '] for ToolName in self._LogsColumns}
+            self._EventLogs = {ModuleName:[' '*((self._MaxColumnWith - len(ModuleName))//2) + self._LogColors[1] + ModuleName + (self._MaxColumnWith - len(ModuleName) - (self._MaxColumnWith - len(ModuleName))//2)*' ', self._MaxColumnWith*' '] for ModuleName in self._LogsColumns}
             self._SendLog()
         else:
-            self._EventLogs = {ToolName:[] for ToolName in self._LogsColumns}
+            self._EventLogs = {ModuleName:[] for ModuleName in self._LogsColumns}
     def _LogReset(self):
-        self._EventLogs = {ToolName:[] for ToolName in self._EventLogs.keys()}
+        self._EventLogs = {ModuleName:[] for ModuleName in self._EventLogs.keys()}
         self._HasLogs = 0
 
-class Module:
+class ModuleBase:
     def __init__(self, Name, Framework, ModulesLinked):
         '''
         Default module class.
@@ -1142,7 +1142,7 @@ class Module:
         self.__LastMonitoredTimestamp = -np.inf
         
         try:
-            self.__ToolIndex__ = self.__Framework__.ToolsOrder[self.__Name__]
+            self.__ModuleIndex__ = self.__Framework__.ModulesOrder[self.__Name__]
         except:
             None
 
@@ -1223,7 +1223,7 @@ class Module:
         
         # We can only link modules at this point, since the framework must have created them all before
         for ModuleLinkRequested, ModuleLinked in self.__ModulesLinked__.items():
-            self.__dict__[ModuleLinkRequested] = self.__Framework__.Tools[ModuleLinked]
+            self.__dict__[ModuleLinkRequested] = self.__Framework__.Modules[ModuleLinked]
 
         # Initialize the stuff corresponding to this specific module
         if not self._OnInitialization():
@@ -1363,7 +1363,7 @@ class Module:
         return eventContainer.IsFilled
 
     def _IsParent(self, ChildModule):
-        if ChildModule.__ToolIndex__ < self.__ToolIndex__:
+        if ChildModule.__ModuleIndex__ < self.__ModuleIndex__:
             return False
         for SubStreamIndex in self.__SubStreamOutputIndexes__:
             if SubStreamIndex in ChildModule.__SubStreamInputIndexes__:
@@ -1371,7 +1371,7 @@ class Module:
         return False
 
     def _IsChild(self, ParentModule):
-        if ParentModule.__ToolIndex__ > self.__ToolIndex__:
+        if ParentModule.__ModuleIndex__ > self.__ModuleIndex__:
             return False
         for SubStreamIndex in self.__SubStreamInputIndexes__:
             if SubStreamIndex in ParentModule.__SubStreamOutputIndexes__:

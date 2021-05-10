@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase, CameraEvent
 
-class Memory(Module):
+class Memory(ModuleBase):
     def _OnCreation(self):
         '''
         Class to handle ST-context memory.
@@ -22,6 +22,8 @@ class Memory(Module):
         return True
 
     def _OnEventModule(self, event):
+        if not event.Has(CameraEvent):
+            return
         self.LastEvent = event.Copy()
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
 

@@ -8,7 +8,7 @@ import mpl_toolkits.mplot3d.art3d as art3d
 from matplotlib.text import TextPath
 from matplotlib.transforms import Affine2D
 
-from PEBBLE import Module, CameraEvent, TrackerEvent
+from PEBBLE import ModuleBase, CameraEvent, TrackerEvent
 
 _SPACE_DIM = 3
 _VOXEL_SIZE = 0.1
@@ -231,7 +231,7 @@ class Map3DClass:
                     self.Voxels[x, y, z] = 1.
                     self.EventsGenerators += [EventGeneratorClass(len(self.EventsGenerators), X, np.array([x,y,z]), BiCameraSystem, self.Voxels)]
 
-class MovementSimulatorClass(Module):
+class MovementSimulatorClass(ModuleBase):
     def _OnCreation(self):
         '''
         Class to emulate stereo system moving with artificial map

@@ -3,7 +3,7 @@ import random
 
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, CameraEvent, TrackerEvent
+from PEBBLE import ModuleBase, CameraEvent, TrackerEvent
 
 _SPACE_DIM = 2
 _VOXEL_SIZE = 0.01
@@ -217,7 +217,7 @@ class Map2DClass:
         return f, ax
 
 
-class MovementSimulatorClass(Module):
+class MovementSimulatorClass(ModuleBase):
     def _OnCreation(self):
         '''
         Class to emulate stereo system moving with artificial map

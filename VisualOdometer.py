@@ -1,7 +1,7 @@
-from PEBBLE import Module, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
+from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
 import numpy as np
 
-class VisualOdometer(Module):
+class VisualOdometer(ModuleBase):
     def _OnCreation(self):
         '''
         Uses disparity events and optical flow events to recover a visual odometry

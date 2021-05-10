@@ -1,9 +1,9 @@
-from PEBBLE import Module, CameraEvent, OdometryEvent, DisparityEvent
+from PEBBLE import ModuleBase, CameraEvent, OdometryEvent, DisparityEvent
 import numpy as np
 
 import random
 
-class OdometerMixer(Module):
+class OdometerMixer(ModuleBase):
     def _OnCreation(self):
         '''
         Computed stereo-rig odometry from stereo cameras odometry input

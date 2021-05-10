@@ -1,7 +1,7 @@
-from PEBBLE import Module, CameraEvent, DisparityEvent, TrackerEvent
+from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, TrackerEvent
 import numpy as np
 
-class StreamWriter(Module):
+class StreamWriter(ModuleBase):
     def _OnCreation(self):
         '''
         Module to write an event stream (as .txt for now). Useful to re-write filtered or cut portions of streams

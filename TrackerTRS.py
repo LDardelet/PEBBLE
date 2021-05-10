@@ -7,7 +7,7 @@ import os
 import inspect
 import pickle
 from sys import stdout
-from PEBBLE import Module, TrackerEvent, TauEvent
+from PEBBLE import ModuleBase, TrackerEvent, TauEvent
 
 from functools import partial
 
@@ -31,7 +31,7 @@ def NonZero(x):
     else:
         return NonZeroNumber(x)
 
-class TrackerTRS(Module):
+class TrackerTRS(ModuleBase):
     def _OnCreation(self):
         '''
         Main algorithm described in "MASCOT : Multi-Asynchronous event-based Continuous Detection and Tracking"

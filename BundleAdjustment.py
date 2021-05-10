@@ -1,6 +1,6 @@
 import numpy as np
 
-from PEBBLE import Module, Event
+from PEBBLE import ModuleBase, Event
 
 def _CompleteWarpBasisFrom(BasisVectors):
     # All input vectors must already by unitary and orthogonal. It is just a completion of the basis
@@ -27,7 +27,7 @@ def _GenerateSubSpaceBasisFrom(Vectors):
             SubBasis += [Vector/N]
     return SubBasis
 
-class BundleAdjustment(Module):
+class BundleAdjustment(ModuleBase):
     _DISTANCE_NORMALIZATION_FACTOR = 1.
 
     def _OnCreation(self):

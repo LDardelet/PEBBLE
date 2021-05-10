@@ -8,7 +8,7 @@ import numpy as np
 import threading
 from multiprocessing import Queue
 
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
 class TransmissionInfo:
     _EventPort = 54242
@@ -47,7 +47,7 @@ class PostServiceClass(threading.Thread):
                 self.NextBatchPackages.insert(0, ExcessPackage)
         self.MainUDP.sendto(data, (TransmissionInfo._Address, TransmissionInfo._EventPort))
 
-class DisplayHandler(Module):
+class DisplayHandler(ModuleBase):
     def _OnCreation(self):
         '''
         Class to handle the stream Display.

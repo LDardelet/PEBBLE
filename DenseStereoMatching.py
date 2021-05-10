@@ -1,10 +1,10 @@
 import numpy as np
-from PEBBLE import Module, CameraEvent, DisparityEvent
+from PEBBLE import ModuleBase, CameraEvent, DisparityEvent
 import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter
 
-class DenseStereo(Module):
+class DenseStereo(ModuleBase):
     def _OnCreation(self):
         '''
         Module that given two input streams creates a dense disparity map.

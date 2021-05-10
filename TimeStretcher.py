@@ -1,8 +1,8 @@
 import numpy as np
 
-from PEBBLE import Module, Event
+from PEBBLE import ModuleBase, Event
 
-class Stretcher(Module):
+class Stretcher(ModuleBase):
     def _OnCreation(self):
         '''
         Class to modify timestamps, mofifying speed norms

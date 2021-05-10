@@ -1,6 +1,6 @@
-from PEBBLE import Module
+from PEBBLE import ModuleBase
 
-class ModuleTemplate(Module):
+class ModuleTemplate(ModuleBase):
     def _OnCreation(self):
         '''
         Method called upon creation of the framework.

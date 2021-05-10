@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from PEBBLE import Module, TrackerEvent
+from PEBBLE import ModuleBase, TrackerEvent
 
 def _CompleteWarpBasisFrom(BasisVectors):
     # All input vectors must already by unitary and orthogonal. It is just a completion of the basis
@@ -36,7 +36,7 @@ def _GenerateSubSpaceBasisFrom(Vectors):
             SubBasis += [Vector/N]
     return SubBasis
 
-class BundleAdjustmentWarp(Module):
+class BundleAdjustmentWarp(ModuleBase):
     _DISTANCE_NORMALIZATION_FACTOR = 1.
 
     def _OnCreation(self):

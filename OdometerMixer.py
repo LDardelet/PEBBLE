@@ -152,7 +152,15 @@ class OdometerMixer(ModuleBase):
                     NewEvent = event.Join(CameraEvent, location = VirtualFrameLocation, polarity = 0)
                     if not disparity is None:
                         NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
+            event.join(OdometryEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.v)
         return
+
+    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+        if len(Indexes) != 1:
+            self.LogWarning("Improper number of generated streams specified")
+            return False
+        self.GeneratedOdometryStreamIndex = Indexes[0]
+        return True
 
     def EventTau(self, event = None):
         if self._VirtualReferenceFrameDisparity is None:

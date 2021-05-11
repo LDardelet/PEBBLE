@@ -2,6 +2,9 @@ from PEBBLE import ModuleBase, OdometryEvent, TrackerEvent, DisparityEvent, Pose
 from functools import lru_cache
 import numpy as np
 
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
 _MAX_DEPTH = 1e3
 
 class PoseEstimator(ModuleBase):
@@ -10,7 +13,7 @@ class PoseEstimator(ModuleBase):
         Event-based pose estimator.
         Uses a simulator mechanical system that combines all the constraints, such as points tracked on screen and visual odometry
         '''
-
+        self.__GeneratesSubStream__ = True
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
         self._NeedsLogColumn = False
         self._MonitoredVariables = [('RigFrame.T', np.array),
@@ -33,20 +36,20 @@ class PoseEstimator(ModuleBase):
         self._M = 1.
         self._I = 1.
 
-        self._SpeedOdometrySubStreamIndex = 2
         self._MinTrackersPerCamera = 5
+        self._NeedsStereoOdometry = True
         self._DefaultTau = 0.05
         self._TrackerDisparityRadius = 5
+        self._DisparityTauRatio = 10
 
     def _OnInitialization(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
         self.Anchors = {}
-        self.TrackersPerCamera = {Index:0 for Index in self.__SubStreamInputIndexes__ if Index != self._SpeedOdometrySubStreamIndex}
 
         self.K = self._DefaultK
         self.ScreenCenter = np.array(self.Geometry)/2
         self.StereoBaseDistance = np.linalg.norm(self._StereoBaseVector)
-        self.CameraOffsetLocations = [self._CameraIndexToOffsetRatio[CameraIndex] * self._StereoBaseVector for CameraIndex in self.__SubStreamInputIndexes__ if CameraIndex != self._SpeedOdometrySubStreamIndex]
+        self.CameraOffsetLocations = [self._CameraIndexToOffsetRatio[CameraIndex] * self._StereoBaseVector for CameraIndex in self.__SubStreamInputIndexes__]
 
         self.KMatInv = np.linalg.inv(np.array([[self.K, 0., self.ScreenCenter[0]],
                                         [0., -self.K, self.ScreenCenter[1]],
@@ -55,8 +58,6 @@ class PoseEstimator(ModuleBase):
         DisparityMemories = [self.LeftDisparityMemory, self.RightDisparityMemory]
         self.DisparityMemories = {}
         for SubStreamIndex in self.__SubStreamInputIndexes__:
-            if SubStreamIndex == self._SpeedOdometrySubStreamIndex:
-                continue
             for DisparityMemory in DisparityMemories:
                 if SubStreamIndex in DisparityMemory.__SubStreamOutputIndexes__:
                     self.DisparityMemories[SubStreamIndex] = DisparityMemory
@@ -65,29 +66,38 @@ class PoseEstimator(ModuleBase):
         self.AverageLength = 0.
         self.SpringEnergy = 0.
         self.KineticEnergy = 0.
-        self.EnvironmentV = np.zeros(3)
-        self.EnvironmentOmega = np.zeros(3)
 
         self.LastUpdateT = 0.
 
         self.Started = False
-        self.ReceivedOdometry = False
+        self.ReceivedOdometry = np.zeros(2, dtype = bool)
+        self.TrackersPerCamera = {Index:0 for Index in self.__SubStreamInputIndexes__}
+
+        self.ReceivedV = np.zeros((3, 2))
+        self.ReceivedOmega = np.zeros((3,2))
 
         return True
 
+    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+        if len(Indexes) != 1:
+            self.LogWarning("Improper number of generated streams specified")
+            return False
+        self.StereoRigSubStream = Indexes[0]
+        return True
+
     def _OnEventModule(self, event):
-        if event.Has(OdometryEvent) and event.SubStreamIndex == self._SpeedOdometrySubStreamIndex:
-            self.ReceivedOdometry = True
-            self.EnvironmentV = event.v
-            self.EnvironmentOmega = event.omega
-        elif event.Has(TrackerEvent):
+        if event.Has(OdometryEvent):
+            self.ReceivedOdometry[event.SubStreamIndex] = True
+            self.ReceivedV[:,event.SubStreamIndex] = event.v
+            self.ReceivedOmega[:,event.SubStreamIndex] = event.omega
+        if event.Has(TrackerEvent):
             if event.TrackerColor == 'k':
-                del self.Anchors[ID]
-                self.TrackersPerCamera[ID[1]] -= 1
-            else:
-                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation - self.ScreenCenter, event.TrackerID)
+                del self.Anchors[(event.TrackerID, event.SubStreamIndex)]
+                self.TrackersPerCamera[event.SubStreamIndex] -= 1
+            elif event.TrackerColor == 'g' and event.TrackerMarker == 'o': # Tracker locked
+                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID)
         if not self.Started:
-            if self.ReceivedOdometry:
+            if self.ReceivedOdometry.all() or (not self._NeedsStereoOdometry and self.ReceivedOdometry.any()):
                 CanStart = True
                 for NTracker in self.TrackersPerCamera.values():
                     if NTracker < self._MinTrackersPerCamera:
@@ -96,6 +106,7 @@ class PoseEstimator(ModuleBase):
                 if not CanStart:
                     return
                 self.Started = True
+                self.LogSuccess("Started")
             else:
                 return
         self.Update(event.timestamp)
@@ -109,7 +120,7 @@ class PoseEstimator(ModuleBase):
         self.UpdateLinesOfSights(dt)
 
         Force, Torque = self.ForceAndTorque
-        A, Alpha = Force / self._M
+        A, Alpha = Force / self._M, Torque / self._I
 
         self.RigFrame.UpdateDerivatives(dt, Alpha, A)
 
@@ -117,7 +128,6 @@ class PoseEstimator(ModuleBase):
         self.AverageLength = 0.
         for ID, Anchor in self.Anchors.items():
             Anchor.UpdatePresenceSegment()
-            Anchor.WorldProjection, Anchor.CurrentReprojection = GetSegmentsProjections(Anchor.WorldPresenceSegment, Anchor.CurrentPresenceSegment)
             ErrorVector = Anchor.WorldProjection - Anchor.CurrentReprojection
             Anchor.Length = np.linalg.norm(ErrorVector)
             self.AverageLength += Anchor.Length
@@ -130,6 +140,13 @@ class PoseEstimator(ModuleBase):
             self.SpringEnergy += Anchor.Energy
 
     @property
+    def EnvironmentV(self):
+        return self.ReceivedV.mean(axis = 1)
+    @property
+    def EnvironmentOmega(self):
+        return self.ReceivedOmega.mean(axis = 1)
+
+    @property
     def ViscosityForceAndTorque(self):
         return self._MuV * (self.EnvironmentV - self.RigFrame.V), self._MuOmega * (self.EnvironmentOmega - self.RigFrame.Omega)
 
@@ -140,7 +157,7 @@ class PoseEstimator(ModuleBase):
         for Anchor in self.Anchors.values():
             Force = Anchor.Force
             ApplicationPoint = Anchor.CurrentReprojection
-            Torque = np.cross(ApplicationPoint - self.RigFrame.X, Force)
+            Torque = np.cross(ApplicationPoint - self.RigFrame.T, Force)
             TotalForce += Force
             TotalTorque += Torque
         return TotalForce, TotalTorque
@@ -156,33 +173,70 @@ class PoseEstimator(ModuleBase):
             return _MAX_DEPTH
         return self.StereoBaseDistance * self.K / disparity
 
-    def UpdateFromTracker(self, SubStreamIndex, ScreenLocation, TID):
-        ID = (TID, SubStreamIndex)
+    def UpdateFromTracker(self, SubStreamIndex, ScreenLocation, TrackerID):
+        ID = (TrackerID, SubStreamIndex)
         Tau = self.FrameworkAverageTau
         if Tau is None or Tau == 0:
             Tau = self._DefaultTau
-        disparity = self.DisparityMemories[SubStreamIndex].GetDisparity(Tau, ScreenLocation, self._TrackerDisparityRadius)
+        disparity = self.DisparityMemories[SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(ScreenLocation, dtype = int), self._TrackerDisparityRadius)
         if ID not in self.Anchors:
             if disparity is None:
                 return
-            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, ID[1]), self.RigFrame.X, (self.GetWorldLocation(ScreenLocation, disparity+0.5), self.GetWorldLocation(ScreenLocation, disparity-0.5, ID[1])), OnCameraDataClass(ID[1], np.array(ScreenLocation), disparity), self.GetWorldLocation)
+            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, ID[1]), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+0.5, ID[1]), self.GetWorldLocation(ScreenLocation, disparity-0.5, ID[1])), OnCameraDataClass(ID[1], np.array(ScreenLocation), disparity), self.GetWorldLocation)
             self.TrackersPerCamera[ID[1]] += 1
         else:
-            self.Anchors[ID].OnCameraData.ScreenLocation[:] = ScreenLocation
+            self.Anchors[ID].OnCameraData.Location[:] = ScreenLocation
             if not disparity is None:
                 self.Anchors[ID].OnCameraData.Disparity = disparity
                 self.Anchors[ID].Active = True
             else:
                 self.Anchors[ID].Active = False
+
     def GetWorldLocation(self, ScreenLocation, disparity, CameraIndex):
         return self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))  * self.DepthOf(disparity) + self.CameraOffsetLocations[CameraIndex])
 
+    def PlotSystem(self):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+
+        oldPlot = ax.plot
+        oldScatter = ax.scatter
+        import types
+        def newPlot(ax, x, y, z, *args, **kwargs):
+            oldPlot(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
+        ax.plot = types.MethodType(newPlot, ax)
+        def newScatter(ax, x, y, z, *args, **kwargs):
+            oldScatter(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
+        ax.scatter = types.MethodType(newScatter, ax)
+
+        for nDim in range(3):
+            BaseVector = np.array([float(nDim == 0), float(nDim == 1), float(nDim == 2)])
+            ax.plot([0, BaseVector[0]], [0, BaseVector[1]], [0, BaseVector[2]], 'k')
+            ax.plot([self.RigFrame.T[0], self.RigFrame.ToWorld(BaseVector)[0]], [self.RigFrame.T[1], self.RigFrame.ToWorld(BaseVector)[1]], [self.RigFrame.T[2], self.RigFrame.ToWorld(BaseVector)[2]], 'b')
+        CameraColors = ['r', 'b']
+        for CameraIndex, CameraOffset in enumerate(self.CameraOffsetLocations):
+            CameraWorldLocation = self.RigFrame.ToWorld(CameraOffset)
+            ax.scatter(CameraWorldLocation[0], CameraWorldLocation[1], CameraWorldLocation[2], marker = 'o', color = CameraColors[CameraIndex])
+
+        for ID, Anchor in self.Anchors.items():
+            ax.plot([Anchor.WorldPresenceSegment[0][0], Anchor.WorldPresenceSegment[1][0]], [Anchor.WorldPresenceSegment[0][1], Anchor.WorldPresenceSegment[1][1]], [Anchor.WorldPresenceSegment[0][2], Anchor.WorldPresenceSegment[1][2]], color = CameraColors[ID[1]], linestyle = '--')
+            ax.plot([Anchor.CurrentPresenceSegment[0][0], Anchor.CurrentPresenceSegment[1][0]], [Anchor.CurrentPresenceSegment[0][1], Anchor.CurrentPresenceSegment[1][1]], [Anchor.CurrentPresenceSegment[0][2], Anchor.CurrentPresenceSegment[1][2]], color = CameraColors[ID[1]])
+            WP, CP = Anchor.WorldProjection, Anchor.CurrentReprojection
+            CPpF = Anchor.CurrentReprojection + Anchor.Force
+            ax.scatter(WP[0], WP[1], WP[2], color = 'k', marker = 'o')
+            ax.scatter(CP[0], CP[1], CP[2], color = 'k', marker = 'o')
+            ax.plot([CPpF[0], CP[0]], [CPpF[1], CP[1]], [CPpF[2], CP[2]], color = 'k')
+
+        return fig, ax
+
 class FrameClass:
-    def __init__(self, InitialTheta, InitialT, InitialOmega, InitialV, LambdaAlpha = 0, LambdaA = 0):
+    def __init__(self, InitialTheta, InitialT, InitialOmega, InitialV, LambdaAlpha = 0, LambdaA = 0): # Lambda is the amout of acceleration averaging with the previous value
         self.Theta = np.array(InitialTheta) # Defines the rotation for an object from world to this frame
         self.T = np.array(InitialT)  # Defines the origin of this frame in the world
         self.Omega = np.array(InitialOmega)
         self.V = np.array(InitialV)
+        self.Alpha = np.zeros(3)
+        self.A = np.zeros(3)
 
         self.LambdaAlpha = LambdaAlpha
         self.LambdaA = LambdaA
@@ -223,11 +277,11 @@ class FrameClass:
 
     def UpdatePosition(self, dt):
         self.Theta += dt * self.Omega
-        self.X += dt * self.V
+        self.T += dt * self.V
 
     def UpdateDerivatives(self, dt, Alpha, A):
-        self.Omega += dt * (self.LambdaAlpha * Alpha + (1 - self.LambdaAlpha) * self.Alpha)
-        self.V += dt * (self.LambdaA * A + (1-self.LambdaA)*self.A)
+        self.Omega += dt * ((1 - self.LambdaAlpha) * Alpha + self.LambdaAlpha * self.Alpha)
+        self.V += dt * ((1 - self.LambdaA) * A + self.LambdaA * self.A)
         self.Alpha = Alpha
         self.A = A
 
@@ -283,7 +337,8 @@ class AnchorClass:
         ScreenLocation = self.OnCameraData.Location
         disparity = self.OnCameraData.Disparity
         CameraID = self.OnCameraData.CameraID
-        self.Anchors[ID].CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+0.5, CameraID), self.GetWorldLocation(ScreenLocation, disparity-0.5, CameraID))
+        self.CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+0.5, CameraID), self.GetWorldLocation(ScreenLocation, disparity-0.5, CameraID))
+        self.WorldProjection, self.CurrentReprojection = GetSegmentsProjections(self.WorldPresenceSegment, self.CurrentPresenceSegment)
 
 def GetSegmentsProjections(S1, S2):
     # Calculate denomitator

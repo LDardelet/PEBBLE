@@ -191,6 +191,7 @@ class Framework:
             self._LogInit(resume)
         self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod)
         self._LogType = 'raw'
+        self.SaveCSVData()
 
     def _GetCommitValue(self):
         try:
@@ -501,7 +502,6 @@ class Framework:
                     self.Paused = 'user'
             if self.t is None or self.t > stop_at:
                 self.Paused = 'Framework'
-        self.SaveCSVData()
         if not self.Running:
             self._Log("Main loop finished without error.")
             return True
@@ -618,7 +618,8 @@ class Framework:
         
         for ModuleName in self.ModulesList:
             self.Modules[ModuleName] = self._ModulesClasses[ModuleName](ModuleName, self, self._ModulesModulesLinks[ModuleName])
-            self._UpdateModulesParameters(ModuleName)
+            if not self._UpdateModuleParameters(ModuleName):
+                raise Exception
             for Index in self.Modules[ModuleName].__SubStreamOutputIndexes__:
                 if Index not in self._SubStreamIndexes:
                     self._SubStreamIndexes.add(Index)
@@ -630,7 +631,7 @@ class Framework:
         self._Log("Successfully generated Framework", 3)
         self._Log("")
 
-    def _UpdateModulesParameters(self, ModuleName):
+    def _UpdateModuleParameters(self, ModuleName):
         Module = self.Modules[ModuleName]
         for key, value in self._ModulesProjectParameters[ModuleName].items():
             if key in Module.__dict__.keys():
@@ -643,6 +644,9 @@ class Framework:
         if Module.__IsInput__:
             Module.__SubStreamInputIndexes__ = set()
             Module.__SubStreamOutputIndexes__ = set(self._ModulesSubStreamsCreated[ModuleName])
+            if '_SetGeneratedSubStreamsIndexes' not in Module.__class__.__dict__:
+                self._Log("Missing adequate _SetGeneratedSubStreamsIndexes method for input tool")
+                return False
             if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
                 return False
         else:
@@ -654,8 +658,12 @@ class Framework:
             if Module.__GeneratesSubStream__:
                 for SubStreamIndex in self._ModulesSubStreamsCreated[ModuleName]:
                     Module.__SubStreamOutputIndexes__.add(SubStreamIndex)
+                if '_SetGeneratedSubStreamsIndexes' not in Module.__class__.__dict__:
+                    self._Log("Missing adequate _SetGeneratedSubStreamsIndexes method for input tool")
+                    return False
                 if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
                     return False
+        return True
 
     def GetModulesParameters(self):
         ParametersDict = {}
@@ -1108,16 +1116,6 @@ class Framework:
         self._EventLogs = {ModuleName:[] for ModuleName in self._EventLogs.keys()}
         self._HasLogs = 0
 
-def Interaction(Command):
-    def wrapper(*args):
-        Framework = args[0]
-        Framework._NonEventLog = True
-        OutputData = Command(*args)
-        Framework._NonEventLog = False
-        Framework._SendLog()
-        return OutputData
-    return wrapper
-
 class ModuleBase:
     def __init__(self, Name, Framework, ModulesLinked):
         '''
@@ -1449,8 +1447,12 @@ class ModuleBase:
                 ax.set_title(self.__Name__ + ' : ' + MonitoredVariable)
             else:
                 f, ax = fax
-            for nCol in range(Data.shape[1]):
-                ax.plot(t, Data[:,nCol], label = str(nCol))
+            if Data.shape[1] == 3:
+                Labels = ('x', 'y', 'z')
+            else:
+                Labels = [str(nCol) for nCol in range(Data.shape[1])]
+            for nCol, Label in enumerate(Labels):
+                ax.plot(t, Data[:,nCol], label = Label)
             ax.legend()
             return f, ax
         if len(Data.shape) > 2:
@@ -1686,6 +1688,11 @@ class _EventClass:
         if 'Extensions' in kwargs:
             for Extension in kwargs['Extensions']:
                 self.Attach(Extension, **kwargs)
+    def _Attach(self, Extension, **kwargs):
+        # Used to assess that the event was just created, so event information have to be attached anyway
+        self._Extensions.add(Extension)
+        for Field in Extension._Fields:
+            self.__dict__[Field] = kwargs[Field]
     def Attach(self, Extension, **kwargs):
         if not Extension._CanAttach or Extension in self._Extensions:
             self.Join(Extension, **kwargs) # For now, its better to join when instance is already there (ex: multiple TrackerEvents)
@@ -1752,7 +1759,7 @@ class _EventExtensionClass:
     _Fields = ()
     def __new__(cls, *args, **kwargs):
         Event = _EventClass(**kwargs)
-        Event.Attach(cls, **kwargs)
+        Event._Attach(cls, **kwargs)
         return Event
 
 class CameraEvent(_EventExtensionClass):

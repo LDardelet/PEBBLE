@@ -8,7 +8,6 @@ import os
 import inspect
 import pickle
 from sys import stdout
-from PEBBLE import Module, TrackerEvent
 
 import imageio
 
@@ -18,7 +17,7 @@ from functools import partial
 class FeatureManagerClass:
     def __init__(self, TrackerManager):
         self.TrackerManager = TrackerManager
-        self.CenterPoint = np.array(self.TrackerManager._LinkedMemory.STContext.shape[:2], dtype = float) / 2
+        self.CenterPoint = np.array(self.TrackerManager.Geometry, dtype = float) / 2
         self.SpeedsLockVectorsDict = {}
         self.PositionsLockVectorsDict = {}
 

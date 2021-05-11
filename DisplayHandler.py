@@ -108,7 +108,7 @@ class DisplayHandler(ModuleBase):
 
     def _Restart(self):
         self.EndTransmission()
-        self._InitializeModule()
+        self._OnInitialization()
     def _Pause(self, Origin):
         if self._MultiThread:
             self.PostService.Running = False

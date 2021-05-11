@@ -692,32 +692,30 @@ class Framework:
                 entry = entry.split('.py')[0]
             ModuleProjectDict['File'] = entry
             fileLoaded = __import__(entry)
-            classFound = False
             PossibleClasses = []
-            if not 'Module' in fileLoaded.__dict__.keys():
+            if not 'ModuleBase' in fileLoaded.__dict__.keys():
                 self._Log("File does not contain any class derived from 'Module'. Aborting entry", 2)
-                raise Exception
+                raise Exception("No ModuleBase-dereived class")
             for key in fileLoaded.__dict__.keys():
-                if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_' and fileLoaded.__dict__['Module'] in fileLoaded.__dict__[key].__bases__:
+                if isinstance(fileLoaded.__dict__[key], type) and key[0] != '_' and fileLoaded.__dict__['ModuleBase'] in fileLoaded.__dict__[key].__bases__:
                     PossibleClasses += [key]
-            if not classFound:
-                if len(PossibleClasses) == 0:
-                    self._Log("No possible Class is available in this file. Aborting.", 2)
-                    raise Exception
-                elif len(PossibleClasses) == 1:
-                    self._Log("Using class {0}".format(PossibleClasses[0]))
-                    ModuleProjectDict['Class'] = PossibleClasses[0]
-                else:
-                    entry = ''
-                    while entry == '' :
-                        self._Log("Enter the tool class among the following ones :")
-                        for Class in PossibleClasses:
-                            self._Log(" * {0}".format(Class))
-                        entry = input('')
-                    if entry not in PossibleClasses:
-                        self._Log("Invalid class, absent from tool file or not a ClassType.", 2)
-                        raise Exception
-                    ModuleProjectDict['Class'] = entry
+            if len(PossibleClasses) == 0:
+                self._Log("No possible Class is available in this file. Aborting.", 2)
+                raise Exception("No ModuleBase-dereived class")
+            elif len(PossibleClasses) == 1:
+                self._Log("Using class {0}".format(PossibleClasses[0]))
+                ModuleProjectDict['Class'] = PossibleClasses[0]
+            else:
+                entry = ''
+                while entry == '' :
+                    self._Log("Enter the tool class among the following ones :")
+                    for Class in PossibleClasses:
+                        self._Log(" * {0}".format(Class))
+                    entry = input('')
+                if entry not in PossibleClasses:
+                    self._Log("Invalid class, absent from tool file or not a ClassType.", 2)
+                    raise Exception("Wrong entry")
+                ModuleProjectDict['Class'] = entry
             self._Log("")
                                                                                   # Loading the class to get the references needed and parameters
 
@@ -831,7 +829,8 @@ class Framework:
             self._Log("No such file found. Canceling entries", 2)
             del self._ProjectRawData[Name]
             return None
-        except Exception:
+        except Exception as e:
+            print(e)
             del self._ProjectRawData[Name]
             return None
 
@@ -1109,6 +1108,16 @@ class Framework:
         self._EventLogs = {ModuleName:[] for ModuleName in self._EventLogs.keys()}
         self._HasLogs = 0
 
+def Interaction(Command):
+    def wrapper(*args):
+        Framework = args[0]
+        Framework._NonEventLog = True
+        OutputData = Command(*args)
+        Framework._NonEventLog = False
+        Framework._SendLog()
+        return OutputData
+    return wrapper
+
 class ModuleBase:
     def __init__(self, Name, Framework, ModulesLinked):
         '''
@@ -1138,8 +1147,7 @@ class ModuleBase:
         self.__SubStreamOutputIndexes__ = set()
         self.__GeneratedSubStreams__ = []
         
-        self._ProposesTau = ('EventTau' in self.__class__.__dict__) # We set this as a variable, for user to change it at runtime. It can be accessed as a public variable through 'self.ProposesTau'
-        self.__LastMonitoredTimestamp = -np.inf
+        self.__ProposesTau = ('EventTau' in self.__class__.__dict__) # We set this as a variable, for user to change it at runtime. It can be accessed as a public variable through 'self.ProposesTau'
         
         try:
             self.__ModuleIndex__ = self.__Framework__.ModulesOrder[self.__Name__]
@@ -1199,6 +1207,7 @@ class ModuleBase:
     def __Initialize__(self, Parameters):
         # First restore all previous values
         self.Log(" > Initializing module")
+        self.__LastMonitoredTimestamp = -np.inf
         if self.__SavedValues__:
             for Key, Value in self.__SavedValues__.items():
                 self.__dict__[Key] = Value
@@ -1235,7 +1244,7 @@ class ModuleBase:
         else:
             OnEventMethodUsed = self.__OnEventInput__
 
-        if self._MonitorDt and self._ProposesTau: # We check if that method was overloaded
+        if self._MonitorDt and self.__ProposesTau: # We check if that method was overloaded
             if not self._MonitoredVariables:
                 self.LogWarning("Enabling monitoring for Tau value")
             self._MonitoredVariables = [('AverageTau', float)] + self._MonitoredVariables
@@ -1268,7 +1277,7 @@ class ModuleBase:
 
     @property
     def ProposesTau(self):
-        return self._ProposesTau
+        return self.__ProposesTau
 
     def _SetGeneratedSubStreamsIndexes(self, Indexes):
         '''
@@ -1307,7 +1316,7 @@ class ModuleBase:
         pass
     @property
     def MapTau(self):
-        if not self._ProposesTau:
+        if not self.__ProposesTau:
             return
         Map = np.zeros(self.Geometry)
         for x in range(Map.shape[0]):
@@ -1502,11 +1511,14 @@ class ModuleBase:
         for Key, Type in self._MonitoredVariables:
             if Key not in Variables:
                 continue
+            if '@' in Key:
+                 self.LogWarning("Avoiding monitored variable {0} as lists of data elements are not fitted for CSV files".format(Key))
+                 continue
             TemplateVar = self.History[Key][0]
             if Type == np.array:
                 Size = TemplateVar.flatten().shape[0]
                 if Size > 9: # We remove here anything that would be too big for CSV files, like frames, ST-contexts, ...
-                    self.LogWarning("Avoiding monitored variable {0} as its shapes is not fitted for CSV files".format(Key))
+                    self.LogWarning("Avoiding monitored variable {0} as its shape is not fitted for CSV files".format(Key))
                     continue
                 DataType = type(TemplateVar.flatten()[0])
                 if DataType == np.int64:

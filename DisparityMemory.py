@@ -18,7 +18,7 @@ class DisparityMemory(ModuleBase):
         return True
 
     def _OnEventModule(self, event):
-        if not Event.Has(DisparityEvent):
+        if not event.Has(DisparityEvent):
             return
         self.DisparityContext[event.location,:] = np.array([event.timestamp, event.disparity])
         self.LastT = event.timestamp
@@ -38,4 +38,6 @@ class DisparityMemory(ModuleBase):
             Map = self.DisparityContext
         xs, ys = np.where(self.LastT - Map[:,:,0] <= Tau)
         ds = Map[xs,ys,0]
-        return int(np.median(ds))
+        if not ds.size:
+            return None
+        return int(np.median(ds)+0.5)

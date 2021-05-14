@@ -15,11 +15,14 @@ class PoseEstimator(ModuleBase):
         '''
         self.__GeneratesSubStream__ = True
         self._MonitorDt = 0. # By default, a module does not stode any date over time.
-        self._NeedsLogColumn = False
+        self._NeedsLogColumn = True
         self._MonitoredVariables = [('RigFrame.T', np.array),
                                     ('RigFrame.Theta', np.array),
                                     ('RigFrame.V', np.array),
-                                    ('RigFrame.Omega', np.array)]
+                                    ('RigFrame.Omega', np.array),
+                                    ('SpringEnergy', float),
+                                    ('KineticEnergy', float),
+                                    ('AverageSpringLength', float)]
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
 
@@ -30,17 +33,20 @@ class PoseEstimator(ModuleBase):
         self._InitialCameraRotationVector = np.zeros(3)
         self._InitialCameraTranslationVector = np.zeros(3)
 
-        self._AverageLengthSpringMultiplier = 1.
+        self._AverageSpringLengthMultiplier = np.inf
         self._MuV = 1.
         self._MuOmega = 1.
-        self._M = 1.
-        self._I = 1.
+        self._M = 0.5
+        self._I = 0.5
 
         self._MinTrackersPerCamera = 5
         self._NeedsStereoOdometry = True
         self._DefaultTau = 0.05
         self._TrackerDisparityRadius = 5
         self._DisparityTauRatio = 10
+
+        self._MaxLengthRatioBreak = 4.
+        self._MaxAbsoluteSpringLength = 1.
 
     def _OnInitialization(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
@@ -63,9 +69,7 @@ class PoseEstimator(ModuleBase):
                     self.DisparityMemories[SubStreamIndex] = DisparityMemory
                     continue
 
-        self.AverageLength = 0.
-        self.SpringEnergy = 0.
-        self.KineticEnergy = 0.
+        self.AverageSpringLength = 0.
 
         self.LastUpdateT = 0.
 
@@ -92,8 +96,9 @@ class PoseEstimator(ModuleBase):
             self.ReceivedOmega[:,event.SubStreamIndex] = event.omega
         if event.Has(TrackerEvent):
             if event.TrackerColor == 'k':
-                del self.Anchors[(event.TrackerID, event.SubStreamIndex)]
-                self.TrackersPerCamera[event.SubStreamIndex] -= 1
+                ID = (event.TrackerID, event.SubStreamIndex)
+                if ID in self.Anchors:
+                    self.RemoveAnchor(ID, "tracker disappeared")
             elif event.TrackerColor == 'g' and event.TrackerMarker == 'o': # Tracker locked
                 self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID)
         if not self.Started:
@@ -112,32 +117,58 @@ class PoseEstimator(ModuleBase):
         self.Update(event.timestamp)
         return
 
+    def RemoveAnchor(self, ID, reason):
+        if self.Anchors[ID].Active:
+            self.TrackersPerCamera[ID[1]] -= 1
+        del self.Anchors[ID]
+        self.Log("Removed anchor {0} ({1})".format(ID, reason))
+
     def Update(self, t):
         dt = t - self.LastUpdateT
         self.LastUpdateT = t
 
         self.RigFrame.UpdatePosition(dt)
-        self.UpdateLinesOfSights(dt)
+        self.UpdateLinesOfSights()
 
         Force, Torque = self.ForceAndTorque
         A, Alpha = Force / self._M, Torque / self._I
 
         self.RigFrame.UpdateDerivatives(dt, Alpha, A)
 
-    def UpdateLinesOfSights(self, dt):
-        self.AverageLength = 0.
-        for ID, Anchor in self.Anchors.items():
+    def UpdateLinesOfSights(self):
+        MaxLength = 0
+        MaxID = None
+        self.AverageSpringLength = 0.
+        N = len(self.Anchors)
+        for nAnchor, (ID, Anchor) in enumerate(list(self.Anchors.items())):
             Anchor.UpdatePresenceSegment()
             ErrorVector = Anchor.WorldProjection - Anchor.CurrentReprojection
             Anchor.Length = np.linalg.norm(ErrorVector)
-            self.AverageLength += Anchor.Length
+            if Anchor.Length > self._MaxAbsoluteSpringLength:
+                self.RemoveAnchor(ID, 'excessive absolute length')
+                continue
+            if Anchor.Length > MaxLength:
+                MaxLength = Anchor.Length
+                MaxID = ID
+            self.AverageSpringLength += Anchor.Length
 
-        self.AverageLength /= len(self.Anchors)
-        AnchorClass.SetAverageLength(self.AverageLength * self._AverageLengthSpringMultiplier)
+        self.AverageSpringLength /= N
+        if MaxLength > self._MaxLengthRatioBreak * self.AverageSpringLength:
+            self.RemoveAnchor(MaxID, 'excessive relative length')
+            self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
 
-        self.SpringEnergy = 0.
+        if self.AverageSpringLength:
+            AnchorClass.SetAverageSpringLength(self.AverageSpringLength * self._AverageSpringLengthMultiplier)
+
+    @property
+    def SpringEnergy(self):
+        SpringEnergy = 0.
         for ID, Anchor in self.Anchors.items():
-            self.SpringEnergy += Anchor.Energy
+            SpringEnergy += Anchor.Energy
+        return SpringEnergy
+    @property
+    def KineticEnergy(self):
+        return (self._M * (self.RigFrame.V**2).sum() + self._I * (self.RigFrame.Omega**2).sum()) / 2
 
     @property
     def EnvironmentV(self):
@@ -182,32 +213,53 @@ class PoseEstimator(ModuleBase):
         if ID not in self.Anchors:
             if disparity is None:
                 return
-            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, ID[1]), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+0.5, ID[1]), self.GetWorldLocation(ScreenLocation, disparity-0.5, ID[1])), OnCameraDataClass(ID[1], np.array(ScreenLocation), disparity), self.GetWorldLocation)
-            self.TrackersPerCamera[ID[1]] += 1
+            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+0.5, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-0.5, SubStreamIndex)), OnCameraDataClass(SubStreamIndex, np.array(ScreenLocation), disparity), self.GetWorldLocation)
+            self.TrackersPerCamera[SubStreamIndex] += 1
+            self.Log("Added anchor {0}".format(ID))
         else:
-            self.Anchors[ID].OnCameraData.Location[:] = ScreenLocation
+            Anchor = self.Anchors[ID]
+            Anchor.OnCameraData.Location[:] = ScreenLocation
             if not disparity is None:
-                self.Anchors[ID].OnCameraData.Disparity = disparity
-                self.Anchors[ID].Active = True
+                if not self.Started:
+                    Anchor.SetWorldData(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), (self.GetWorldLocation(ScreenLocation, disparity+0.5, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-0.5, SubStreamIndex)))
+                Anchor.OnCameraData.Disparity = disparity
+                if not Anchor.Active:
+                    Anchor.Active = True
+                    self.TrackersPerCamera[SubStreamIndex] += 1
             else:
-                self.Anchors[ID].Active = False
+                if Anchor.Active:
+                    Anchor.Active = False
+                    self.TrackersPerCamera[SubStreamIndex] -= 1
 
     def GetWorldLocation(self, ScreenLocation, disparity, CameraIndex):
         return self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))  * self.DepthOf(disparity) + self.CameraOffsetLocations[CameraIndex])
 
-    def PlotSystem(self):
+    def PlotSystem(self, Orientation = 'natural'):
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
 
-        oldPlot = ax.plot
-        oldScatter = ax.scatter
-        import types
-        def newPlot(ax, x, y, z, *args, **kwargs):
-            oldPlot(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
-        ax.plot = types.MethodType(newPlot, ax)
-        def newScatter(ax, x, y, z, *args, **kwargs):
-            oldScatter(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
-        ax.scatter = types.MethodType(newScatter, ax)
+        if Orientation == 'natural':
+            oldPlot = ax.plot
+            oldScatter = ax.scatter
+            oldText = ax.text
+            import types
+            def newPlot(ax, x, y, z, *args, **kwargs):
+                oldPlot(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
+            ax.plot = types.MethodType(newPlot, ax)
+            def newScatter(ax, x, y, z, *args, **kwargs):
+                oldScatter(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
+            ax.scatter = types.MethodType(newScatter, ax)
+            def newText(ax, x, y, z, *args, **kwargs):
+                oldText(np.array(x), np.array(z), -np.array(y), *args, **kwargs)
+            ax.text = types.MethodType(newText, ax)
+
+            ax.set_xlabel('X')
+            ax.set_ylabel('Z')
+            ax.set_zlabel('-Y')
+        elif Orientation == 'initial':
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
 
         for nDim in range(3):
             BaseVector = np.array([float(nDim == 0), float(nDim == 1), float(nDim == 2)])
@@ -225,6 +277,7 @@ class PoseEstimator(ModuleBase):
             CPpF = Anchor.CurrentReprojection + Anchor.Force
             ax.scatter(WP[0], WP[1], WP[2], color = 'k', marker = 'o')
             ax.scatter(CP[0], CP[1], CP[2], color = 'k', marker = 'o')
+            ax.text(CP[0], CP[1], CP[2]+0.01, str(ID), color = 'k')
             ax.plot([CPpF[0], CP[0]], [CPpF[1], CP[1]], [CPpF[2], CP[2]], color = 'k')
 
         return fig, ax
@@ -293,11 +346,10 @@ class OnCameraDataClass:
 
 class AnchorClass:
     K_Base = 1.
-    AverageLength = np.inf
+    ReferenceLength = np.inf
 
     def __init__(self, WorldLocation, Origin, WorldPresenceSegment, OnCameraData, GetWorldLocationFunction):
-        self.WorldLocation = WorldLocation
-        self.WorldPresenceSegment = WorldPresenceSegment
+        self.SetWorldData(WorldLocation, WorldPresenceSegment)
 
         self.CurrentPresenceSegment = (np.array(self.WorldPresenceSegment[0]), np.array(self.WorldPresenceSegment[1]))
 
@@ -312,9 +364,13 @@ class AnchorClass:
 
         self.Active = True
 
+    def SetWorldData(self, WorldLocation, WorldPresenceSegment):
+        self.WorldLocation = WorldLocation
+        self.WorldPresenceSegment = WorldPresenceSegment
+
     @classmethod
-    def SetAverageLength(self, Length):
-        self.AverageLength = Length
+    def SetReferenceLength(self, Length):
+        self.ReferenceLength = Length
 
     @property
     def K(self):
@@ -322,7 +378,7 @@ class AnchorClass:
 
     @property
     def ForceNorm(self):
-        return self.Length * self.K * np.e**(-self.Length / self.AverageLength)
+        return self.Length * self.K * self.ExponentialValue
 
     @property
     def Force(self):
@@ -330,8 +386,17 @@ class AnchorClass:
 
     @property
     def Energy(self):
-        ExponentialValue = np.e**(-self.Length / self.AverageLength)
-        return self.K * (self.AverageLength**2 * (1 - ExponentialValue) - self.AverageLength * self.Length * ExponentialValue)
+        if self.ReferenceLength == np.inf:
+            return self.K * self.Length**2 / 2
+        return self.K * (self.ReferenceLength**2 * (1 - self.ExponentialValue) - self.ReferenceLength * self.Length * self.ExponentialValue)
+
+    @property
+    def ExponentialValue(self):
+        if self.ReferenceLength == 0:
+            return 1.
+        if self.ReferenceLength == np.inf:
+            return 1
+        return np.e**(-self.Length / self.ReferenceLength)
 
     def UpdatePresenceSegment(self):
         ScreenLocation = self.OnCameraData.Location

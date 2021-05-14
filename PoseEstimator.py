@@ -22,7 +22,8 @@ class PoseEstimator(ModuleBase):
                                     ('RigFrame.Omega', np.array),
                                     ('SpringEnergy', float),
                                     ('KineticEnergy', float),
-                                    ('AverageSpringLength', float)]
+                                    ('AverageSpringLength', float),
+                                    ('Anchors@Length', float)]
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
 
@@ -39,7 +40,7 @@ class PoseEstimator(ModuleBase):
         self._M = 0.5
         self._I = 0.5
 
-        self._MinTrackersPerCamera = 5
+        self._MinTrackersPerCamera = 8
         self._NeedsStereoOdometry = True
         self._DefaultTau = 0.05
         self._TrackerDisparityRadius = 5
@@ -48,18 +49,22 @@ class PoseEstimator(ModuleBase):
         self._MaxLengthRatioBreak = 4.
         self._MaxAbsoluteSpringLength = 1.
 
+        self._AddLiveTrackers = False # WARNING : Should definitely be true
+
     def _OnInitialization(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
         self.Anchors = {}
 
         self.K = self._DefaultK
-        self.ScreenCenter = np.array(self.Geometry)/2
+        self.ScreenSize = np.array(self.Geometry)
+        self.ScreenCenter = self.ScreenSize/2
         self.StereoBaseDistance = np.linalg.norm(self._StereoBaseVector)
         self.CameraOffsetLocations = [self._CameraIndexToOffsetRatio[CameraIndex] * self._StereoBaseVector for CameraIndex in self.__SubStreamInputIndexes__]
 
-        self.KMatInv = np.linalg.inv(np.array([[self.K, 0., self.ScreenCenter[0]],
+        self.KMat = np.array([[self.K, 0., self.ScreenCenter[0]],
                                         [0., -self.K, self.ScreenCenter[1]],
-                                        [0., 0.,     1.]]))
+                                        [0., 0.,     1.]])
+        self.KMatInv = np.linalg.inv(self.KMat)
 
         DisparityMemories = [self.LeftDisparityMemory, self.RightDisparityMemory]
         self.DisparityMemories = {}
@@ -158,7 +163,7 @@ class PoseEstimator(ModuleBase):
             self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
 
         if self.AverageSpringLength:
-            AnchorClass.SetAverageSpringLength(self.AverageSpringLength * self._AverageSpringLengthMultiplier)
+            AnchorClass.SetReferenceLength(self.AverageSpringLength * self._AverageSpringLengthMultiplier)
 
     @property
     def SpringEnergy(self):
@@ -211,6 +216,8 @@ class PoseEstimator(ModuleBase):
             Tau = self._DefaultTau
         disparity = self.DisparityMemories[SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(ScreenLocation, dtype = int), self._TrackerDisparityRadius)
         if ID not in self.Anchors:
+            if self.Started and not self._AddLiveTrackers:
+                return
             if disparity is None:
                 return
             self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+0.5, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-0.5, SubStreamIndex)), OnCameraDataClass(SubStreamIndex, np.array(ScreenLocation), disparity), self.GetWorldLocation)
@@ -235,8 +242,17 @@ class PoseEstimator(ModuleBase):
         return self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))  * self.DepthOf(disparity) + self.CameraOffsetLocations[CameraIndex])
 
     def PlotSystem(self, Orientation = 'natural'):
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
+        f = plt.figure()
+        self.Plot3DSystem(Orientation, (f, f.add_subplot(121, projection='3d')))
+        for nCamera in range(2):
+            self.GenerateCameraView(nCamera, (f, f.add_subplot(2, 2, 2*(nCamera+1))))
+
+    def Plot3DSystem(self, Orientation = 'natural', fax = None):
+        if fax is None:
+            f = plt.figure()
+            ax = f.add_subplot(111, projection='3d')
+        else:
+            f, ax = fax
 
         if Orientation == 'natural':
             oldPlot = ax.plot
@@ -280,7 +296,33 @@ class PoseEstimator(ModuleBase):
             ax.text(CP[0], CP[1], CP[2]+0.01, str(ID), color = 'k')
             ax.plot([CPpF[0], CP[0]], [CPpF[1], CP[1]], [CPpF[2], CP[2]], color = 'k')
 
-        return fig, ax
+        return f, ax
+
+    def GenerateCameraView(self, nCamera, fax = None):
+        if fax is None:
+            f, ax = plt.subplots(1,1)
+        else:
+            f, ax = fax
+        ax.set_aspect("equal")
+        ax.set_xlim(0, self.ScreenSize[0] - 1)
+        ax.set_ylim(0, self.ScreenSize[1] - 1)
+        ax.plot(self.ScreenCenter[0], self.ScreenCenter[1], 'ok')
+        CameraOffset = self.CameraOffsetLocations[nCamera]
+        for (TID, TrackerCameraIndex), Anchor in self.Anchors.items():
+            if TrackerCameraIndex != nCamera:
+                continue
+            for nLocation, (UsedLocation, UsedLocType) in enumerate(((Anchor.WorldProjection, 'world reprojection'), (Anchor.CurrentReprojection, 'current reprojection'))):
+                CameraFrameLocation = self.RigFrame.FromWorld(UsedLocation) - CameraOffset
+                DisplayFrameLocation = self.KMat.dot(CameraFrameLocation)
+                if DisplayFrameLocation[-1] <= 0:
+                    print("Anchor {0} {1} is behind the camera".format((TID, TrackerCameraIndex), UsedLocType))
+                    continue
+                OnScreenLocation = DisplayFrameLocation[:2] / DisplayFrameLocation[-1]
+                if (OnScreenLocation < 0).any() or (OnScreenLocation > self.ScreenSize-1).any():
+                    print("Anchor {0} is out of screen".format((TID, TrackerCameraIndex), UsedLocType))
+                    continue
+                ax.plot(OnScreenLocation[0], OnScreenLocation[1], marker = ['o', 'x'][nLocation], color = 'b')
+        return f, ax
 
 class FrameClass:
     def __init__(self, InitialTheta, InitialT, InitialOmega, InitialV, LambdaAlpha = 0, LambdaA = 0): # Lambda is the amout of acceleration averaging with the previous value
@@ -382,7 +424,7 @@ class AnchorClass:
 
     @property
     def Force(self):
-        return self.ForceNorm * (self.WorldProjection - self.CurrentReprojection) / max(0.001, self.Length)
+        return -self.ForceNorm * (self.WorldProjection - self.CurrentReprojection) / max(0.001, self.Length)
 
     @property
     def Energy(self):

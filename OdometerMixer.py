@@ -1,4 +1,4 @@
-from PEBBLE import ModuleBase, CameraEvent, OdometryEvent, DisparityEvent
+from PEBBLE import ModuleBase, CameraEvent, TwistEvent, DisparityEvent
 import numpy as np
 
 import random
@@ -120,7 +120,7 @@ class OdometerMixer(ModuleBase):
         return True
 
     def _OnEventModule(self, event):
-        if event.Has(OdometryEvent):
+        if event.Has(TwistEvent):
             if event.SubStreamIndex == self._ReferenceIndex:
                 self.VReference = np.array(event.v)
                 self.omegaReference = np.array(event.omega)
@@ -152,7 +152,7 @@ class OdometerMixer(ModuleBase):
                     NewEvent = event.Join(CameraEvent, location = VirtualFrameLocation, polarity = 0)
                     if not disparity is None:
                         NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
-            event.join(OdometryEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.v)
+            event.join(TwistEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.v)
         return
 
     def _SetGeneratedSubStreamsIndexes(self, Indexes):

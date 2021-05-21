@@ -1,4 +1,4 @@
-from PEBBLE import ModuleBase, OdometryEvent, TrackerEvent, DisparityEvent, PoseEvent
+from PEBBLE import ModuleBase, TwistEvent, TrackerEvent, DisparityEvent, PoseEvent
 from functools import lru_cache
 import numpy as np
 
@@ -22,23 +22,28 @@ class PoseEstimator(ModuleBase):
                                     ('RigFrame.Omega', np.array),
                                     ('SpringEnergy', float),
                                     ('KineticEnergy', float),
+                                    ('TrackersEnergy', float),
+                                    ('EnvironmentEnergy', float),
+                                    ('BrokenSpringsEnergyLoss', float),
+                                    ('MuV', float),
+                                    ('MuOmega', float),
                                     ('AverageSpringLength', float),
                                     ('Anchors@Length', float)]
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
 
         self._DefaultK = 450
-        self._StereoBaseVector = np.array([0.1, 0., 0.])
-        self._CameraIndexToOffsetRatio = {0:0.5, 1:-0.5}
+        self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])]
 
         self._InitialCameraRotationVector = np.zeros(3)
         self._InitialCameraTranslationVector = np.zeros(3)
 
-        self._AverageSpringLengthMultiplier = np.inf
-        self._MuV = 1.
-        self._MuOmega = 1.
-        self._M = 0.5
-        self._I = 0.5
+        self._AverageSpringLengthMultiplier = 0.
+        self._ConstantSpringReferenceLength = 0.3
+        self._MuV = 10.
+        self._MuOmega = 10.
+        self._M = 0.0005
+        self._I = 0.005
 
         self._MinTrackersPerCamera = 8
         self._NeedsStereoOdometry = True
@@ -46,10 +51,16 @@ class PoseEstimator(ModuleBase):
         self._TrackerDisparityRadius = 5
         self._DisparityTauRatio = 10
 
-        self._MaxLengthRatioBreak = 4.
-        self._MaxAbsoluteSpringLength = 1.
+        self._DisparityOverlap = 0.2
 
-        self._AddLiveTrackers = False # WARNING : Should definitely be true
+        self._MaxLengthRatioBreak = np.inf
+        self._MaxAbsoluteSpringLength = 2.
+
+        self._UseAdaptiveDampening = True
+
+        self._UseSpeedOdometry = True # WARNING : Should be True
+        self._AddLiveTrackers = True # WARNING : Should definitely be True
+        self._CanDeactivateAnchor = False
 
     def _OnInitialization(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
@@ -58,32 +69,54 @@ class PoseEstimator(ModuleBase):
         self.K = self._DefaultK
         self.ScreenSize = np.array(self.Geometry)
         self.ScreenCenter = self.ScreenSize/2
-        self.StereoBaseDistance = np.linalg.norm(self._StereoBaseVector)
-        self.CameraOffsetLocations = [self._CameraIndexToOffsetRatio[CameraIndex] * self._StereoBaseVector for CameraIndex in self.__SubStreamInputIndexes__]
+        self.StereoBaseDistance = np.linalg.norm(self._CameraOffsets[0] - self._CameraOffsets[1])
+        self.CameraOffsetLocations = [self._CameraOffsets[CameraIndex] for CameraIndex in self.__SubStreamInputIndexes__]
 
         self.KMat = np.array([[self.K, 0., self.ScreenCenter[0]],
                                         [0., -self.K, self.ScreenCenter[1]],
                                         [0., 0.,     1.]])
         self.KMatInv = np.linalg.inv(self.KMat)
 
-        DisparityMemories = [self.LeftDisparityMemory, self.RightDisparityMemory]
-        self.DisparityMemories = {}
-        for SubStreamIndex in self.__SubStreamInputIndexes__:
-            for DisparityMemory in DisparityMemories:
-                if SubStreamIndex in DisparityMemory.__SubStreamOutputIndexes__:
-                    self.DisparityMemories[SubStreamIndex] = DisparityMemory
-                    continue
+        try:
+            DisparityMemories = [self.LeftDisparityMemory, self.RightDisparityMemory]
+            self.DisparityMemories = {}
+            for SubStreamIndex in self.__SubStreamInputIndexes__:
+                for DisparityMemory in DisparityMemories:
+                    if SubStreamIndex in DisparityMemory.__SubStreamOutputIndexes__:
+                        self.DisparityMemories[SubStreamIndex] = DisparityMemory
+                        continue
+            self._UseDisparityMemories = True
+        except:
+            self.LogWarning("No disparity modules linked, expects disparity events for each incomming tracker event")
+            self._UseDisparityMemories = False
+
+        if self._ConstantSpringReferenceLength and self._AverageSpringLengthMultiplier:
+            self.LogWarning("Both constant spring reference length and averale length multiplier specified. Only one can be set at the time")
+            return False
+        if self._ConstantSpringReferenceLength:
+            AnchorClass.SetReferenceLength(self._ConstantSpringReferenceLength)
 
         self.AverageSpringLength = 0.
+        self.TotalSpringConstant = 0.
+        self.TotalSpringTorqueBase = 0.
 
         self.LastUpdateT = 0.
 
+        self.TrackersEnergy = 0.
+        self.EnvironmentEnergy = 0.
+        self.BrokenSpringsEnergyLoss = 0.
+        self.UpdatedSpringsPreviousEnergies = {}
+
         self.Started = False
         self.ReceivedOdometry = np.zeros(2, dtype = bool)
+        if not self._UseSpeedOdometry:
+            self.ReceivedOdometry[:] = 1
         self.TrackersPerCamera = {Index:0 for Index in self.__SubStreamInputIndexes__}
 
         self.ReceivedV = np.zeros((3, 2))
         self.ReceivedOmega = np.zeros((3,2))
+
+        self.DisparitySegmentWidth = 0.5 + self._DisparityOverlap / 2
 
         return True
 
@@ -95,7 +128,8 @@ class PoseEstimator(ModuleBase):
         return True
 
     def _OnEventModule(self, event):
-        if event.Has(OdometryEvent):
+        self.UpdatedSpringsPreviousEnergies = {}
+        if event.Has(TwistEvent):
             self.ReceivedOdometry[event.SubStreamIndex] = True
             self.ReceivedV[:,event.SubStreamIndex] = event.v
             self.ReceivedOmega[:,event.SubStreamIndex] = event.omega
@@ -105,7 +139,11 @@ class PoseEstimator(ModuleBase):
                 if ID in self.Anchors:
                     self.RemoveAnchor(ID, "tracker disappeared")
             elif event.TrackerColor == 'g' and event.TrackerMarker == 'o': # Tracker locked
-                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID)
+                if event.Has(DisparityEvent):
+                    disparity = event.disparity
+                else:
+                    disparity = None
+                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID, disparity)
         if not self.Started:
             if self.ReceivedOdometry.all() or (not self._NeedsStereoOdometry and self.ReceivedOdometry.any()):
                 CanStart = True
@@ -115,7 +153,8 @@ class PoseEstimator(ModuleBase):
                         break
                 if not CanStart:
                     return
-                self.Started = True
+                self.Started = event.timestamp
+                self.LastUpdateT = event.timestamp
                 self.LogSuccess("Started")
             else:
                 return
@@ -125,6 +164,11 @@ class PoseEstimator(ModuleBase):
     def RemoveAnchor(self, ID, reason):
         if self.Anchors[ID].Active:
             self.TrackersPerCamera[ID[1]] -= 1
+        if ID in self.UpdatedSpringsPreviousEnergies:
+            self.BrokenSpringsEnergyLoss += self.UpdatedSpringsPreviousEnergies[ID]
+            del self.UpdatedSpringsPreviousEnergies[ID]
+        else:
+            self.BrokenSpringsEnergyLoss += self.Anchors[ID].Energy
         del self.Anchors[ID]
         self.Log("Removed anchor {0} ({1})".format(ID, reason))
 
@@ -135,20 +179,56 @@ class PoseEstimator(ModuleBase):
         self.RigFrame.UpdatePosition(dt)
         self.UpdateLinesOfSights()
 
+        for ID, PreviousEnergy in self.UpdatedSpringsPreviousEnergies.items():
+            self.TrackersEnergy += (self.Anchors[ID].Energy - PreviousEnergy)
+        self.EnvironmentEnergy += dt * self.EnvironmentPower
+
         Force, Torque = self.ForceAndTorque
         A, Alpha = Force / self._M, Torque / self._I
 
         self.RigFrame.UpdateDerivatives(dt, Alpha, A)
 
+    def UpdateFromTracker(self, SubStreamIndex, ScreenLocation, TrackerID, disparity = None):
+        ID = (TrackerID, SubStreamIndex)
+        Tau = self.FrameworkAverageTau
+        if Tau is None or Tau == 0:
+            Tau = self._DefaultTau
+        if self._UseDisparityMemories:
+            disparity = self.DisparityMemories[SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(ScreenLocation, dtype = int), self._TrackerDisparityRadius)
+        if ID not in self.Anchors:
+            if self.Started and not self._AddLiveTrackers:
+                return
+            if disparity is None:
+                return
+            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+self.DisparitySegmentWidth, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-self.DisparitySegmentWidth, SubStreamIndex)), OnCameraDataClass(SubStreamIndex, np.array(ScreenLocation), disparity), self.GetWorldLocation)
+            self.TrackersPerCamera[SubStreamIndex] += 1
+            self.Log("Added anchor {0}".format(ID))
+        else:
+            Anchor = self.Anchors[ID]
+            self.UpdatedSpringsPreviousEnergies[ID] = Anchor.Energy
+            Anchor.OnCameraData.Location[:] = ScreenLocation
+            if not disparity is None:
+                if not self.Started:
+                    Anchor.SetWorldData(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), (self.GetWorldLocation(ScreenLocation, disparity+self.DisparitySegmentWidth, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-self.DisparitySegmentWidth, SubStreamIndex)))
+                Anchor.OnCameraData.Disparity = disparity
+                if not Anchor.Active:
+                    Anchor.Active = True
+                    self.LogSuccess("Reactivated anchor {0}".format(ID))
+                    self.TrackersPerCamera[SubStreamIndex] += 1
+            else:
+                if Anchor.Active and self._CanDeactivateAnchor:
+                    Anchor.Active = False
+                    self.LogWarning("Deactivated anchor {0} (no disparity)".format(ID))
+                    self.TrackersPerCamera[SubStreamIndex] -= 1
+
     def UpdateLinesOfSights(self):
         MaxLength = 0
         MaxID = None
         self.AverageSpringLength = 0.
-        N = len(self.Anchors)
+        self.TotalSpringConstant = 0.
+        self.TotalSpringTorqueBase = 0.
         for nAnchor, (ID, Anchor) in enumerate(list(self.Anchors.items())):
             Anchor.UpdatePresenceSegment()
-            ErrorVector = Anchor.WorldProjection - Anchor.CurrentReprojection
-            Anchor.Length = np.linalg.norm(ErrorVector)
             if Anchor.Length > self._MaxAbsoluteSpringLength:
                 self.RemoveAnchor(ID, 'excessive absolute length')
                 continue
@@ -156,13 +236,19 @@ class PoseEstimator(ModuleBase):
                 MaxLength = Anchor.Length
                 MaxID = ID
             self.AverageSpringLength += Anchor.Length
+            self.TotalSpringConstant += Anchor.K * Anchor.ExponentialValue
+            self.TotalSpringTorqueBase += Anchor.K * Anchor.ExponentialValue * np.linalg.norm(Anchor.WorldLocation - self.RigFrame.T)**2
 
+        N = len(self.Anchors)
         self.AverageSpringLength /= N
-        if MaxLength > self._MaxLengthRatioBreak * self.AverageSpringLength:
+        if self._MaxLengthRatioBreak != np.inf and MaxLength > self._MaxLengthRatioBreak * self.AverageSpringLength:
+            Anchor = self.Anchors[MaxID]
+            self.TotalSpringConstant -= Anchor.K * Anchor.ExponentialValue
+            self.TotalSpringTorqueBase -= Anchor.K * np.linalg.norm(Anchor.WorldLocation - self.RigFrame.T)**2
             self.RemoveAnchor(MaxID, 'excessive relative length')
             self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
 
-        if self.AverageSpringLength:
+        if self._AverageSpringLengthMultiplier and self.AverageSpringLength:
             AnchorClass.SetReferenceLength(self.AverageSpringLength * self._AverageSpringLengthMultiplier)
 
     @property
@@ -174,17 +260,44 @@ class PoseEstimator(ModuleBase):
     @property
     def KineticEnergy(self):
         return (self._M * (self.RigFrame.V**2).sum() + self._I * (self.RigFrame.Omega**2).sum()) / 2
+    @property
+    def InternalEnergy(self):
+        return self.KineticEnergy + self.SpringEnergy
+    @property
+    def ExchangedEnergy(self):
+        return self.EnvironmentEnergy + self.TrackersEnergy
 
     @property
     def EnvironmentV(self):
+        if not self._UseSpeedOdometry:
+            return np.zeros(3)
         return self.ReceivedV.mean(axis = 1)
     @property
     def EnvironmentOmega(self):
+        if not self._UseSpeedOdometry:
+            return np.zeros(3)
         return self.ReceivedOmega.mean(axis = 1)
 
     @property
     def ViscosityForceAndTorque(self):
-        return self._MuV * (self.EnvironmentV - self.RigFrame.V), self._MuOmega * (self.EnvironmentOmega - self.RigFrame.Omega)
+        return self.MuV * (self.EnvironmentV - self.RigFrame.V), self.MuOmega * (self.EnvironmentOmega - self.RigFrame.Omega)
+    @property
+    def EnvironmentPower(self): # Defined as the instantaneous power transmitted to the rig frame
+        Force, Torque = self.ViscosityForceAndTorque
+        return ((Force*self.RigFrame.V).sum() + (Torque*self.RigFrame.Omega).sum())
+
+    @property
+    def MuV(self):
+        if self._UseAdaptiveDampening:
+            return 2 * np.sqrt(self._M * self.TotalSpringConstant)
+        else:
+            return self._MuV
+    @property
+    def MuOmega(self):
+        if self._UseAdaptiveDampening:
+            return 2 * np.sqrt(self._I * self.TotalSpringTorqueBase)
+        else:
+            return self._MuOmega
 
     @property
     def SpringsForceAndTorque(self):
@@ -193,7 +306,7 @@ class PoseEstimator(ModuleBase):
         for Anchor in self.Anchors.values():
             Force = Anchor.Force
             ApplicationPoint = Anchor.CurrentReprojection
-            Torque = np.cross(ApplicationPoint - self.RigFrame.T, Force)
+            Torque = -np.cross(ApplicationPoint - self.RigFrame.T, Force)
             TotalForce += Force
             TotalTorque += Torque
         return TotalForce, TotalTorque
@@ -208,35 +321,6 @@ class PoseEstimator(ModuleBase):
         if disparity <= 0:
             return _MAX_DEPTH
         return self.StereoBaseDistance * self.K / disparity
-
-    def UpdateFromTracker(self, SubStreamIndex, ScreenLocation, TrackerID):
-        ID = (TrackerID, SubStreamIndex)
-        Tau = self.FrameworkAverageTau
-        if Tau is None or Tau == 0:
-            Tau = self._DefaultTau
-        disparity = self.DisparityMemories[SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(ScreenLocation, dtype = int), self._TrackerDisparityRadius)
-        if ID not in self.Anchors:
-            if self.Started and not self._AddLiveTrackers:
-                return
-            if disparity is None:
-                return
-            self.Anchors[ID] = AnchorClass(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), self.RigFrame.T, (self.GetWorldLocation(ScreenLocation, disparity+0.5, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-0.5, SubStreamIndex)), OnCameraDataClass(SubStreamIndex, np.array(ScreenLocation), disparity), self.GetWorldLocation)
-            self.TrackersPerCamera[SubStreamIndex] += 1
-            self.Log("Added anchor {0}".format(ID))
-        else:
-            Anchor = self.Anchors[ID]
-            Anchor.OnCameraData.Location[:] = ScreenLocation
-            if not disparity is None:
-                if not self.Started:
-                    Anchor.SetWorldData(self.GetWorldLocation(ScreenLocation, disparity, SubStreamIndex), (self.GetWorldLocation(ScreenLocation, disparity+0.5, SubStreamIndex), self.GetWorldLocation(ScreenLocation, disparity-0.5, SubStreamIndex)))
-                Anchor.OnCameraData.Disparity = disparity
-                if not Anchor.Active:
-                    Anchor.Active = True
-                    self.TrackersPerCamera[SubStreamIndex] += 1
-            else:
-                if Anchor.Active:
-                    Anchor.Active = False
-                    self.TrackersPerCamera[SubStreamIndex] -= 1
 
     def GetWorldLocation(self, ScreenLocation, disparity, CameraIndex):
         return self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))  * self.DepthOf(disparity) + self.CameraOffsetLocations[CameraIndex])
@@ -321,7 +405,8 @@ class PoseEstimator(ModuleBase):
                 if (OnScreenLocation < 0).any() or (OnScreenLocation > self.ScreenSize-1).any():
                     print("Anchor {0} is out of screen".format((TID, TrackerCameraIndex), UsedLocType))
                     continue
-                ax.plot(OnScreenLocation[0], OnScreenLocation[1], marker = ['o', 'x'][nLocation], color = 'b')
+                ax.plot(OnScreenLocation[0], OnScreenLocation[1], marker = ['x', 'o'][nLocation], color = 'b')
+            ax.plot(Anchor.OnCameraData.Location[0], Anchor.OnCameraData.Location[1], marker = 'o', color = 'g')
         return f, ax
 
 class FrameClass:
@@ -351,6 +436,7 @@ class FrameClass:
         self.RStored = np.array([[c + Ux**2*(1-c), Ux*Uy*(1-c) - Uz*s, Ux*Uz*(1-c) + Uy*s],
                       [Uy*Ux*(1-c) + Uz*s, c + Uy**2*(1-c), Uy*Uz*(1-c) - Ux*s],
                       [Uz*Ux*(1-c) - Uy*s, Uz*Uy*(1-c) + Ux*s, c + Uz**2*(1-c)]])
+        self._UpToDate = True
         return self.RStored
 
     @staticmethod
@@ -373,6 +459,7 @@ class FrameClass:
     def UpdatePosition(self, dt):
         self.Theta += dt * self.Omega
         self.T += dt * self.V
+        self._UpToDate = False
 
     def UpdateDerivatives(self, dt, Alpha, A):
         self.Omega += dt * ((1 - self.LambdaAlpha) * Alpha + self.LambdaAlpha * self.Alpha)
@@ -424,7 +511,7 @@ class AnchorClass:
 
     @property
     def Force(self):
-        return -self.ForceNorm * (self.WorldProjection - self.CurrentReprojection) / max(0.001, self.Length)
+        return self.ForceNorm * (self.WorldProjection - self.CurrentReprojection) / max(0.001, self.Length)
 
     @property
     def Energy(self):
@@ -446,6 +533,9 @@ class AnchorClass:
         CameraID = self.OnCameraData.CameraID
         self.CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+0.5, CameraID), self.GetWorldLocation(ScreenLocation, disparity-0.5, CameraID))
         self.WorldProjection, self.CurrentReprojection = GetSegmentsProjections(self.WorldPresenceSegment, self.CurrentPresenceSegment)
+
+        ErrorVector = self.WorldProjection - self.CurrentReprojection
+        self.Length = np.linalg.norm(ErrorVector)
 
 def GetSegmentsProjections(S1, S2):
     # Calculate denomitator

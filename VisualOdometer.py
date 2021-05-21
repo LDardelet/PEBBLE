@@ -1,4 +1,4 @@
-from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent, OdometryEvent
+from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent, TwistEvent
 import numpy as np
 
 class VisualOdometer(ModuleBase):
@@ -102,7 +102,7 @@ class VisualOdometer(ModuleBase):
                     return
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
             self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
-            #event.Attach(OdometryEvent, v = self.V*0, omega = self.PureOmega)
+            #event.Attach(TwistEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self.Tau*self._ValidDisparityTauRatio:
                 IsValidEvent = True
         if event.Has(DisparityEvent): # We assume here that there is a CameraEvent, since we have a Disparity event.
@@ -124,7 +124,7 @@ class VisualOdometer(ModuleBase):
             disparity = self.DisparityMap[event.location[0], event.location[1], 0]
             self.Update(event.timestamp, event.location, f, disparity)
             if self.A >= self._MinActivity:
-                event.Attach(OdometryEvent, v = self.V, omega = self.omega)
+                event.Attach(TwistEvent, v = self.V, omega = self.omega)
         return
 
     def Update(self, t, location, f, disparity):

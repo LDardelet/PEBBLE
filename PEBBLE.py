@@ -682,7 +682,7 @@ class Framework:
 
     def AddModule(self):
         self._Log("Current project :")
-        self.Project
+        self.Project()
         self._Log("")
         
         Name = input('Enter the name of the new tool : ')                   # Module name 
@@ -766,11 +766,10 @@ class Framework:
                     if key == Name:
                         continue
                     self._Log(" * {0}".format(key))
+                self._Log("Void will create no link, may lead to errors")
                 for ModuleLinkRequested in ModulesLinksRequested:
                     self._Log("Reference for '" + ModuleLinkRequested + "'")
-                    entry = ''
-                    while entry == '':
-                        entry = input('-> ')
+                    entry = input('-> ')
                     ModuleProjectDict['ModulesLinks'][ModuleLinkRequested] = entry
             else:
                 self._Log("No particular reference needed for this tool.")
@@ -846,7 +845,7 @@ class Framework:
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
-        self.Project
+        self.Project()
         self.Modified = True
 
     def DelModule(self, ModuleName):
@@ -860,10 +859,9 @@ class Framework:
         self._LoadProject()
         self._Log("New project : ")
         self._Log("")
-        self.Project
+        self.Project()
         self.Modified = True
 
-    @property
     def Project(self):
         self._Log("# Framework\n", 3)
         self._Log("")
@@ -911,7 +909,6 @@ class Framework:
             
             nOrder += 1
 
-    @property
     def VisualProject(self):
         f, ax = plt.subplots(1,1)
         ax.tick_params('both', left = False, labelleft = False, bottom = False, labelbottom = False)
@@ -1216,7 +1213,10 @@ class ModuleBase:
                 self.LogError("Unconsistent parameter for {0} : {1}".format(self.__Name__, Key))
                 return False
             else:
-                if type(Value) != type(self.__dict__[Key]):
+                if Key == '_MonitoredVariables' or Key == '_MonitorDt':
+                    self.__UpdateParameter__(Key, Value, Log = False)
+                    continue
+                if type(Value) != type(self.__dict__[Key]) or type(Value) in (list, tuple):
                     self.__UpdateParameter__(Key, Value)
                     continue
                 if type(Value) != np.ndarray:
@@ -1227,10 +1227,17 @@ class ModuleBase:
                     if (Value != self.__dict__[Key]).any():
                         self.__UpdateParameter__(Key, Value)
                         continue
+        if not self._MonitorDt or not self._MonitoredVariables:
+            self.Log("No data monitored")
+        else:
+            self.Log("Data monitored every {0:.3f}s :".format(self._MonitorDt))
+            for Var, Type in self._MonitoredVariables:
+                self.Log(" * {0} as {1}".format(Var, Type.__name__))
         
         # We can only link modules at this point, since the framework must have created them all before
         for ModuleLinkRequested, ModuleLinked in self.__ModulesLinked__.items():
-            self.__dict__[ModuleLinkRequested] = self.__Framework__.Modules[ModuleLinked]
+            if ModuleLinked:
+                self.__dict__[ModuleLinkRequested] = self.__Framework__.Modules[ModuleLinked]
 
         # Initialize the stuff corresponding to this specific module
         if not self._OnInitialization():
@@ -1286,10 +1293,11 @@ class ModuleBase:
         '''
         return False
 
-    def __UpdateParameter__(self, Key, Value):
+    def __UpdateParameter__(self, Key, Value, Log = True):
         self.__SavedValues__[Key] = copy.copy(self.__dict__[Key])
         self.__dict__[Key] = Value
-        self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__SavedValues__[Key], self.__dict__[Key]))
+        if Log:
+            self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__SavedValues__[Key], self.__dict__[Key]))
 
     def GetSnapIndexAt(self, t):
         return (abs(np.array(self.History['t']) - t)).argmin()
@@ -1360,14 +1368,14 @@ class ModuleBase:
         return eventContainer.IsFilled
 
     def __OnEventMonitor__(self, OnEventMethodUsed, eventContainer):
-        OnEventMethodUsed(eventContainer)
+        output = OnEventMethodUsed(eventContainer)
         if eventContainer.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
             self.__LastMonitoredTimestamp = eventContainer.timestamp
             self._OnSnapModule()
             self.History['t'] += [eventContainer.timestamp]
             for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
                 self.History[VarName] += [RetreiveMethod()]
-        return eventContainer.IsFilled
+        return output
 
     def _IsParent(self, ChildModule):
         if ChildModule.__ModuleIndex__ < self.__ModuleIndex__:
@@ -1500,6 +1508,9 @@ class ModuleBase:
         if not Variables:
             if not self._MonitoredVariables:
                 self.LogWarning("No CSV export as no data was being monitored")
+                return
+            if not self._MonitorDt:
+                self.LogWarning("No CSV export as no sample rate was set")
                 return
             Variables = [Key for Key, Type in self._MonitoredVariables if Key != 't']
         else:
@@ -1666,14 +1677,17 @@ class _BareEventClass: # First basic event given to an input module. That input 
             del kwargs['SubStreamIndex']
         else:
             raise Exception("No SubStreamIndex specified during first event creation")
-        if 'timestamp' in kwargs:
-            self._Container.timestamp = kwargs['timestamp']
-            del kwargs['timestamp']
-        else:
-            raise Exception("No timestamp specified during first event creation")
+        if self._Container.timestamp is None:
+            if 'timestamp' in kwargs:
+                self._Container.timestamp = kwargs['timestamp']
+                del kwargs['timestamp']
+            else:
+                raise Exception("No timestamp specified during first event creation")
         self._Container._AddEvent(Extension, SubStreamIndex, **kwargs)
         del self._Container.__dict__['BareEvent']
         return self._Container.Events[SubStreamIndex][-1]
+    def SetTimestamp(self, t):
+        self._Container.timestamp = t
 
 class _EventClass:
     def __init__(self, **kwargs):
@@ -1781,7 +1795,7 @@ class TauEvent(_EventExtensionClass):
 class FlowEvent(_EventExtensionClass):
     _Key = 6
     _Fields = ('flow',)
-class OdometryEvent(_EventExtensionClass):
+class TwistEvent(_EventExtensionClass):
     _Key = 7
     _Fields = ('omega', 'v')
 

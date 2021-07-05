@@ -13,7 +13,7 @@ class FlowComputer(ModuleBase):
 
         self._R = 5
         self._Tau = np.inf
-        self._TauRatio = 5
+        self._TauRatio = 0
         self._MinDetRatio = 0.00000001
         self._MinNEdges = 2.5
         self._MaxNEdgesRatio = 0.8
@@ -30,7 +30,9 @@ class FlowComputer(ModuleBase):
         self._PolaritySeparation = False
         self._NeedsLogColumn = False
 
-        self._NormOrigin = "Average"
+        self._Method = "Gradient"
+
+        self._NormOrigin = "Plan"
         self._DirectionOrigin = "Plan"
 
         self._MaxFlowValue = np.inf
@@ -54,6 +56,11 @@ class FlowComputer(ModuleBase):
         self.NFlowEvents = 0
         self.ScreenSize = np.array(self.Geometry)
 
+        if self._Method == "Gradient":
+            self._ComputeFlowMethod = self.ComputeGradientFlow
+        elif self._Method == "Plan":
+            self._ComputeFlowMethod = self.ComputePlanFlow
+
         #np.seterr(all='raise')
         self.Filters = [0,0,0]
 
@@ -62,7 +69,7 @@ class FlowComputer(ModuleBase):
     def _OnEventModule(self, event):
         if (event.location < self._R).any() or (event.location >= self.ScreenSize - self._R).any():
             return
-        Flow = self.ComputeGradientFlow(event)
+        Flow = self._ComputeFlowMethod(event)
         if not Flow is None:
             event.Attach(FlowEvent, flow = Flow)
         return
@@ -81,10 +88,13 @@ class FlowComputer(ModuleBase):
         if t == -np.inf:
             return None
         dtm = t - tm
+
         Tau = self.FrameworkAverageTau
-        if Tau is None or Tau == 0:
+        if Tau is None or Tau == 0 or self._TauRatio == 0:
             Tau = self._Tau
-        ValidMap = dtm < Tau * self._TauRatio
+        else:
+            Tau *= self._TauRatio
+        ValidMap = dtm < Tau
         NValids = ValidMap.sum()
         if NValids < self.NEventsMin:
             return None
@@ -137,14 +147,19 @@ class FlowComputer(ModuleBase):
         S, STD = self.ComputeTimeDisplacement(tdxmy[Valids], tdymx[Valids])
         return S, STD, ValidMap
 
-    def ComputeFlow(self, event):
+    def ComputePlanFlow(self, event):
         Patch = self.Memory.GetSquarePatch(event.location, self._R)
         if self._PolaritySeparation:
             Patch = Patch[:,:,event.polarity] #for polarity separation
         else:
             Patch = Patch.max(axis = 2)
         
-        xs, ys = np.where(Patch > event.timestamp - self._Tau)
+        Tau = self.FrameworkAverageTau
+        if Tau is None or Tau == 0 or self._TauRatio == 0:
+            Tau = self._Tau
+        else:
+            Tau *= self._TauRatio
+        xs, ys = np.where(Patch > event.timestamp - Tau)
         NEvents = xs.shape[0]
         if NEvents >= self.NEventsMin:
             ts = Patch[xs, ys]

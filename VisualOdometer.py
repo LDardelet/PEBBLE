@@ -13,10 +13,19 @@ class VisualOdometer(ModuleBase):
                                     ('ExpectedFlow', float),
                                     ('ReceivedFlow', float),
                                     ('ErrorFlow', float),
+                                    ('ErrorFlowProbe', float),
                                     ('UsedErrorFlow', float),
                                     ('A', float),
+                                    ('XMean', np.array),
+                                    ('XSigma', np.array),
+                                    ('d2', float),
+                                    ('dSigma', float),
                                     ('AFlow', float),
+                                    ('AProbe', float),
+                                    ('UsedAFlow', float),
                                     ('Det', float)]
+
+        self._EnableEventTau = True
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
@@ -33,7 +42,14 @@ class VisualOdometer(ModuleBase):
         self._MinActivity = 20.
 
         self._Tau = 0.05
-        self._FrameworkTauRatio = 4
+        self._FrameworkTauRatio = 2
+
+        self._FlowErrorProbeTauRatio = 10.
+
+        self._SecurityProbeRatioOn = 3.
+        self._SecurityProbeRatioOff = 1.5
+        self._SecurityModeTauRatio = 10.
+        self._SecurityModeSendOdometry = True
 
     def _OnInitialization(self):
         self.ScreenSize = np.array(self.Geometry)
@@ -54,12 +70,9 @@ class VisualOdometer(ModuleBase):
         self.NValid = 0.
 
         self.LastT = -np.inf
-        self.LastWT = -np.inf
+        self.LastUsedT = -np.inf
         self.MSum = np.zeros((6,6))
-        self.dMSum = np.zeros((6,6))
-        self.MWSum = np.zeros((3,3))
         self.SigmaSum = np.zeros(6)
-        self.SigmaWSum = np.zeros(3)
         self.A = 0.
         self.AW = 0.
         self.ExpectedFlowSum = 0.
@@ -69,6 +82,20 @@ class VisualOdometer(ModuleBase):
         self.AFlow = 0.
         self.UsedAFlow = 0.
         self.FoundSolution = False
+
+        self.XMeanSum = np.zeros(2, dtype = float)
+        self.XSigma2Sum = np.zeros(2, dtype = float)
+        self.d2Sum = 0.
+        self.dMeanSum = 0.
+        self.dSigmaSum = 0.
+
+        self.AProbe = 0.
+        self.ErrorFlowProbeSum = 0.
+
+        self.SecurityOnLogValue = np.log10(self._SecurityProbeRatioOn)
+        self.SecurityOffLogValue = np.log10(self._SecurityProbeRatioOff)
+
+        self.SecurityMode = False
 
         if self._DelayStart == 0:
             self.Started = True
@@ -101,8 +128,6 @@ class VisualOdometer(ModuleBase):
                 else:
                     return
             self.FlowMap[event.location[0], event.location[1], :] = np.array([event.flow[0], event.flow[1], event.timestamp])
-            self.UpdateW(event.timestamp, event.location, self.FlowMap[event.location[0], event.location[1], :2])
-            #event.Attach(TwistEvent, v = self.V*0, omega = self.PureOmega)
             if event.timestamp - self.DisparityMap[event.location[0], event.location[1], 1] < self.Tau*self._ValidDisparityTauRatio:
                 IsValidEvent = True
         if event.Has(DisparityEvent): # We assume here that there is a CameraEvent, since we have a Disparity event.
@@ -123,12 +148,14 @@ class VisualOdometer(ModuleBase):
             f = self.FlowMap[event.location[0], event.location[1], :2]
             disparity = self.DisparityMap[event.location[0], event.location[1], 0]
             self.Update(event.timestamp, event.location, f, disparity)
-            if self.A >= self._MinActivity:
+            if self.A >= self._MinActivity and (not self.SecurityMode or self._SecurityModeSendOdometry):
                 event.Attach(TwistEvent, v = self.V, omega = self.omega)
         return
 
     def Update(self, t, location, f, disparity):
-        decay = np.e**((self.LastT - t)/self.Tau)
+        Tau = self.Tau
+        decay = np.e**((self.LastT - t)/(Tau/(1+self.SecurityMode*(self._SecurityModeTauRatio-1))))
+        decayProbe = np.e**((self.LastT - t)/(Tau/self._FlowErrorProbeTauRatio))
         self.LastT = t
 
 
@@ -145,29 +172,37 @@ class VisualOdometer(ModuleBase):
         Error = abs(ExpectedFlowNorm - Nf)
         self.ErrorFlowSum = self.ErrorFlowSum * decay + Error
         self.AFlow = self.AFlow * decay + 1.
+
+        self.AProbe = self.AProbe * decayProbe + 1.
+        self.ErrorFlowProbeSum = self.ErrorFlowProbeSum * decayProbe + Error
+
+
         if self.FoundSolution and Error > self.ErrorFlow * self._RejectMaxErrorRatio:
+            self.UpdateSecurityMode()
             return
 
-        self.UsedErrorFlowSum = self.UsedErrorFlowSum * decay + Error
-        self.UsedAFlow = self.UsedAFlow * decay + 1.
+        usedDecay = np.e**((self.LastUsedT - t)/(Tau/(1+self.SecurityMode*(self._SecurityModeTauRatio-1))))
+        self.LastUsedT = t
+        self.UsedErrorFlowSum = self.UsedErrorFlowSum * usedDecay + Error
+        self.UsedAFlow = self.UsedAFlow * usedDecay + 1.
 
-        dP_i = np.array([nx,
-                         0,
-                         ny,
-                         0,
-                         (nx*dx + ny*dy)/self.K,
-                         0])
         M_i = np.zeros((6,6))
-        dM_i = np.zeros((6,6))
         for k in range(6):
             M_i[:,k] = P_i*P_i[k]
-            dM_i[:,k] = P_i*dP_i[k] + dP_i*P_i[k]
         Sigma_i = P_i * Nf
 
-        self.MSum = self.MSum * decay + M_i
-        self.dMSum = self.dMSum * decay + dM_i
-        self.SigmaSum = self.SigmaSum * decay + Sigma_i
-        self.A = self.A * decay + 1.
+        self.MSum = self.MSum * usedDecay + M_i
+        self.SigmaSum = self.SigmaSum * usedDecay + Sigma_i
+
+        self.A = self.A * usedDecay + 1.
+        self.XMeanSum = self.XMeanSum * usedDecay + location
+        self.XSigma2Sum = self.XSigma2Sum * usedDecay + (self.XMean - location)**2
+
+        self.d2Sum = self.d2Sum * usedDecay + d**2
+        self.dMeanSum = self.dMeanSum * usedDecay + d
+        self.dSigmaSum = self.dSigmaSum * usedDecay + (self.dMean - d)**2
+
+        self.UpdateSecurityMode()
 
     def P(self, dx, dy, nx, ny, d):
         return np.array([nx*d,
@@ -184,7 +219,28 @@ class VisualOdometer(ModuleBase):
     def ExpectedVelocity(self, dx, dy, d):
         return self.Q(dx, dy, d).dot(self.Omega)
 
+    def UpdateSecurityMode(self):
+        ErrorFlow = self.ErrorFlow
+        if ErrorFlow == 0:
+            return 
+        ErrorFlowProbe = self.ErrorFlowProbe
+        if ErrorFlowProbe == 0:
+            return
+        V = abs(np.log10(ErrorFlow / ErrorFlowProbe)) 
+        if not self.SecurityMode:
+            if V > self.SecurityOnLogValue:
+                self.SecurityMode = True
+                self.LogWarning("Security mode is on.")
+                return
+        else:
+            if V < self.SecurityOffLogValue:
+                self.SecurityMode = False
+                self.LogSuccess("Security mode is off.")
+                return
+
     def EventTau(self, event = None):
+        if not self._EnableEventTau:
+            return 0
         if event is None or not event.Has(CameraEvent):
             dx, dy = self.ScreenCenter
         else:
@@ -205,6 +261,21 @@ class VisualOdometer(ModuleBase):
             return 0
 
     @property
+    def XMean(self):
+        return self.XMeanSum / max(0.01, self.A)
+    @property
+    def XSigma(self):
+        return np.sqrt(self.XSigma2Sum / max(0.01, self.A))
+    @property
+    def d2(self):
+        return self.d2Sum / max(0.01, self.A)
+    @property
+    def dMean(self):
+        return self.dMeanSum / max(0.01, self.A)
+    @property
+    def dSigma(self):
+        return np.sqrt(self.dSigmaSum / max(0.01, self.A))
+    @property
     def Tau(self):
         if self._FrameworkTauRatio == 0:
             return self._Tau
@@ -214,32 +285,9 @@ class VisualOdometer(ModuleBase):
         else:
             return Tau * self._FrameworkTauRatio
 
-    def UpdateW(self, t, location, f):
-        decay = np.e**((self.LastWT - t)/self.Tau)
-        self.LastWT = t
-
-        Nf = np.linalg.norm(f)
-        nx, ny = f / Nf
-        x, y = (location - self.ScreenCenter) # Make it centered
-
-        Q_i = np.array([nx*self.K + (nx*x**2 + ny*x*y)/self.K,
-                      ny*self.K + (ny*y**2 + nx*x*y)/self.K,
-                      (nx*y - ny*x)])
-        MW_i = np.zeros((3,3))
-        for k in range(3):
-            MW_i[:,k] = Q_i*Q_i[k]
-        SigmaW_i = Q_i * Nf
-
-        self.MWSum = self.MWSum * decay + MW_i
-        self.SigmaWSum = self.SigmaWSum * decay + SigmaW_i
-        self.AW = self.AW * decay + 1.
-
     @property
     def M(self):
         return self.MSum / max(0.1, self.A)
-    @property
-    def dM(self):
-        return self.dMSum / max(0.1, self.A)
     @property
     def Sigma(self):
         return self.SigmaSum / max(0.1, self.A)
@@ -258,42 +306,14 @@ class VisualOdometer(ModuleBase):
         self.FoundSolution = True
         return np.linalg.inv(self.M).dot(self.Sigma)
     @property
-    def dOmega(self):
-        Det = self.DetRatio
-        if Det == 0 or (self._MinDetRatioToSolve != np.inf and Det < self._MinDetRatioToSolve):
-            return np.zeros(6)
-        Minv = np.linalg.inv(self.M)
-        return Minv.dot(self.dM.dot(Minv.dot(self.Sigma)))
-    @property
     def Motion(self):
         return self.OmegaToMotionMatrix.dot(self.Omega)
-    @property
-    def dMotion(self):
-        return abs(self.OmegaToMotionMatrix.dot(self.dOmega))
     @property
     def omega(self):
         return self.Motion[:3]
     @property
     def V(self):
         return self.Motion[3:]
-    @property
-    def domega(self):
-        return self.dMotion[:3]
-    @property
-    def dV(self):
-        return self.dMotion[3:]
-    @property
-    def MW(self):
-        return self.MWSum / max(0.1, self.AW)
-    @property
-    def SigmaW(self):
-        return self.SigmaWSum /  max(0.1, self.AW)
-    @property
-    def PureOmega(self):
-        M = self.MW
-        if np.linalg.det(M) == 0:
-            return np.zeros(3)
-        return self.omegaMatrix.dot(np.linalg.inv(M).dot(self.SigmaW))
 
     @property
     def ExpectedFlow(self):
@@ -307,3 +327,6 @@ class VisualOdometer(ModuleBase):
     @property
     def UsedErrorFlow(self):
         return self.UsedErrorFlowSum / max(0.1, self.UsedAFlow)
+    @property
+    def ErrorFlowProbe(self):
+        return self.ErrorFlowProbeSum / max(0.1, self.AProbe)

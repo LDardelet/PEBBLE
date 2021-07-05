@@ -16,19 +16,21 @@ class OdometerMixer(ModuleBase):
 
         self._ReferenceIndex = 0
 
-        self._AddVirtualFrame = True
-        self._VirtualReferenceFrameDepth = None
-        self._VirtualReferenceFrameDisparity = None
-        self._VirtualReferenceFrameLength = 1.
+        self._NVirtualFrames = 2
+        self._ResetVirtualFrameWhenOut = True
+        self._AddStaticFrame = True
+        self._FrameCenterRatioResetTrigger = 0.95
         self._StereoBaseVector = None
         self._StereoBaseRotation = None
         self._DefaultStereoBaseDistance = 0.1
         self._MaxCamToCamRotationSpeedError = 0.3
         self._ValidTimespanForStart = 0.02
+        self._DisparityRange = [0, 100]
 
         self._Tau = 0.01
 
         self._VirtualFrameDefaultRotation = np.zeros(3)
+        self._VirtualReferenceFrameLength = 1.
 
         self._KMat = None
 
@@ -66,44 +68,42 @@ class OdometerMixer(ModuleBase):
             self.StereoBaseRotation = np.array(self._StereoBaseRotation)
 
         if self._KMat is None:
-            self._KMat = [np.array([[self._DefaultK, 0., self.ScreenSize[0]/2],
+            self.KMat = [np.array([[self._DefaultK, 0., self.ScreenSize[0]/2],
                                     [0., -self._DefaultK, self.ScreenSize[1]/2],
                                     [0., 0., 1.]]) for _ in range(2)]
-        self.K = self._DefaultK
+            self.K = self._DefaultK
+        else:
+            self.KMat = [np.array(KMat) for KMat in self._KMat]
+            self.K = self.KMat[0][0,0] / self.KMat[0][-1,-1]
+        self.KInv = np.linalg.inv(self.KMat[self._ReferenceIndex])
 
-        if self._KMat is None:
-            self._AddVirtualFrame = False
-            self.LogWarning("Not adding virtual frame : projection matrix missing")
-        if self._VirtualReferenceFrameDepth is None and self._VirtualReferenceFrameDisparity is None:
-            self._AddVirtualFrame = False
-            self.LogWarning("Not adding virtual frame : no depth nor disparity specified")
-        elif not self._VirtualReferenceFrameDepth is None and not self._VirtualReferenceFrameDisparity is None:
-            self._AddVirtualFrame = False
-            self.LogWarning("Not adding virtual frame : both depth and disparity were specified")
-        if self._AddVirtualFrame:
-            if self._VirtualReferenceFrameDepth is None:
-                self._VirtualReferenceFrameDepth = abs(self.StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDisparity)
-            else:
-                self._VirtualReferenceFrameDisparity = abs(self.StereoBaseDistance * self._KMat[0][0,0] / self._KMat[0][-1,-1] / self._VirtualReferenceFrameDepth)
+        self.MinDepthFrameReset = self.Depth(self._DisparityRange[1])
 
-            Z = self._VirtualReferenceFrameDepth
-            X = 0
-            Y = 0.
-            self.VirtualFrameCornersLocations = [np.array([0, 0, 0, 1.]),
-                                                 np.array([1, 0, 0, 1.]),
-                                                 np.array([0, 1, 0, 1.]),
-                                                 np.array([0, 0, 1, 1.])]
+        self.AverageDisparity = np.mean(self._DisparityRange)
+
+        if self._NVirtualFrames:
+            DX = self.ScreenSize[0] / max(1, self._NVirtualFrames)
+            self.VirtualFramesStartLocations = [np.array([DX/2 + n*DX, self.ScreenCenter[1]]) for n in range(self._NVirtualFrames)]
+            self.OnScreenVirtualFrames = np.ones(self._NVirtualFrames, dtype = bool)
+            Dd = (self._DisparityRange[1] - self._DisparityRange[0]) / max(1, self._NVirtualFrames)
+            self.VirtualFramesStartDisparities = [Dd/2 + n*Dd for n in range(self._NVirtualFrames)]
+
+            self.VFCL = [np.array([0, 0, 0]),
+                         np.array([1, 0, 0]),
+                         np.array([0, 1, 0]),
+                         np.array([0, 0, 1])]
             theta = np.linalg.norm(self._VirtualFrameDefaultRotation)
             if theta:
                 u = self._VirtualFrameDefaultRotation / theta
                 u_x = np.array([[0., -u[2], u[1]],
                                 [u[2], 0., -u[0]],
                                 [-u[1], u[0], 0.]])
-                R = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
+                self.VFR = np.cos(theta) * np.identity(3) + np.sin(theta) * u_x + (1-np.cos(theta))* u.reshape((3,1)).dot(u.reshape((3,1)).T)
             else:
-                R = np.identity(3)
-            for nCorner, Corner in enumerate(self.VirtualFrameCornersLocations):
-                self.VirtualFrameCornersLocations[nCorner][:3] = R.dot(Corner[:3]) + np.array([X,Y,Z])
+                self.VFR = np.identity(3)
+            self.VirtualFramesCornersLocations = [self.ComputeVirtualFrameCorners(x, d) for x, d in zip(self.VirtualFramesStartLocations, self.VirtualFramesStartDisparities)]
+        if self._AddStaticFrame:
+            self.VirtualStaticFrameCornersLocations = self.ComputeVirtualFrameCorners(self.ScreenCenter, self.AverageDisparity)
 
         self.ASum = 0.
         self.DSum = 0.
@@ -146,13 +146,19 @@ class OdometerMixer(ModuleBase):
         if self.Started:
             self.UpdateFrame(event.timestamp)
             self.UpdateD(event.timestamp)
-            if self._AddVirtualFrame:
+            if self._NVirtualFrames or self._AddStaticFrame:
                 VirtualFrameLocation, disparity, sign = self.GenerateVirtualEvent(event.SubStreamIndex)
                 if not VirtualFrameLocation is None:
                     NewEvent = event.Join(CameraEvent, location = VirtualFrameLocation, polarity = 0)
                     if not disparity is None:
                         NewEvent.Attach(DisparityEvent, disparity = disparity, sign = 1-2*event.SubStreamIndex)
-            event.join(TwistEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.v)
+                else:
+                    if self._ResetVirtualFrameWhenOut and event.SubStreamIndex == self._ReferenceIndex:
+                        CloseToCenter = sign
+                        if CloseToCenter:
+                            nFrame = disparity
+                            self.ResetFrame(nFrame)
+            event.Join(TwistEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.V)
         return
 
     def _SetGeneratedSubStreamsIndexes(self, Indexes):
@@ -163,8 +169,6 @@ class OdometerMixer(ModuleBase):
         return True
 
     def EventTau(self, event = None):
-        if self._VirtualReferenceFrameDisparity is None:
-            return 0
         if not self.Started:
             return 0
         if event is None or not event.Has(CameraEvent):
@@ -172,16 +176,14 @@ class OdometerMixer(ModuleBase):
         else:
             dx, dy = np.array(event.location) - self.ScreenCenter
         if event is None or not event.Has(DisparityEvent):
-            d = self._VirtualReferenceFrameDisparity
+            d = self.AverageDisparity
         else:
             d = event.disparity
         omega = self.omega
         if event is None:
-            V = self.V + np.cross(self.omega, self.StereoBaseVector/2) # We set the observation location in the middle of the stereo rig
-        else:
             V = self.V
-            if event.SubStreamIndex != self._ReferenceIndex:
-                V += np.cross(self.omega, self.StereoBaseVector)
+        else:
+            V = self.V + np.cross(self.omega, self.StereoBaseVector ** (-1)**event.SubStreamIndex)
         Q = np.array([[d, self.K + dx**2/self.K, 0., dx*dy/self.K, dx*d/self.K, dy],
                                      [0., dx*dy/self.K, d, self.K + dy**2/self.K, dy*d/self.K, -dx]])
         ExpectedVelocity = np.linalg.norm(Q.dot(self.MotionToOmegaMatrix.dot(np.concatenate((omega, V)))))
@@ -195,7 +197,7 @@ class OdometerMixer(ModuleBase):
         return (self.omegaReference + self.omegaStereo)/2
     @property
     def V(self):
-        return (self.VReference + (self.VStereo - np.cross(self.omega, self.StereoBaseVector)))/2
+        return (self.VReference + self.VStereo)/2
         #return self.VReference
 
     @property
@@ -233,26 +235,65 @@ class OdometerMixer(ModuleBase):
         self.DSum = self.DSum * decay + DComp
         self.LastDUpdateT = t
 
-    def GenerateVirtualEvent(self, CameraIndex, WorldPoint3D = None):
-        if WorldPoint3D is None:
-            nDim = random.randint(1,3)
-            u = random.random()
-            WorldPoint3D = u * self.VirtualFrameCornersLocations[0] + (1-u) * self.VirtualFrameCornersLocations[nDim]
-    
-        RT = np.concatenate((self.R, self.T.reshape((1,3)))).T
-        X = RT.dot(WorldPoint3D) # In Camera Reference Frame
+    def GenerateVirtualEvent(self, CameraIndex):
+        nFrame = random.randint(0, self._NVirtualFrames-1+self._AddStaticFrame)
+        nDim = random.randint(1,3)
+        u = random.random()
+        return self.ComputeFrameLocationOnScreen(nFrame, CameraIndex, nDim, u)
+
+    def ComputeVirtualFrameCorners(self, x, d):
+        Z = self.Depth(d)
+        xH = np.array([x[0], x[1], 1])
+        XH = self.KInv.dot(xH) 
+        X = Z * XH / XH[-1]
+        X3D = self.R.dot(X - self.T)
+        
+        VirtualFrameCornersLocations = []
+        for nCorner, Corner in enumerate(self.VFCL):
+            VirtualFrameCornersLocations += [self.VFR.dot(Corner[:3]) + X3D]
+        return VirtualFrameCornersLocations
+
+    def Disparity(self, depth):
+        return int(abs(self.StereoBaseDistance * self.K / depth) + 0.5)
+    def Depth(self, disparity):
+        return (self.StereoBaseDistance * self.K / disparity)
+
+    def ResetFrame(self, nFrameReset):
+        self.Log("Resetting frame {0}".format(nFrameReset))
+        MaxScreenDistance = np.inf*np.ones(self._NVirtualFrames)
+        MaxDisparityDistance = np.inf*np.ones(self._NVirtualFrames)
+        for nFrame in range(self._NVirtualFrames):
+            if nFrame == nFrameReset:
+                continue
+            x, d, sign = self.ComputeFrameLocationOnScreen(nFrame, self._ReferenceIndex)
+            if x is None:
+                self.LogWarning("Two frames out of screen at once")
+                continue
+            for nFrameIni in range(self._NVirtualFrames):
+                MaxScreenDistance[nFrameIni] = min(MaxScreenDistance[nFrameIni], np.linalg.norm(self.VirtualFramesStartLocations[nFrameIni] - x))
+                MaxDisparityDistance[nFrameIni] = min(MaxDisparityDistance[nFrameIni], abs(self.VirtualFramesStartDisparities[nFrameIni] - d))
+        x = self.VirtualFramesStartLocations[MaxScreenDistance.argmax()]
+        d = int(self.VirtualFramesStartDisparities[MaxDisparityDistance.argmax()])
+        self.VirtualFramesCornersLocations[nFrameReset] = self.ComputeVirtualFrameCorners(x, d)
+
+    def ComputeFrameLocationOnScreen(self, nFrame, CameraIndex, nDim=0, u=1):
+        if not self._AddStaticFrame or nFrame < self._NVirtualFrames:
+            WorldPoint3D = u * self.VirtualFramesCornersLocations[nFrame][0] + (1-u) * self.VirtualFramesCornersLocations[nFrame][nDim]
+            X = self.R.T.dot(WorldPoint3D) + self.T # In Camera Reference Frame
+        else:
+            X = self.VirtualStaticFrameCornersLocations[0] + (0.5-u)*self.R.T.dot(self.VirtualStaticFrameCornersLocations[nDim] - self.VirtualStaticFrameCornersLocations[0])
         if CameraIndex != self._ReferenceIndex:
             X = self.StereoBaseRotation.dot(X) + self.StereoBaseVector # If we want the stereo camera, we change the basis
         if X[2] > 0: # with these corrdinates, Z looks at the front of the camera
-            xproj = self._KMat[CameraIndex].dot(X) # We project. The result should be in a Z-forward, y-upward basis
+            xproj = self.KMat[CameraIndex].dot(X) # We project. The result should be in a Z-forward, y-upward basis
             x = np.array(xproj[:2]/xproj[2]+0.5, dtype = int)
             if (x>=0).all() and (x<self.ScreenSize).all():
                 sign = 1-2*CameraIndex
-                d = int(abs(self.StereoBaseDistance * self._KMat[CameraIndex][0,0] / self._KMat[CameraIndex][-1,-1] / X[2]) + 0.5)
-                if x[0]+sign*d < 0 or x[0]+sign*d>= self.ScreenSize[0]:
-                    d = None
+                d = self.Disparity(X[2])
+                if d > self._DisparityRange[1]:
+                    return None, nFrame, (u > self._FrameCenterRatioResetTrigger)
                 return x, d, sign 
             else:
-                return None, None, None
+                return None, nFrame, (u > self._FrameCenterRatioResetTrigger)
         else:
-            return None, None, None
+            return None, nFrame, (u > self._FrameCenterRatioResetTrigger)

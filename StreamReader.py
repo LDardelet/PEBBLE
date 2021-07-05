@@ -42,6 +42,8 @@ class Reader(ModuleBase):
         self._EsDefaultGeometry = [346, 260]
         self._TxtPosNegPolarities = False
 
+        self._WarpEventJump = 100
+
         self._NeedsLogColumn = False
 
     @property
@@ -99,26 +101,26 @@ class Reader(ModuleBase):
 
     def _OnEventModule(self, BareEvent):
         self.nEvent += 1
-        Data = self._NextEventData()
-        if Data is None:
+        t, X, p = self._NextEventData()
+        if t is None:
             return None
-        t, X, p = Data
         BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self.SubStreamIndex)
 
-
-    def FastForward(self, t):
-        try:
-            while self.__Framework__.Running:
-                self.nEvent += 1
-                NextEvent = self._NextEvent()
-                if self.nEvent%2048 == 0:
-                    stdout.write("t = {0:.3f} / {1:.3f}\r".format(NextEvent.timestamp, t))
-                    stdout.flush()
-                if NextEvent.timestamp >= t:
-                    self.Log("Done.")
-                    break
-        except KeyboardInterrupt:
-            self.LogWarning("Stopped fast forward at t = {0:.3f}".format(NextEvent.timestamp))
+    def _Warp(self, start_at):
+        Jump = self._WarpEventJump
+        while True:
+            self.nEvent += Jump
+            t, X, p = self._NextEventData(Jump)
+            if t is None:
+                return False
+            stdout.write("t = {0:.3f} / {1:.3f}\r".format(t, start_at))
+            stdout.flush()
+            if t >= start_at:
+                self.Log("Done.")
+                break
+            if start_at - t < 0.1:
+                Jump = 1
+        return True
 
 # .h5 Files methods
 
@@ -140,12 +142,11 @@ class Reader(ModuleBase):
 
         return True
 
-    def _NextEventH5(self):
-        if self.nEvent == self.NEvents:
+    def _NextEventH5(self, EventJump = 1):
+        if self.nEvent >= self.NEvents:
             self.__Framework__.Running = False
-            return None
+            return None, None, None
         Line = self.Data[self.nEvent,:]
-        self.nEvent += 1
         return (Line[2] - self.tOffset), np.array([int(Line[0]), self.Geometry[1] - int(Line[1])-1]), int(Line[3] == 1)
 
 # .AEDAT Files methods
@@ -172,16 +173,16 @@ class Reader(ModuleBase):
 
         return True
 
-    def _NextEventAedat(self):
+    def _NextEventAedat(self, EventJump = 1):
         while True:
-            self.nByte += self.Event_Size
+            self.nByte += self.Event_Size * EventJump # Possible error if EventJump > 1
             if len(self.CurrentByteBatch) - self.nByte < self.Event_Size:
                 self.CurrentByteBatch = self.CurrentByteBatch[self.nByte:]
                 self.nByte = 0
                 self._LoadNewBatch()
 
                 if not self.__Framework__.Running:
-                    return None
+                    return None, None, None
 
             Bytes = self.CurrentByteBatch[self.nByte:self.nByte+self.Event_Size]
 
@@ -215,7 +216,7 @@ class Reader(ModuleBase):
 
         return True
 
-    def _NextEventEs(self):
+    def _NextEventEs(self, EventJump = 1):
         while True:
 
             if len(self.CurrentByteBatch) - self.nByte < 6:
@@ -224,9 +225,9 @@ class Reader(ModuleBase):
                 self._LoadNewBatch()
 
                 if not self.__Framework__.Running:
-                    return None
+                    return None, None, None
 
-            self.nByte += 1
+            self.nByte += EventJump
             Bytes = [self.CurrentByteBatch[self.nByte]]
             if (Bytes[0] >> self.ResetPadding) == self.ResetByte: # Check for reset or overflow
                 Overflow = Bytes[0] & 0x03
@@ -397,14 +398,15 @@ class Reader(ModuleBase):
         self.BatchSize = self._BatchEventSize * self.Event_Size
         return self.Header
 
-    def _NextEventDat(self):
+    def _NextEventDat(self, EventJump = 1):
         if not len(self.CurrentByteBatch):
             self._LoadNewBatch()
             if not self.__Framework__.Running:
-                return None
+                return None, None, None
 
-        event = unpack('Q', self.CurrentByteBatch[:self.Event_Size])
-        self.CurrentByteBatch = self.CurrentByteBatch[self.Event_Size:]
+        for nJump in range(EventJump):
+            event = unpack('Q', self.CurrentByteBatch[:self.Event_Size])
+            self.CurrentByteBatch = self.CurrentByteBatch[self.Event_Size:]
 
         ts = event[0] & self.tMask 
         if self._RemoveNegativeTimeDifferences:
@@ -438,6 +440,7 @@ class Reader(ModuleBase):
             StartNoComment = self.CurrentFile.tell()
             Line = self.CurrentFile.readline()
         Separators = [' ', '&', '_', ',']
+        self._TxtFileStructureIndexes = tuple([self._TxtFileStructure.index(var) for var in ('t', 'x', 'y', 'p')])
         Found = False
         for self._Separator in Separators:
             if Line.count(self._Separator) > 2:
@@ -450,22 +453,20 @@ class Reader(ModuleBase):
         self.nEvent = 0
         return True
 
-    def _NextEventTxt(self):
-        Line = self.CurrentFile.readline()
-        if Line[-1:] == '\n':
-            Line = Line[:-1]
-        else:
-            if len(Line) == 0:
-                self.__Framework__.Running = False
-                return None
+    def _NextEventTxt(self, EventJump = 1):
+        for nJump in range(EventJump):
+            Line = self.CurrentFile.readline().strip()
+        if len(Line) == 0:
+            self.__Framework__.Running = False
+            return None, None, None
         #t_str, x_str, y_str, p_str = Line.split(self._Separator)[:4]
         Data = [Value.strip() for Value in Line.strip().split(self._Separator) if Value.strip()]
-        ts = float(Data[self._TxtFileStructure.index('t')]) * self._TxtTimestampMultiplier
-        x = int(float(Data[self._TxtFileStructure.index('x')]))
-        y = int(float(Data[self._TxtFileStructure.index('y')]))
+        ts = float(Data[self._TxtFileStructureIndexes[0]]) * self._TxtTimestampMultiplier
+        x = int(float(Data[self._TxtFileStructureIndexes[1]]))
+        y = int(float(Data[self._TxtFileStructureIndexes[2]]))
         if self._yInvert:
             y = (self.Geometry[1]-1) - y
-        p = (self._TxtPosNegPolarities + int(float(Data[self._TxtFileStructure.index('p')]))) / (1 + self._TxtPosNegPolarities)
+        p = (self._TxtPosNegPolarities + int(float(Data[self._TxtFileStructureIndexes[3]]))) / (1 + self._TxtPosNegPolarities)
 
         if self.TsOffset is None and self._AutoZeroOffset:
             self.TsOffset = ts

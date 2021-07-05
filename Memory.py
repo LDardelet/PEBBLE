@@ -7,8 +7,9 @@ class Memory(ModuleBase):
         '''
         Class to handle ST-context memory.
         '''
-        self._DefaultTau = 0.1
+        self._DefaultTau = 0.01
         self._ExpectedDensity = 0.01
+        self._EnableEventTau = True
 
     def _OnInitialization(self):
 
@@ -34,8 +35,10 @@ class Memory(ModuleBase):
         return
 
     def EventTau(self, EventConcerned = None):
+        if not self._EnableEventTau:
+            return 0
         if self.A <= 10:
-            return 0.
+            return 0
         return np.log(self.A/(self.A-1)) / np.log(self.AExp/(self.AExp-1)) * self._DefaultTau
 
     def CreateSnapshot(self):

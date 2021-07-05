@@ -103,7 +103,7 @@ class TrackerTRS(ModuleBase):
         self._AllowDisengage = True                                                 # Save process when a tracker is locked but has too low activity. Typically used when sudden deceleration appears
         self._TrackerDisengageActivityThreshold = 0.5
         self._TrackerDisengageActivityHysteresis = 0.1
-        self._TrackerUnlockedSurvives = False                                       # Bool. Behaviour of unlocked trackers. If True, the trackers goes as converged, if False it is killed and restarted somewhere else.
+        self._TrackerUnlockedSurvives = True                                       # Bool. Behaviour of unlocked trackers. If True, the trackers goes as converged, if False it is killed and restarted somewhere else.
 
         self._MeanPositionDampeningFactor = 0.
 
@@ -116,7 +116,7 @@ class TrackerTRS(ModuleBase):
                                     ('RecordedTrackers@Position', np.array),
                                      ('RecordedTrackers@Speed', np.array),
                                      ('RecordedTrackers@State.Value', tuple),
-                                     #('RecordedTrackers@ProjectedEvents', np.array),
+                                     ('RecordedTrackers@ProjectedEvents', np.array),
                                      ('RecordedTrackers@TimeConstant', float),
                                      #('RecordedTrackers@DynamicsEstimator.W', float),
                                      #('RecordedTrackers@DynamicsEstimator.MDet', float),

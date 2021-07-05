@@ -42,7 +42,7 @@ class FlowMemory(ModuleBase):
             return 0
         if EventConcerned is None:
             return self._InverseFlowNormsSum / max(0.0001, self._FlowActivity)
-        Flows = self.GetFlows(self._DefaultTau, EventConcerned.location, self._RTau)
+        Flows = self.GetFlows(EventConcerned.location, self._RTau)
         if Flows.size == 0:
             return 0
         NFlows = np.linalg.norm(Flows, axis = 1)
@@ -52,10 +52,36 @@ class FlowMemory(ModuleBase):
     def GetFlowPatch(self, xy, R):
         return self.FlowContext[max(0,xy[0]-R):xy[0]+R+1,max(0,xy[1]-R):xy[1]+R+1,:]
 
-    def GetFlows(self, Tau, xy = None, R = None):
+    def GetFlows(self, xy = None, R = None):
         if not xy is None:
             Map = self.GetFlowPatch(xy, R)
         else:
             Map = self.FlowContext
+        Tau = self.FrameworkAverageTau
+        if Tau is None or Tau == 0:
+            Tau = self._DefaultTau
         xs, ys = np.where(Map[:,:,2] > self.LastT - Tau)
         return Map[xs, ys, :2]
+
+class ListFlowMemory(ModuleBase):
+    def _OnCreation(self):
+        '''
+        Class to handle optical flow memory through lists.
+        '''
+        self._MemoryLength = 10000
+
+    def _OnInitialization(self):
+        self.Flows = np.zeros((self._MemoryLength, 5))
+        self.Flows[:,0] = -np.inf
+        self.Index = -1
+
+        return True
+
+    def _OnEventModule(self, event):
+        if not event.Has(FlowEvent):
+            return
+        
+        self.Index = (self.Index+1)%self._MemoryLength
+        self.Flows[self.Index, :] = np.array([event.timestamp, event.location[0], event.location[1], event.flow[0], event.flow[1]])
+        return
+

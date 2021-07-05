@@ -61,8 +61,8 @@ class Framework:
     '''
     Main event-based framework file.
     '''
-    def __init__(self, File1 = None, File2 = None, onlyRawData = False, globals_data = globals()):
-        self._Globals_Data = globals_data
+    def __init__(self, File1 = None, File2 = None, onlyRawData = False, interpreter_in_out = None):
+        self._InterpreterInOut = interpreter_in_out
         self._LogType = 'raw'
         self._SessionLogs = [sys.stdout]
         try:
@@ -77,6 +77,9 @@ class Framework:
         self.Running = False
         self._Initializing = False
         self.Paused = ''
+
+        if self._InterpreterInOut is None:
+            self._Log("No interpreter container specified. No interactive commands will be saved", 1)
 
         if File1 is None and File2 is None:
             self._ProjectRawData = {}
@@ -94,7 +97,6 @@ class Framework:
         self.InputEvents = {ModuleName: None for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__}
         if len(self.InputEvents) == 1:
             self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
-            del self.__dict__['InputEvents']
         else:
             self._NextInputEventMethod = self._MultipleInputModulesNextInputEventMethod
 
@@ -184,7 +186,6 @@ class Framework:
 
             self._InitiateFolder()
             self._SaveParameters(ParametersDict)
-            self._SaveRunStreamData(StreamName, start_at, stop_at, resume)
         else:
             ParametersDict = None
         if self._LogType == 'columns':
@@ -202,11 +203,14 @@ class Framework:
             commit_value = "unknown"
         return commit_value
 
-    def _InitiateFolder(self):
-        self._FolderData = {'home':_RUNS_DIRECTORY + datetime.now().strftime("%d-%m-%Y_%H-%M") + '/',
+    def _InitiateFolder(self, suffix = ''):
+        self._FolderData = {'home':_RUNS_DIRECTORY + datetime.now().strftime("%Y-%m-%d_%H-%M") + suffix + '/',
                             'history':None,
                             'pictures':None}
-        os.mkdir(self._FolderData['home'])
+        try:
+            os.mkdir(self._FolderData['home'])
+        except:
+            return self._InitiateFolder(suffix + '_bis')
         self._Log("Created output folder {0}".format(self._FolderData['home']), 1)
         self._SessionLogs = [sys.stdout, open(self._FolderData['home']+'log.txt', 'w')]
 
@@ -231,7 +235,7 @@ class Framework:
             self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ModuleName in self.ModulesList:
             self.Modules[ModuleName]._OnClosing()
-        #self._SaveInterpreterData()
+        self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
     def _DestroyFolder(self):
@@ -256,10 +260,10 @@ class Framework:
             except TypeError:
                 self._Log("Unable to save parameters as non serializable object was present", 1)
 
-    def _SaveRunStreamData(self, InputStreams, start_at, stop_at, resume):
+    def _SaveRunStreamData(self, start_at, stop_at, resume):
         if not resume:
             fInputs = open(self.InputsLogFile, 'w')
-            for Module, InputFile in InputStreams.items():
+            for Module, InputFile in self.CurrentInputStreams.items():
                 fInputs.write("{0} : {1}\n".format(Module, str(pathlib.Path(InputFile).resolve())))
             fInputs.write('\n')
             fInputs.write("Starting at {0:.3f}s, ".format(start_at))
@@ -278,15 +282,19 @@ class Framework:
         fInputs.close()
 
     def _SaveInterpreterData(self):
-        if not 'Out' in globals() or not 'In' in globals():
+        if self._InterpreterInOut is None:
             self._Log("Unable to save interpreter data", 1)
-            return globals()
+            return
+
         with open(self.InterpreterLogFile, 'w') as fInterpreter:
+            In, Out = self._InterpreterInOut
             for nInput, Input in enumerate(In):
+                if not Input:
+                    continue
+                fInterpreter.write('\n'+10*'#'+ " {0} ".format(nInput) + 10*'#' + '\n\n')
                 fInterpreter.write(Input + '\n')
                 if nInput in Out:
-                    fInterpreter.write(Out[nInput] + '\n')
-                fInterpreter.write('\n'+10*'#'+'\n\n')
+                    fInterpreter.write("\n -> " + str(Out[nInput]) + '\n')
             self._Log("Saved interpreter commands in {0}".format(self.InterpreterLogFile), 3)
 
     @property
@@ -463,6 +471,7 @@ class Framework:
                 self._Log(" - dict : Dictionnary with input tools names as keys and specified filenames as values", 2)
                 return False
             
+            self._SaveRunStreamData(start_at, stop_at, resume)
             self.StreamHistory += [self.CurrentInputStreams]
             InitializationAnswer = self.Initialize()
             if not InitializationAnswer or BareInit:
@@ -477,7 +486,15 @@ class Framework:
                 self.Modules[ModuleName]._Resume()
 
         self.t = 0.
-        while not resume and start_at > -np.inf and self.Running and not self.Paused:
+        if start_at > 0:
+            for ModuleName in self.InputEvents.keys():
+                if '_Warp' in self.Modules[ModuleName].__class__.__dict__:
+                    self._Log("Warping {0} through module method".format(ModuleName))
+                    self._SendLog()
+                    if not self.Modules[ModuleName]._Warp(start_at):
+                        self._Log("No event remaining in {0} file".format(ModuleName), 2)
+
+        while not resume and start_at > 0 and self.Running and not self.Paused:
             Container = self._NextInputEventMethod()
             if not Container is None:
                 self.t = Container.timestamp
@@ -1353,6 +1370,10 @@ class ModuleBase:
         # Template method to be called when python closes. 
         # Used for closing any files or connexions that could have been made. Use that rather than another atexit call
         pass
+    def _Warp(self, t):
+        # Template method for input modules to accelerate warp process when running an experiments after t=0. 
+        # Should improve computation time
+        pass
 
     def __OnEventInput__(self, eventContainer):
         self._OnEventModule(eventContainer.BareEvent)
@@ -1442,17 +1463,14 @@ class ModuleBase:
         if len(Data.shape) == 1:
             if fax is None:
                 f, ax = plt.subplots(1,1)
-                ax.set_title(self.__Name__ + ' : ' + MonitoredVariable)
-                ax.plot(t, Data)
             else:
                 f, ax = fax
-                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
-                ax.legend()
+            ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
+            ax.legend()
             return f, ax
         if len(Data.shape) == 2:
             if fax is None:
                 f, ax = plt.subplots(1,1)
-                ax.set_title(self.__Name__ + ' : ' + MonitoredVariable)
             else:
                 f, ax = fax
             if Data.shape[1] == 3:
@@ -1637,10 +1655,12 @@ class _EventContainerClass: # Holds the timestamp and manages the subStreamIndex
             self.BareEvent = _BareEventClass(self)
             self.timestamp = None
             self.Events = {}
-    def _AddEvent(self, Extension, SubStreamIndex, **kwargs):
-        if not SubStreamIndex in self.Events:
-            self.Events[SubStreamIndex] = []
-        self.Events[SubStreamIndex].append(Extension(Container = self, SubStreamIndex = SubStreamIndex, **kwargs))
+    def _AddEvent(self, Event):
+        Index = Event.SubStreamIndex
+        if not Index in self.Events:
+            self.Events[Index] = [Event]
+        else:
+            self.Events[Index].append(Event)
     def GetEvents(self, SubStreamRestriction = {}):
         RequestedEvents = []
         for SubStreamIndex, Events in self.Events.items():
@@ -1683,7 +1703,7 @@ class _BareEventClass: # First basic event given to an input module. That input 
                 del kwargs['timestamp']
             else:
                 raise Exception("No timestamp specified during first event creation")
-        self._Container._AddEvent(Extension, SubStreamIndex, **kwargs)
+        self._Container._AddEvent(Extension(Container = self._Container, SubStreamIndex = SubStreamIndex, **kwargs))
         del self._Container.__dict__['BareEvent']
         return self._Container.Events[SubStreamIndex][-1]
     def SetTimestamp(self, t):
@@ -1714,13 +1734,16 @@ class _EventClass:
         self._Extensions.add(Extension)
         for Field in Extension._Fields:
             self.__dict__[Field] = kwargs[Field]
-    def Join(self, Extension, **kwargs):
+    def Join(self, ExtensionOrEvent, **kwargs):
+        if type(ExtensionOrEvent) == _EventClass:
+            self._Container._AddEvent(ExtensionOrEvent)
+            return ExtensionOrEvent
         if 'SubStreamIndex' in kwargs:
             SubStreamIndex = kwargs['SubStreamIndex']
             del kwargs['SubStreamIndex']
         else:
             SubStreamIndex = self.SubStreamIndex
-        self._Container._AddEvent(Extension, SubStreamIndex, **kwargs)
+        self._Container._AddEvent(ExtensionOrEvent(Container = self._Container, SubStreamIndex = SubStreamIndex, **kwargs))
         return self._Container.Events[SubStreamIndex][-1]
     def Filter(self):
         self._Container.Filter(self)
@@ -1738,8 +1761,10 @@ class _EventClass:
                 continue
             Output[Extension._Key] = [self.__dict__[Field] for Field in Extension._Fields]
         return Output
-    def Copy(self):
-        kwargs = {'timestamp':self.timestamp, 'SubStreamIndex':self.SubStreamIndex, 'Extensions':self._Extensions}
+    def Copy(self, SubStreamIndex = None):
+        if SubStreamIndex is None:
+            SubStreamIndex = self.SubStreamIndex
+        kwargs = {'timestamp':self.timestamp, 'SubStreamIndex':SubStreamIndex, 'Extensions':self._Extensions}
         for Extension in self._Extensions:
             for Field in Extension._Fields:
                 if type(self.__dict__[Field]) != np.ndarray:

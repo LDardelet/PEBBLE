@@ -11,7 +11,7 @@ _EVENT_TYPE_HANDLED = {0: False, 1:True, 2:True, 3:False, 4:False}
 _EVENT_TYPE_OVERFLOW_VALUE = {0:0b11111110, 1:0b1111111, 2:0b111111, 3:0b11111110, 4:0b11111110}
 _EVENT_TYPE_RESET_BYTE = {0:0b1111111, 1:0b1111111, 2:0b111111, 3:0b1111111, 4:0b1111111}
 _EVENT_TYPE_RESET_PADDING = {0: 1, 1:1, 2:2, 3:1, 4:1}
-_EVENT_TYPE_NAME = {0:'Generic events', 1:'DVS events', 2:'ATIS events', 3:'Asynchronous & Modular Display events', 4:'Color events'}
+_EVENT_TYPE_NAME = {-1:'Generic events', 1:'DVS events', 2:'ATIS events', 3:'Asynchronous & Modular Display events', 4:'Color events'}
 
 _EVENT_TYPE_ADITIONNAL_BYTES = {0: None, 1:4, 2:4, 3:3, 4:7}
 _EVENT_TYPE_ANALYSIS_FUNCTIONS_NAMES = {0: None, 1: '_DVS_BYTES_ANALYSIS', 2: '_ATIS_BYTES_ANALYSIS', 3: None, 4:None} # All necessary variables are hardcoded in these functions, as they don't have necessarily the same output and needs
@@ -42,6 +42,8 @@ class Reader(ModuleBase):
         self._EsDefaultGeometry = [346, 260]
         self._TxtPosNegPolarities = False
 
+        self._BinTimeIncrement = 2**13
+
         self._WarpEventJump = 100
 
         self._NeedsLogColumn = False
@@ -69,6 +71,8 @@ class Reader(ModuleBase):
 
         self._CloseFile()
 
+        self.NEventsProduced = 0
+
         if self._AutoZeroOffset:
             self.TsOffset = None
         else:
@@ -83,6 +87,10 @@ class Reader(ModuleBase):
             self._NextEventData = self._NextEventEs
             self.Log("Using es extension")
             return self._InitializeEs()
+        elif 'bin' == Extension:
+            self._NextEventData = self._NextEventBin
+            self.Log("Using bin extension")
+            return self._InitializeBin()
         elif 'txt' == Extension or 'csv' == Extension:
             self._NextEventData = self._NextEventTxt
             self.Log("Using txt extension")
@@ -100,10 +108,10 @@ class Reader(ModuleBase):
             return False
 
     def _OnEventModule(self, BareEvent):
-        self.nEvent += 1
         t, X, p = self._NextEventData()
         if t is None:
             return None
+        self.NEventsProduced += 1
         BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self.SubStreamIndex)
 
     def _Warp(self, start_at):
@@ -254,6 +262,41 @@ class Reader(ModuleBase):
                 #if self._yInvert: Written in ANALYSIS_FUNCTIONS
                 #    CreatedEvent.location[1] = self.yMax - CreatedEvent.location[1]
                 return t, X, p
+
+    def _InitializeBin(self):
+        """
+        From Garrick Orchad code, https://github.com/gorchard/event-Python/blob/master/eventvision.py
+        """
+        with open(self.StreamName, 'rb') as FileHandle:
+            raw_data = np.fromfile(FileHandle, dtype = np.uint8)
+        raw_data = np.uint32(raw_data)
+        
+        self.Ts = ((raw_data[2::5] & 127) << 16) | (raw_data[3::5] << 8) | (raw_data[4::5])
+        self.Xs = raw_data[0::5]
+        self.Ys = raw_data[1::5]
+        self.Ps = (raw_data[2::5] & 128) >> 7
+
+        self.Geometry = np.array([self.Xs.max() + 1, self.Ys.max()], dtype = int)
+        self._BinOverflowYValue = self.Ys.max()
+
+        self.nEvent = -1
+        self.NEvents = self.Ts.shape[0]
+        self.TimeIncrement = 0
+
+        return True
+
+    def _NextEventBin(self, EventJump = 1):
+        self.nEvent += 1
+        if self.nEvent >= self.NEvents:
+            self.__Framework__.Running = False
+            return None, None, None
+        y = self.Ys[self.nEvent]
+        if y == self._BinOverflowYValue:
+            self.TimeIncrement += self._BinTimeIncrement
+            return self._NextEventBin(EventJump)
+        if EventJump == 1:
+            return (self.Ts[self.nEvent]+self.TimeIncrement)/1e6, np.array([self.Xs[self.nEvent], self.Ys[self.nEvent]]), self.Ps[self.nEvent]
+        return self._NextEventBin(EventJump-1)
 
     def _DVS_BYTES_ANALYSIS(self, Bytes):
         td = Bytes[0] >> 1

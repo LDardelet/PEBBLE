@@ -86,7 +86,7 @@ class PictureSaver(ModuleBase):
                 self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
                 self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
                 self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
-                self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_{1}.png'.format(subStreamIndex, FrameIndexes))
+                self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_{1:06d}.png'.format(subStreamIndex, FrameIndexes))
             self.StreamsLastFrames[subStreamIndex] = (t, FrameIndexes)
 
     def OpenPictures(self, output = None, subStreamIndex = 0, TauName = 'Default'):

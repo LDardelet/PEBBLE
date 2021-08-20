@@ -8,7 +8,7 @@ class DenseStereo(ModuleBase):
     def _OnCreation(self):
         '''
         Module that given two input streams creates a dense disparity map.
-        For now, works only with rectified square cameras?
+        For now, works only with rectified 0-skew cameras.
         '''
         self._ComparisonRadius = 10
         self._OfflineRadiusRatio = 0.
@@ -487,24 +487,25 @@ class DenseStereo(ModuleBase):
             Images = StoredImages
         return f, axs, Images
 
-    def AnimatedDisparitiesMaps(self, MaxDepth = 1., MinDepth = None, MaxDisp = None, DepthSigma = 0.03, NSteps = 30, Tau = 0.05, cmap = 'binary'):
+    def AnimatedDisparitiesMaps(self, MaxDepth = 1., MinDepth = None, MaxDisp = None, KDelta = 1., DepthSigma = 0.03, NSteps = 30, Tau = 0.05, cmap = 'binary'):
         f, axs = plt.subplots(1,2)
         
         if MinDepth is None and MaxDisp is None:
-            MinDepth = 1/min(self._DisparityRange[1], abs(self.DisparityMap[:,:,0,:]).max())
+            MinDepth = KDelta / min(self._DisparityRange[1], abs(self.DisparityMap[:,:,0,:]).max())
         elif not MaxDisp is None:
-            MinDepth = 1/MaxDisp
+            MinDepth = KDelta / MaxDisp
         Mod = (MaxDepth - MinDepth)/NSteps
-        DMaps = [-(-1)**i * self.DisparityMap[:,:,0,i] for i in range(2)]
-        print("Ranging disparities from {0} to {1}".format(1/MaxDepth, 1/MinDepth))
+        DMaps = [np.zeros(self.DisparityMap.shape[:2], dtype = float) for i in range(2)]
+        print("Ranging disparities from {0} to {1}".format(KDelta / MaxDepth, KDelta / MinDepth))
         for i in range(2):
             DMaps[i][np.where(self.DisparityMap[:,:,1,i] < self.DisparityMap[:,:,1,i].max() - Tau)] = np.inf
+            xs, ys = np.where(self.DisparityMap[:,:,1,i] >= self.DisparityMap[:,:,1,i].max() - Tau)
+            DMaps[i][xs, ys] = abs(KDelta / self.DisparityMap[xs,ys,0,i])
         def GetMaps(Depth):
-            Disparity = 1/Depth
-            return [np.transpose(np.e**(-((DMaps[i] - Disparity)**2 / DepthSigma**2))) for i in range(2)]
+            return [np.transpose(abs(self.DisparityMap[:,:,0,i]) * np.e**(-((DMaps[i] - Depth)**2 / DepthSigma**2))) for i in range(2)]
         CurrentDepth = MinDepth
         Maps = GetMaps(CurrentDepth)
-        Images = [axs[i].imshow(Maps[i], origin = 'lower', cmap = cmap) for i in range(2)]
+        Images = [axs[i].imshow(Maps[i], origin = 'lower', cmap = cmap, vmin = 0, vmax = KDelta / MinDepth) for i in range(2)]
         while True:
             CurrentDepth += Mod
             if CurrentDepth >= MaxDepth or CurrentDepth <= max(MinDepth, abs(Mod)):
@@ -512,7 +513,7 @@ class DenseStereo(ModuleBase):
             Maps = GetMaps(CurrentDepth)
             for i in range(2):
                 Images[i].set_data(Maps[i])
-            axs[0].set_title('Depth = {0:.3f}, Disp. = {1:.1f}'.format(CurrentDepth, 1/CurrentDepth))
+            axs[0].set_title('Depth = {0:.3f}, Disp. = {1:.1f}'.format(CurrentDepth, KDelta / CurrentDepth))
             plt.pause(0.1)
 
 class AnalysisMapClass:

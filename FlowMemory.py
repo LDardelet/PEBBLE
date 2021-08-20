@@ -68,7 +68,7 @@ class ListFlowMemory(ModuleBase):
         '''
         Class to handle optical flow memory through lists.
         '''
-        self._MemoryLength = 10000
+        self._MemoryLength = 100000
 
     def _OnInitialization(self):
         self.Flows = np.zeros((self._MemoryLength, 5))

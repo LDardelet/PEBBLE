@@ -95,6 +95,7 @@ class Framework:
         self._Initializing = True
         self.PropagatedContainer = None
         self.InputEvents = {ModuleName: None for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__}
+        self.InputModulesTuple = tuple([ModuleName for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__])
         if len(self.InputEvents) == 1:
             self._NextInputEventMethod = self._SingleInputModuleNextInputEventMethod
         else:
@@ -103,8 +104,7 @@ class Framework:
         self._LogType = 'columns'
         self._LogInit()
         for ModuleName in self.ModulesList:
-            InitializationAnswer = ModuleBase.__Initialize__(self.Modules[ModuleName], self.RunParameters[ModuleName])
-            if not InitializationAnswer:
+            if not ModuleBase.__Initialize__(self.Modules[ModuleName], self.RunParameters[ModuleName]):
                 self._Log("Module {0} failed to initialize. Aborting.".format(ModuleName), 2)
                 self._DestroyFolder()
                 return False
@@ -190,9 +190,9 @@ class Framework:
             ParametersDict = None
         if self._LogType == 'columns':
             self._LogInit(resume)
-        self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod)
+        if self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod):
+            self.SaveCSVData()
         self._LogType = 'raw'
-        self.SaveCSVData()
 
     def _GetCommitValue(self):
         try:
@@ -553,7 +553,7 @@ class Framework:
         return t
 
     def _SingleInputModuleNextInputEventMethod(self):
-        return self.Modules[self.ModulesList[0]].__OnEvent__(_EventContainerClass(Bare = True))
+        return self.Modules[self.InputModulesTuple[0]].__OnEvent__(_EventContainerClass(Bare = True))
 
     def _MultipleInputModulesNextInputEventMethod(self):
         OldestEvent, ModuleSelected = None, None
@@ -830,6 +830,13 @@ class Framework:
                                     else:
                                         aimedType = float
                                     ModuleProjectDict['ProjectParameters'][entryvar] = [aimedType(value) for value in values]
+                                elif type(TmpClass.__dict__[entryvar]) == bool:
+                                    if entryvalue == 'False':
+                                        ModuleProjectDict['ProjectParameters'][entryvar] = False
+                                    elif entryvalue == 'True':
+                                        ModuleProjectDict['ProjectParameters'][entryvar] = True
+                                    else:
+                                        raise ValueError
                                 else:
                                     ModuleProjectDict['ProjectParameters'][entryvar] = type(TmpClass.__dict__[entryvar])(entryvalue)
                             except ValueError:
@@ -1257,7 +1264,11 @@ class ModuleBase:
                 self.__dict__[ModuleLinkRequested] = self.__Framework__.Modules[ModuleLinked]
 
         # Initialize the stuff corresponding to this specific module
-        if not self._OnInitialization():
+        InitAnswer = self._OnInitialization()
+        if InitAnswer is None:
+            self.LogWarning("Did not properly confirmed initialization ('return true' missing in function _OnInitialization ?).")
+            return False
+        elif not InitAnswer:
             return False
 
         # Finalize Module initialization

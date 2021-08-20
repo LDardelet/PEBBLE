@@ -856,7 +856,7 @@ class PlotterClass:
                 self.TrackerManager.__dict__[Key] = getattr(FileLoaded, self.__class__.__name__)(self.TrackerManager)
                 break
 
-    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2, ShowOrientation = False, MarkerSize = 4, AddROI = 2.):
+    def CreateTrackingShot(self, TrackerIDs = None, IgnoreTrackerIDs = [], SnapshotNumber = 0, BinDt = 0.005, ax_given = None, cmap = None, MapType = 'binary', addTrackersIDsFontSize = 0, removeTicks = True, add_ts = True, DisplayedStatuses = ['Stabilizing', 'Converged', 'Locked'], DisplayedProperties = ['Aperture issue', 'OffCentered', 'Disengaged'], RemoveNullSpeedTrackers = 0, VirtualPoint = None, GT = None, TrailDt = 0, TrailWidth = 2, ShowOrientation = False, MarkerSize = 4, AddROI = 2.):
         S = self.TrackerManager
         if TrackerIDs is None:
             TrackerIDs = [ID for ID in S.History['RecordedTrackers@ID'][SnapshotNumber] if ID not in IgnoreTrackerIDs]
@@ -871,8 +871,14 @@ class PlotterClass:
             ax = ax_given
         Map = S._LinkedMemory.History['STContext'][SnapshotNumber]
         t = S._LinkedMemory.History['t'][SnapshotNumber]
-        Mask = (Map.max(axis = 2) > t - BinDt) * Map.max(axis = 2)
-        FinalMap = (Map[:,:,0] == Mask) - 1 * (Map[:,:,1] == Mask)
+        if MapType == 'binary':
+            Mask = (Map.max(axis = 2) > t - BinDt) * Map.max(axis = 2)
+            FinalMap = (Map[:,:,0] == Mask) - 1 * (Map[:,:,1] == Mask)
+        elif MapType == 'decay':
+            FinalMap = 1-np.e**(-(t - Map.max(axis = 2))/BinDt)
+        else:
+            print("Wrong MapType (binary or decay)")
+            return
         if cmap is None:
             ax.imshow(np.transpose(FinalMap), origin = 'lower') 
         else:

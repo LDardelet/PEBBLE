@@ -11,6 +11,9 @@ class Memory(ModuleBase):
         self._ExpectedDensity = 0.01
         self._EnableEventTau = True
 
+        self._MonitorDt = 0.01
+        self._MonitoredVariables = [('STContext', np.array)]
+
     def _OnInitialization(self):
 
         self.STContext = -np.inf*np.ones(tuple(self.Geometry) + (2,))

@@ -7,7 +7,8 @@ class DisparityMemory(ModuleBase):
         '''
         Class to handle disparity memory.
         '''
-        pass
+        self._MonitorDt = 0
+        self._MonitoredVariables = [('DisparityContext', np.array)]
 
     def _OnInitialization(self):
 

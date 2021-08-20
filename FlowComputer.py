@@ -132,7 +132,7 @@ class FlowComputer(ModuleBase):
     def ComputeTimeDisplacement(self, tdxmyUsed, tdymxUsed):
         N = tdxmyUsed.shape[0]
         #try:
-        S = self.NonZeroTimeDisplacement(np.array([np.median(tdxmyUsed), np.median(tdymxUsed)]))
+        S = self.NonZeroTimeDisplacement(np.array([np.mean(tdxmyUsed), np.mean(tdymxUsed)]))
         STD = np.sqrt(np.array([((tdxmyUsed - S[0])**2).sum(), ((tdymxUsed - S[1])**2).sum()]) / N)
         #except:
         #    print(tdxmyUsed, tdymxUsed, N)
@@ -140,7 +140,7 @@ class FlowComputer(ModuleBase):
         return S, STD
 
     def GradientRecursion(self, tdxmy, tdymx, ValidMap, S, STD):
-        ValidMap = (abs(tdxmy - S[0]) < self._MaxErrorGradientRatio*STD[0]) * (abs(tdymx - S[1]) < self._MaxErrorGradientRatio*STD[0]) * ValidMap
+        ValidMap = (abs(tdxmy - S[0]) < self._MaxErrorGradientRatio*STD[0]) * (abs(tdymx - S[1]) < self._MaxErrorGradientRatio*STD[1]) * ValidMap
         if ValidMap.sum() < self.NEventsMin:
             return None, None, ValidMap
         Valids = np.where(ValidMap)

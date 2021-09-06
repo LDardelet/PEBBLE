@@ -13,8 +13,9 @@ class DenseStereo(ModuleBase):
         self._ComparisonRadius = 10
         self._OfflineRadiusRatio = 0.
         self._Tau = 0.05
+        self._FrameworkTauRatio = 0
 
-        self._MinAverageActivityRadiusRatio = 0.2
+        self._MinAverageActivityRadiusRatio = 0.1
         self._ValidDisparityTauRatio = 0.5
         self._SignaturesExponents = [1,1,1]
         self._yAverageSignatureNullAverage = True
@@ -45,10 +46,21 @@ class DenseStereo(ModuleBase):
 
         self.MetricThreshold = {Type:MatchThreshold ** np.sum(self._SignaturesExponents) for Type, MatchThreshold in self._MatchThresholds.items()}
 
+        if (self._FrameworkTauRatio != 0 and self._Tau != 0):
+            self.LogWarning("Both static and dynamic time constants specified.")
+            return False
+        if self._FrameworkTauRatio == 0 and self._Tau == 0:
+            self.LogWarning("No static or dynamic time constants specified.")
+            return False
+        if self._FrameworkTauRatio != 0:
+            self.GetTau = self._DynamicTau
+        elif self._Tau != 0:
+            self.GetTau = lambda: self._Tau
+
         self.OfflineRadius = int(self._ComparisonRadius * self._OfflineRadiusRatio)
         self.MinAverageActivity = self._ComparisonRadius * self._MinAverageActivityRadiusRatio
 
-        self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self._Tau, self._yAverageSignatureNullAverage, self._AverageRadius))
+        self.Maps = (AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self.GetTau, self._yAverageSignatureNullAverage, self._AverageRadius), AnalysisMapClass(self.UsedGeometry, self._ComparisonRadius, self.GetTau, self._yAverageSignatureNullAverage, self._AverageRadius))
         self.DisparityMap = np.zeros(tuple(self.UsedGeometry) + (3,2)) # 0 default value seems legit as it pushes all points to infinity. Third dimension is respectively (disparity, time and if it should be sent for the stereo camera)
         self.DisparityMap[:,:,1,:] = -np.inf
 
@@ -62,6 +74,9 @@ class DenseStereo(ModuleBase):
 
         return True
 
+    def _DynamicTau(self):
+        return self.FrameworkAverageTau * self._FrameworkTauRatio
+
     def _OnEventModule(self, event):
         self.Maps[event.SubStreamIndex].OnEvent(event)
         if (event.location < self._ComparisonRadius).any() or (event.location >= self.UsedGeometry - self._ComparisonRadius).any(): # This event cannot be set as CP, nor can it be matched to anything as its outside the borders
@@ -70,13 +85,13 @@ class DenseStereo(ModuleBase):
         if self.Maps[event.SubStreamIndex].GetAverageActivity(event.location, event.timestamp) < self.MinAverageActivity:
             return
 
-        Decay = np.e**((self.LastTDecay - event.timestamp)/self._Tau)
+        Decay = np.e**((self.LastTDecay - event.timestamp)/self.GetTau())
         self.InputEvents *= Decay
         self.MatchedEvents *= Decay
         self.UnmatchedEvents *= Decay
         self.LastTDecay = event.timestamp
 
-        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.SubStreamIndex)] < self._Tau * self._ValidDisparityTauRatio: # We assume the disparity here still valid and dont update it
+        if event.timestamp - self.DisparityMap[tuple(event.location) +(1,event.SubStreamIndex)] < self.GetTau() * self._ValidDisparityTauRatio: # We assume the disparity here still valid and dont update it
             if self.DisparityMap[tuple(event.location) +(2,event.SubStreamIndex)]:
                 self.SendMatch(event, self.DisparityMap[tuple(event.location) +(0,event.SubStreamIndex)], Store = False)
         else:
@@ -147,7 +162,7 @@ class DenseStereo(ModuleBase):
                 yStereo = location[1] + offlineOffset
                 if yStereo < self._ComparisonRadius or yStereo >= self.UsedGeometry[1] - self._ComparisonRadius:
                     continue
-                if t - self.DisparityMap[xStereo,yStereo,1,1-cameraIndex] <= self._Tau * self._ValidDisparityTauRatio:
+                if t - self.DisparityMap[xStereo,yStereo,1,1-cameraIndex] <= self.GetTau() * self._ValidDisparityTauRatio:
                     continue
                 StereoSignatures = self.Maps[1-cameraIndex].GetSignatures(np.array([xStereo,yStereo]), t)
                 MatchValues[nDisparity] = max(MatchValues[nDisparity], self.Match(EventSignatures, StereoSignatures))
@@ -163,7 +178,7 @@ class DenseStereo(ModuleBase):
     def GetLocalDisparities(self, cameraIndex, x, y, t):
         DisparitiesSearched = set()
         LocalPatch = self.DisparityMap[x-self._DisparityPatchRadius:x+self._DisparityPatchRadius+1,y-self._DisparityPatchRadius:y+self._DisparityPatchRadius+1,:2,cameraIndex]
-        EarliestMoment = t - 3 * self._Tau
+        EarliestMoment = t - 3 * self.GetTau()
         for Disparity, tDisp in LocalPatch.reshape(((self._DisparityPatchRadius*2 + 1)**2 , 2)):
             if tDisp >= EarliestMoment:
                 for disparity in range(int(Disparity)-self._DisparitySearchRadius, int(Disparity)+self._DisparitySearchRadius+1):
@@ -183,7 +198,7 @@ class DenseStereo(ModuleBase):
 
         if self._WinnerTakeAllRadius:
             LocalPatch = self.DisparityMap[event.location[0]-self._WinnerTakeAllRadius:event.location[0]+self._WinnerTakeAllRadius+1,event.location[1]-self._WinnerTakeAllRadius:event.location[1]+self._WinnerTakeAllRadius+1,:2,event.SubStreamIndex]
-            xs, ys = np.where(event.timestamp - LocalPatch[:,:,1] < self._Tau * self._ValidDisparityTauRatio)
+            xs, ys = np.where(event.timestamp - LocalPatch[:,:,1] < self.GetTau() * self._ValidDisparityTauRatio)
             if xs.shape[0] < self._WinnerPatchMinRatio * (self._WinnerTakeAllRadius*2+1)**2:
                 return
             ds = LocalPatch[xs, ys, 0]
@@ -291,7 +306,7 @@ class DenseStereo(ModuleBase):
         if MaxDispInput is None or MinDispInput is None:
             print("Ranging disparities from {0} to {1}".format(MinDisp, MaxDisp))
         if Tau is None:
-            Tau = self._Tau
+            Tau = self.GetTau()
 
         if PastIndex == 'all':
             Images = None
@@ -517,13 +532,13 @@ class DenseStereo(ModuleBase):
             plt.pause(0.1)
 
 class AnalysisMapClass:
-    def __init__(self, Geometry, Radius, Tau, ySigNullMean, AveragingRadius = 0):
+    def __init__(self, Geometry, Radius, TauFunction, ySigNullMean, AveragingRadius = 0):
         self.Geometry = Geometry
         self.Radius = int(Radius)
         self.AveragingRadius = AveragingRadius
         self.ySigNullMean = ySigNullMean
 
-        self.Tau = Tau # Default time constant for now
+        self.TauFunction = TauFunction
 
         self.UsableGeometry = self.Geometry - np.array([0, 2*self.Radius]) # Remove blind zones at the top and bottom of the screen
         self.MaxY = self.UsableGeometry[1]
@@ -536,7 +551,7 @@ class AnalysisMapClass:
     def OnEvent(self, event):
         YMin, YMax = max(0, event.location[1] - self.Radius), min(self.UsableGeometry[1], event.location[1] + self.Radius+1)
         DeltaColumn = self.LastUpdateMap[event.location[0],YMin:YMax] - event.timestamp
-        DecayColumn = np.e**(DeltaColumn / self.Tau)
+        DecayColumn = np.e**(DeltaColumn / self.TauFunction())
 
         self.LastUpdateMap[event.location[0],YMin:YMax] = event.timestamp
 
@@ -552,7 +567,7 @@ class AnalysisMapClass:
     def GetLineSignatures(self, Y, t):
         YUsed = Y - self.Radius
         DeltaRow = self.LastUpdateMap[:,YUsed] - t
-        DecayRow = np.e**(DeltaRow / self.Tau)
+        DecayRow = np.e**(DeltaRow / self.TauFunction())
         
         Signatures = self._SignaturesCreation(self.ActivityMap[:,YUsed], self.DistanceMap[:,YUsed], self.SigmaMap[:,YUsed], DecayRow)
 
@@ -562,7 +577,7 @@ class AnalysisMapClass:
         XMin, XMax = max(0, location[0] - self.Radius), min(self.UsableGeometry[0], location[0] + self.Radius+1)
         YUsed = location[1] - self.Radius
         DeltaRow = self.LastUpdateMap[XMin:XMax,YUsed] - t
-        DecayRow = np.e**(DeltaRow / self.Tau)
+        DecayRow = np.e**(DeltaRow / self.TauFunction())
         
         return (self.ActivityMap[XMin:XMax,YUsed] * DecayRow).mean()
 
@@ -570,7 +585,7 @@ class AnalysisMapClass:
         XMin, XMax = max(0, location[0] - self.Radius), min(self.UsableGeometry[0], location[0] + self.Radius+1)
         YUsed = location[1] - self.Radius
         DeltaRow = self.LastUpdateMap[XMin:XMax,YUsed] - t
-        DecayRow = np.e**(DeltaRow / self.Tau)
+        DecayRow = np.e**(DeltaRow / self.TauFunction())
         Signatures = self._SignaturesCreation(self.ActivityMap[XMin:XMax,YUsed], self.DistanceMap[XMin:XMax,YUsed], self.SigmaMap[XMin:XMax,YUsed], DecayRow)
 
         return Signatures

@@ -41,7 +41,7 @@ class Memory(ModuleBase):
         if not self._EnableEventTau:
             return 0
         if self.A <= 10:
-            return 0
+            return self._DefaultTau
         return np.log(self.A/(self.A-1)) / np.log(self.AExp/(self.AExp-1)) * self._DefaultTau
 
     def CreateSnapshot(self):

@@ -57,6 +57,7 @@ class Framework:
     _LOG_FILE_EXTENSION = 'log'
     _PROJECT_FILE_EXTENSION = 'json'
     _DATA_FILE_EXTENSION = 'data'
+    _RUN_FILE = 'running.lock'
 
     '''
     Main event-based framework file.
@@ -192,6 +193,7 @@ class Framework:
             self._LogInit(resume)
         if self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod):
             self.SaveCSVData()
+            self._SetRunFile(False)
         self._LogType = 'raw'
 
     def _GetCommitValue(self):
@@ -235,12 +237,28 @@ class Framework:
             self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ModuleName in self.ModulesList:
             self.Modules[ModuleName]._OnClosing()
+        self._SetRunFile(False)
         self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
     def _DestroyFolder(self):
         shutil.rmtree(self._FolderData['home'])
         self._FolderData['home'] = None
+
+    def _SetRunFile(self, Set):
+        if Set:
+            with open(self._FolderData['home'] + self._RUN_FILE, 'w') as _:
+                pass
+            self._RunFileSet = True
+        else:
+            if not self._RunFileSet:
+                return
+            else:
+                try:
+                    os.remove(self._FolderData['home'] + self._RUN_FILE)
+                except FileNotFoundError:
+                    self._Log("Unable to remove lock", 1)
+                self._RunFileSet = False
 
     def _SaveParameters(self, Parameters):
         PickableParameters = {}
@@ -493,6 +511,8 @@ class Framework:
                     self._SendLog()
                     if not self.Modules[ModuleName]._Warp(start_at):
                         self._Log("No event remaining in {0} file".format(ModuleName), 2)
+
+        self._SetRunFile(True)
 
         while not resume and start_at > 0 and self.Running and not self.Paused:
             Container = self._NextInputEventMethod()

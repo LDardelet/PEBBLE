@@ -15,6 +15,7 @@ class PictureSaver(ModuleBase):
         self._TauOutputs = ['Default', 'Framework']
         self._Outputs = ['Events', 'Disparities']
         self._Tau = 0.005
+        self._DisparityRange = [0, 60]
 
     def _OnInitialization(self):
         if self._FramesDt == 0:
@@ -33,7 +34,11 @@ class PictureSaver(ModuleBase):
             for DisplayedType in Output.split('+'):
                 self.UsedContainers.add(DisplayedType)
 
-        self.TemplateContainers = {'Events':EventsContainer, 'Flows':FlowsContainer, 'Disparities':DisparitiesContainer}
+        class ModuleDisparitiesContainer(DisparitiesContainer):
+            _DisparityRange = self._DisparityRange
+
+
+        self.TemplateContainers = {'Events':EventsContainer, 'Flows':FlowsContainer, 'Disparities':ModuleDisparitiesContainer}
 
         for subStreamIndex in self.__SubStreamInputIndexes__:
             self.AddSubStreamData(subStreamIndex)
@@ -136,6 +141,7 @@ class FlowsContainer:
 
 class DisparitiesContainer:
     _TauMultiplier = 2
+    _DisparityRange = [0, 60]
     def __init__(self, ScreenSize):
         self.STDContext = np.zeros(ScreenSize + (2,))
         self.MaxD = 5
@@ -148,4 +154,4 @@ class DisparitiesContainer:
     def Draw(self, t, Tau, ax):
         Map = self.STDContext[:,:,0] * ((t - self.STDContext[:,:,1]) < Tau*self._TauMultiplier)
         self.MaxD = max(self.MaxD, self.STDContext[:,:,0].max())
-        ax.imshow(np.transpose(Map), origin = 'lower', vmin = 0, vmax = self.MaxD, cmap = 'hot')
+        ax.imshow(np.transpose(Map), origin = 'lower', vmin = self._DisparityRange[0], vmax = self._DisparityRange[1], cmap = 'hot')

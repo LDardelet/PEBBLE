@@ -43,12 +43,18 @@ class MovementSimulatorClass(ModuleBase):
         self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])] # By default, its a 2 cameras simulator
 
         self._TwistTau = 0.005
-        self._TwistGaussianRelativeNoise = 0.00
+        self._TwistGaussianRelativeNoise = 0.1
 
         self._TrackersMinDisplacement = 0.1
         self._TrackersLocationGaussianNoise = 0.
         self._TrackerEdgeMargin = 10
-        self._TrackersSentAtOnce = 2
+        self._TrackersSentAtOnce = 1
+
+        self._LambdaAveragesTrackers = 0.05
+        self._TrackerOutliersSpeedFactor = 3.
+        self._TrackerOutlierTau = 0.1
+        self._NMaxOutliersPerCamera = 4
+        self._OutliersMaxDistance = 50
 
     def _OnInitialization(self):
         self.NCameras = len(self._CameraOffsets)
@@ -93,12 +99,21 @@ class MovementSimulatorClass(ModuleBase):
         if not self.StartNextSequenceStep():
             self.LogWarning("Input sequence is empty")
 
+        if self._TrackerOutlierTau not in [0, np.inf]:
+            self.StepOutlierProba = 1-np.e**(-self._dt / self._TrackerOutlierTau)
+        else:
+            self.StepOutlierProba = 0
+
         self.GenerateMap()
 
         self.OnScreenTrackers = [{nCamera:np.array([0., -100, -100]) for nCamera in range(self.NCameras)} for nGenerator in range(len(self.Generators))]
+        self.IsOutlier = [{nCamera:None for nCamera in range(self.NCameras)} for nGenerator in range(len(self.Generators))]
         self.ForwardGenerators = [False for nGenerator in range(len(self.Generators))]
         self._UpToDate = False
         self.TrackersGenerators = []
+
+        self.TrackersAverageSpeed = 100
+        self.NOutliers = {0:0, 1:0}
 
         return True
 
@@ -153,8 +168,7 @@ class MovementSimulatorClass(ModuleBase):
                     ScreenFrameLocation = self.KMat.dot(CameraFrameLocation)
                     if self._DisparityEvents:
                         Depth = CameraFrameLocation[-1]
-                        disparity = int(self.StereoBaseDistance * self.K / Depth + 0.5)
-                        sign = nCamera*2-1
+                        disparity, sign = self.DisparityData(Depth, nCamera)
                     else:
                         disparity = None
                         sign = None
@@ -168,18 +182,40 @@ class MovementSimulatorClass(ModuleBase):
                         TrackerOnScreen = ((OnScreenLocation > self._TrackerEdgeMargin).all() and (OnScreenLocation < self._Geometry-1-self._TrackerEdgeMargin).all())
                         if TrackerOnScreen:
                             if self.OnScreenTrackers[nGenerator][nCamera][0]:
-                                if np.linalg.norm(self.OnScreenTrackers[nGenerator][nCamera][1:] - OnScreenLocation) >= self._TrackersMinDisplacement:
-                                    self.OnScreenTrackers[nGenerator][nCamera][1:] = OnScreenLocation
-                                    self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, OnScreenLocation, disparity, sign)]
+                                if self.IsOutlier[nGenerator][nCamera] is None:
+                                    if self.NOutliers[nCamera] < self._NMaxOutliersPerCamera and (np.random.random() < self.StepOutlierProba):
+                                        self.IsOutlier[nGenerator][nCamera] = np.random.random(size = 2) * self.TrackersAverageSpeed * self._TrackerOutliersSpeedFactor
+                                        self.Log("Tracker {0} is now outlier for camera {1} (Speed = {2:.2f})".format(nGenerator, nCamera, np.linalg.norm(self.IsOutlier[nGenerator][nCamera])))
+                                        self.NOutliers[nCamera] += 1
+                                if not self.IsOutlier[nGenerator][nCamera] is None:
+                                    if np.linalg.norm(OnScreenLocation - self.OnScreenTrackers[nGenerator][nCamera][1:]) > self._OutliersMaxDistance:
+                                        self.RemoveTracker(nGenerator, nCamera)
+                                        continue
+                                    dx = self.IsOutlier[nGenerator][nCamera][1:] * (self.t - self.OnScreenTrackers[nGenerator][nCamera][0])
+                                    if np.linalg.norm(dx) > self._TrackersMinDisplacement:
+                                        OnScreenLocation = self.OnScreenTrackers[nGenerator][nCamera][1:] + dx
+                                        TrackerOnScreen = ((OnScreenLocation > self._TrackerEdgeMargin).all() and (OnScreenLocation < self._Geometry-1-self._TrackerEdgeMargin).all())
+                                        if not TrackerOnScreen:
+                                            self.RemoveTracker(nGenerator, nCamera)
+                                        else:
+                                            self.OnScreenTrackers[nGenerator][nCamera] = np.array([self.t, OnScreenLocation[0], OnScreenLocation[1]])
+                                            self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, OnScreenLocation, disparity, sign)]
+                                    continue
+                                else:
+                                    Displacement = np.linalg.norm(self.OnScreenTrackers[nGenerator][nCamera][1:] - OnScreenLocation)
+                                    if Displacement >= self._TrackersMinDisplacement:
+                                        self.TrackersAverageSpeed = self.TrackersAverageSpeed * (1. - self._LambdaAveragesTrackers) + self._LambdaAveragesTrackers * Displacement / (self.t - self.OnScreenTrackers[nGenerator][nCamera][0])
+                                        self.OnScreenTrackers[nGenerator][nCamera] = np.array([self.t, OnScreenLocation[0], OnScreenLocation[1]])
+                                        self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, OnScreenLocation, disparity, sign)]
+                                    continue
                             else:
                                 self.Log("Adding tracker {0} for camera {1}".format(nGenerator, nCamera))
-                                self.OnScreenTrackers[nGenerator][nCamera] = np.array([1., OnScreenLocation[0], OnScreenLocation[1]])
+                                self.OnScreenTrackers[nGenerator][nCamera] = np.array([self.t, OnScreenLocation[0], OnScreenLocation[1]])
                                 self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, OnScreenLocation, disparity, sign)]
+                                continue
                     if not OnScreen or not TrackerOnScreen:
                         if self.OnScreenTrackers[nGenerator][nCamera][0]:
-                            self.OnScreenTrackers[nGenerator][nCamera][0] = 0
-                            self.Log("Removing tracker {0} for camera {1}".format(nGenerator, nCamera))
-                            self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, None, None, None)]
+                            self.RemoveTracker(nGenerator, nCamera)
 
         if not self._CameraEvents or not CameraGenerators:
             return False, event
@@ -226,6 +262,9 @@ class MovementSimulatorClass(ModuleBase):
                 if ((OnScreenLocation < 0).any() or (OnScreenLocation > self._Geometry-1).any()):
                     return False, event
                 event = event.Join(CameraEvent, timestamp = self.t, location = OnScreenLocation, polarity = 0, SubStreamIndex = self.SubStreamIndexes[nCamera])
+                if self._DisparityEvents:
+                    disparity, sign = self.DisparityData(CameraFrameLocation[-1], nCamera)
+                    event.Attach(DisparityEvent, disparity = disparity, sign = sign) 
             else:
                 return False, event
         else:
@@ -249,6 +288,17 @@ class MovementSimulatorClass(ModuleBase):
             self.TrackersGenerators = []
 
         return True, event
+
+    def RemoveTracker(self, nGenerator, nCamera):
+        self.OnScreenTrackers[nGenerator][nCamera][0] = 0
+        if not self.IsOutlier[nGenerator][nCamera] is None:
+            self.IsOutlier[nGenerator][nCamera] = None
+            self.NOutliers[nCamera] -= 1
+        self.Log("Removing tracker {0} for camera {1}".format(nGenerator, nCamera))
+        self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, None, None, None)]
+
+    def DisparityData(self, Depth, nCamera):
+        return int(self.StereoBaseDistance * self.K / Depth + 0.5), nCamera*2-1
 
     @property
     def R(self):

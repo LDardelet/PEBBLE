@@ -128,7 +128,7 @@ class DisplayHandler(ModuleBase):
         ProjectFile = self.__Framework__.ProjectFile
         StreamName = self.__Framework__._GetStreamFormattedName(self)
 
-        Success, _ = self._SendQuestion('socketdata', {'infosline1': ProjectFile.plot("/")[-1].split(".json")[0] +' -> ' + self.__Name__, 'infosline2': StreamName})
+        Success, _ = self._SendQuestion('socketdata', {'infosline1': ProjectFile.split("/")[-1].split(".json")[0] +' -> ' + self.__Name__, 'infosline2': StreamName})
         if not Success:
             self.LogWarning("Could not transmit data")
         else:

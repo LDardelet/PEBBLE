@@ -14,20 +14,25 @@ class PoseEstimator(ModuleBase):
         Uses a simulator mechanical system that combines all the constraints, such as points tracked on screen and visual odometry
         '''
         self.__GeneratesSubStream__ = True
-        self._MonitorDt = 0. # By default, a module does not stode any date over time.
+        self._MonitorDt = 0.001 # By default, a module does not stode any date over time.
         self._NeedsLogColumn = True
         self._MonitoredVariables = [('RigFrame.T', np.array),
                                     ('RigFrame.Theta', np.array),
                                     ('RigFrame.V', np.array),
                                     ('RigFrame.Omega', np.array),
-                                    ('SpringEnergy', float),
+                                    ('ReceivedV', np.array),
+                                    ('ReceivedOmega', np.array),
+                                    ('MechanicalEnergy', float),
+                                    ('PotentialEnergy', float),
                                     ('KineticEnergy', float),
                                     ('TrackersEnergy', float),
                                     ('EnvironmentEnergy', float),
                                     ('BrokenSpringsEnergyLoss', float),
                                     ('MuV', float),
                                     ('MuOmega', float),
+                                    ('NaturalPeriod', float),
                                     ('AverageSpringLength', float),
+                                    ('Anchors@Energy', float),
                                     ('Anchors@Length', float)]
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
@@ -38,12 +43,12 @@ class PoseEstimator(ModuleBase):
         self._InitialCameraRotationVector = np.zeros(3)
         self._InitialCameraTranslationVector = np.zeros(3)
 
-        self._AverageSpringLengthMultiplier = 0.
-        self._ConstantSpringReferenceLength = 0.3
-        self._MuV = 10.
-        self._MuOmega = 10.
-        self._M = 0.0005
-        self._I = 0.005
+        self._ConstantSpringTrustDistance = 0.3 # to diable, use np.inf
+        self._SpringTrustDistanceModel = "Gaussian" # str, either Constant ( 1 ), Gaussian ( e**(-delta**2) ) or Exponential ( e**(-delta) )
+        self._MuV = 5.
+        self._MuOmega = 5.
+        self._Mass = 0.005
+        self._Moment = 0.05
 
         self._MinTrackersPerCamera = 8
         self._NeedsStereoOdometry = True
@@ -57,6 +62,7 @@ class PoseEstimator(ModuleBase):
         self._MaxAbsoluteSpringLength = 2.
 
         self._UseAdaptiveDampening = True
+        self._AdaptativeDampeningFactor = 0.5 # Should be equal to 1 mathwise
 
         self._UseSpeedOdometry = True # WARNING : Should be True
         self._AddLiveTrackers = True # WARNING : Should definitely be True
@@ -90,11 +96,9 @@ class PoseEstimator(ModuleBase):
             self.LogWarning("No disparity modules linked, expects disparity events for each incomming tracker event")
             self._UseDisparityMemories = False
 
-        if self._ConstantSpringReferenceLength and self._AverageSpringLengthMultiplier:
-            self.LogWarning("Both constant spring reference length and averale length multiplier specified. Only one can be set at the time")
-            return False
-        if self._ConstantSpringReferenceLength:
-            AnchorClass.SetReferenceLength(self._ConstantSpringReferenceLength)
+        if self._ConstantSpringTrustDistance:
+            AnchorClass.SetTrustDistance(self._ConstantSpringTrustDistance)
+        AnchorClass.SetTrustModel(self._SpringTrustDistanceModel)
 
         self.AverageSpringLength = 0.
         self.TotalSpringConstant = 0.
@@ -184,7 +188,7 @@ class PoseEstimator(ModuleBase):
         self.EnvironmentEnergy += dt * self.EnvironmentPower
 
         Force, Torque = self.ForceAndTorque
-        A, Alpha = Force / self._M, Torque / self._I
+        A, Alpha = Force / self._Mass, Torque / self._Moment
 
         self.RigFrame.UpdateDerivatives(dt, Alpha, A)
 
@@ -248,24 +252,35 @@ class PoseEstimator(ModuleBase):
             self.RemoveAnchor(MaxID, 'excessive relative length')
             self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
 
-        if self._AverageSpringLengthMultiplier and self.AverageSpringLength:
-            AnchorClass.SetReferenceLength(self.AverageSpringLength * self._AverageSpringLengthMultiplier)
-
     @property
-    def SpringEnergy(self):
-        SpringEnergy = 0.
+    def PotentialEnergy(self):
+        PotentialEnergy = 0.
         for ID, Anchor in self.Anchors.items():
-            SpringEnergy += Anchor.Energy
-        return SpringEnergy
+            PotentialEnergy += Anchor.Energy
+        return PotentialEnergy
     @property
     def KineticEnergy(self):
-        return (self._M * (self.RigFrame.V**2).sum() + self._I * (self.RigFrame.Omega**2).sum()) / 2
+        return (self._Mass * (self.RigFrame.V**2).sum() + self._Moment * (self.RigFrame.Omega**2).sum()) / 2
     @property
-    def InternalEnergy(self):
-        return self.KineticEnergy + self.SpringEnergy
+    def MechanicalEnergy(self):
+        return self.KineticEnergy + self.PotentialEnergy
     @property
     def ExchangedEnergy(self):
         return self.EnvironmentEnergy + self.TrackersEnergy
+
+    @property
+    def KTot(self):
+        KTot = 0
+        for ID, Anchor in self.Anchors.items():
+            KTot += Anchor.K
+        return KTot
+
+    @property
+    def NaturalPeriod(self):
+        KTot = self.KTot
+        if KTot == 0:
+            return 0
+        return 2*np.pi * np.sqrt(self._Mass / KTot)
 
     @property
     def EnvironmentV(self):
@@ -289,13 +304,13 @@ class PoseEstimator(ModuleBase):
     @property
     def MuV(self):
         if self._UseAdaptiveDampening:
-            return 2 * np.sqrt(self._M * self.TotalSpringConstant)
+            return 2 * np.sqrt(self._Mass * self.TotalSpringConstant) * self._AdaptativeDampeningFactor
         else:
             return self._MuV
     @property
     def MuOmega(self):
         if self._UseAdaptiveDampening:
-            return 2 * np.sqrt(self._I * self.TotalSpringTorqueBase)
+            return 2 * np.sqrt(self._Moment * self.TotalSpringTorqueBase) * self._AdaptativeDampeningFactor
         else:
             return self._MuOmega
 
@@ -330,6 +345,13 @@ class PoseEstimator(ModuleBase):
         self.Plot3DSystem(Orientation, (f, f.add_subplot(121, projection='3d')))
         for nCamera in range(2):
             self.GenerateCameraView(nCamera, (f, f.add_subplot(2, 2, 2*(nCamera+1))))
+
+    def PlotEnergies(self):
+        f, ax = plt.subplots(1,1)
+        self.PlotHistoryData("KineticEnergy", fax = (f, ax))
+        self.PlotHistoryData("PotentialEnergy", fax = (f, ax))
+        self.PlotHistoryData("MechanicalEnergy", fax = (f, ax))
+
 
     def Plot3DSystem(self, Orientation = 'natural', fax = None):
         if fax is None:
@@ -475,7 +497,8 @@ class OnCameraDataClass:
 
 class AnchorClass:
     K_Base = 1.
-    ReferenceLength = np.inf
+    TrustDistance = np.inf
+    TrustModel = 'Constant'
 
     def __init__(self, WorldLocation, Origin, WorldPresenceSegment, OnCameraData, GetWorldLocationFunction):
         self.SetWorldData(WorldLocation, WorldPresenceSegment)
@@ -498,16 +521,19 @@ class AnchorClass:
         self.WorldPresenceSegment = WorldPresenceSegment
 
     @classmethod
-    def SetReferenceLength(self, Length):
-        self.ReferenceLength = Length
+    def SetTrustDistance(self, Length):
+        self.TrustDistance = Length
+    @classmethod
+    def SetTrustModel(self, Model):
+        self.TrustModelIndex = {'Constant':0, 'Gaussian':1, 'Exponential':2}[Model]
 
     @property
     def K(self):
-        return self.Active * self.K_Base
+        return self.Active * self.K_Base * self.ExponentialValue
 
     @property
     def ForceNorm(self):
-        return self.Length * self.K * self.ExponentialValue
+        return self.Length * self.K
 
     @property
     def Force(self):
@@ -515,17 +541,18 @@ class AnchorClass:
 
     @property
     def Energy(self):
-        if self.ReferenceLength == np.inf:
+        if self.TrustModelIndex != 2:
             return self.K * self.Length**2 / 2
-        return self.K * (self.ReferenceLength**2 * (1 - self.ExponentialValue) - self.ReferenceLength * self.Length * self.ExponentialValue)
+        return self.K * self.TrustDistance * (self.TrustDistance * (1/self.ExponentialValue - 1) - self.Length)
 
     @property
     def ExponentialValue(self):
-        if self.ReferenceLength == 0:
-            return 1.
-        if self.ReferenceLength == np.inf:
+        if self.TrustModelIndex == 0 or self.TrustDistance == np.inf:
             return 1
-        return np.e**(-self.Length / self.ReferenceLength)
+        if self.TrustModelIndex == 1:
+            return np.e**(-self.Length**2 / self.TrustDistance**2)
+        else:
+            return np.e**(-self.Length / self.TrustDistance)
 
     def UpdatePresenceSegment(self):
         ScreenLocation = self.OnCameraData.Location

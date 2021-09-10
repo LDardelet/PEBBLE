@@ -281,6 +281,7 @@ class Framework:
     def _SaveRunStreamData(self, start_at, stop_at, resume):
         if not resume:
             fInputs = open(self.InputsLogFile, 'w')
+            fInputs.write("Project {0}\n".format(self.ProjectFile.split("/")[-1].split(".json")[0]))
             for Module, InputFile in self.CurrentInputStreams.items():
                 fInputs.write("{0} : {1}\n".format(Module, str(pathlib.Path(InputFile).resolve())))
             fInputs.write('\n')
@@ -1271,8 +1272,10 @@ class ModuleBase:
                     if (Value != self.__dict__[Key]).any():
                         self.__UpdateParameter__(Key, Value)
                         continue
-        if not self._MonitorDt or not self._MonitoredVariables:
-            self.Log("No data monitored")
+        if not self._MonitorDt:
+            self.Log("No data monitored (_MonitorDt = 0)")
+        elif not self._MonitoredVariables:
+            self.Log("No data monitored (_MonitoredVariables empty)")
         else:
             self.Log("Data monitored every {0:.3f}s :".format(self._MonitorDt))
             for Var, Type in self._MonitoredVariables:
@@ -1486,7 +1489,7 @@ class ModuleBase:
 
             return lambda :UsedType(SubRetreiveMethod(self))
 
-    def PlotHistoryData(self, MonitoredVariable, fax = None):
+    def PlotHistoryData(self, MonitoredVariable, fax = None, color = None):
         t = np.array(self.History['t'])
         Data = np.array(self.History[MonitoredVariable])
         if len(Data.shape) == 0:
@@ -1496,7 +1499,10 @@ class ModuleBase:
                 f, ax = plt.subplots(1,1)
             else:
                 f, ax = fax
-            ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
+            if color is None:
+                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
+            else:
+                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable, color = color)
             ax.legend()
             return f, ax
         if len(Data.shape) == 2:

@@ -193,7 +193,7 @@ class Framework:
             self._LogInit(resume)
         if self._RunProcess(StreamName = StreamName, ParametersDict = ParametersDict, start_at = start_at, stop_at = stop_at, resume = resume, AtEventMethod = AtEventMethod):
             self.SaveCSVData()
-            self._SetRunFile(False)
+            self._SetLockFile(False)
         self._LogType = 'raw'
 
     def _GetCommitValue(self):
@@ -210,11 +210,11 @@ class Framework:
                             'history':None,
                             'pictures':None}
         try:
-            os.mkdir(self._FolderData['home'])
+            os.mkdir(self.RunFolder)
         except:
             return self._InitiateFolder(suffix + '_bis')
-        self._Log("Created output folder {0}".format(self._FolderData['home']), 1)
-        self._SessionLogs = [sys.stdout, open(self._FolderData['home']+'log.txt', 'w')]
+        self._Log("Created output folder {0}".format(self.RunFolder), 1)
+        self._SessionLogs = [sys.stdout, open(self.RunFolder+'log.txt', 'w')]
 
     def _OnClosing(self):
         if self.Modified:
@@ -224,20 +224,18 @@ class Framework:
             if ans != '':
                 self.SaveProject(ans)
 
-        if '_LastStartWarning' in self.__dict__: # If warp was stopped midway, we delete everything, nothing must have been produced
-            for ModuleName in self.ModulesList:
-                self.Modules[ModuleName]._OnClosing()
-            self._SessionLogs.pop(1).close()
-            return
+        if not self._FolderData['home'] is None:
+            if not ('_LastStartWarning' in self.__dict__):
+                if not self._CSVDataSaved:
+                    self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
+            else:
+                self._Log("Stopped mid warp, nothing saved")
 
-        if self._FolderData['home'] is None:
-            return
-
-        if not self._CSVDataSaved:
-            self.SaveCSVData() # By default, we save the data. Files shouldn't be too big anyway
         for ModuleName in self.ModulesList:
             self.Modules[ModuleName]._OnClosing()
-        self._SetRunFile(False)
+        self._SetLockFile(False)
+        self._Log("Closing done", 3)
+        self._SendLog()
         self._SaveInterpreterData()
         self._SessionLogs.pop(1).close()
 
@@ -245,17 +243,25 @@ class Framework:
         shutil.rmtree(self._FolderData['home'])
         self._FolderData['home'] = None
 
-    def _SetRunFile(self, Set):
+    def _SetLockFile(self, Set):
         if Set:
+            try:
+                with open(self._FolderData['home'] + self._RUN_FILE, 'r') as _:
+                    self._Log("Found a lock file in current folder : should not happend", 1)
+            except FileNotFoundError:
+                pass
             with open(self._FolderData['home'] + self._RUN_FILE, 'w') as _:
                 pass
             self._RunFileSet = True
+            self._Log("Placed lock file")
         else:
             if not self._RunFileSet:
+                self._Log("No lockfile to remove")
                 return
             else:
                 try:
                     os.remove(self._FolderData['home'] + self._RUN_FILE)
+                    self._Log("Lock file removed")
                 except FileNotFoundError:
                     self._Log("Unable to remove lock", 1)
                 self._RunFileSet = False
@@ -317,27 +323,30 @@ class Framework:
             self._Log("Saved interpreter commands in {0}".format(self.InterpreterLogFile), 3)
 
     @property
+    def RunFolder(self):
+        return self._FolderData['home']
+    @property
     def HistoryFolder(self):
         if self._FolderData['history'] is None:
-            self._FolderData['history'] = self._FolderData['home']+'History/'
+            self._FolderData['history'] = self.RunFolder+'History/'
             os.mkdir(self._FolderData['history'])
         return self._FolderData['history']
     @property
     def PicturesFolder(self):
         if self._FolderData['pictures'] is None:
-            self._FolderData['pictures'] = self._FolderData['home']+'Pictures/'
+            self._FolderData['pictures'] = self.RunFolder+'Pictures/'
             os.mkdir(self._FolderData['pictures'])
         return self._FolderData['pictures']
     @property
     def ParamsLogFile(self):
-        return self._FolderData['home']+'params.json'
+        return self.RunFolder+'params.json'
     @property
     def InputsLogFile(self):
-        return self._FolderData['home']+'inputs.txt'
+        return self.RunFolder+'inputs.txt'
     @property 
     def InterpreterLogFile(self):
         # Stores any ipython interpreter I/O into a file. Might be quite messy, but allows to fully save what has been done within the session
-        return self._FolderData['home']+'interpreter.txt'
+        return self.RunFolder+'interpreter.txt'
 
     def SaveData(self, Filename, forceOverwrite = False):
         GivenExtention = Filename.split('.')[-1]
@@ -467,7 +476,8 @@ class Framework:
                 N += 1
                 StreamName = "DefaultStream_{0}".format(N)
         if not resume:
-            self._LastStartWarning = 0
+            if start_at > 0:
+                self._LastStartWarning = 0
             self.RunParameters = dict(ParametersDict)
             self.CurrentInputStreams = {ModuleName:None for ModuleName in self.ModulesList if self.Modules[ModuleName].__IsInput__}
             if type(StreamName) == str:
@@ -513,8 +523,6 @@ class Framework:
                     if not self.Modules[ModuleName]._Warp(start_at):
                         self._Log("No event remaining in {0} file".format(ModuleName), 2)
 
-        self._SetRunFile(True)
-
         while not resume and start_at > 0 and self.Running and not self.Paused:
             Container = self._NextInputEventMethod()
             if not Container is None:
@@ -529,6 +537,8 @@ class Framework:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(self.t, start_at))
                 self._SendLog()
                 self._LastStartWarning = self.t
+
+        self._SetLockFile(True)
 
         while self.Running and not self.Paused:
             self.t = self.Next(AtEventMethod)
@@ -1093,6 +1103,13 @@ class Framework:
         return SortedAttachments
 
     def _Log(self, Message, MessageType = 0, Module = None, Raw = False, AutoSendIfPaused = True):
+        '''
+        Message types:
+            0 : Common log (default)
+            1 : Warning log
+            2 : Error log, should stop the framework from running (to be checked)
+            3 : Success log
+        '''
         if self._LogType == 'columns' and not Raw:
             if '\n' in Message:
                 for Line in Message.split('\n'):

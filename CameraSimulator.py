@@ -1,7 +1,8 @@
 import numpy as np
 import random
 
-from PEBBLE import ModuleBase, CameraEvent, TrackerEvent, TwistEvent, DisparityEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TrackerEvent, TwistEvent, DisparityEvent
 
 _MAP_DIMENSION = 10. # In Meters
 _MAX_T = 100.
@@ -33,8 +34,8 @@ class MovementSimulatorClass(ModuleBase):
         self._CameraEvents = True
         self._DisparityEvents = True
 
-        self._TranslationAcceleration = 5.
-        self._RotationAcceleration = 5.
+        self._TranslationAcceleration = 20.
+        self._RotationAcceleration = 20.
 
         self._KMat = None
         self._DefaultK = 200
@@ -68,7 +69,7 @@ class MovementSimulatorClass(ModuleBase):
                     dt, wx, wy, wz, vx, vy, vz = [float(data.strip()) for data in line.strip().split(' ')]
                     self.Sequence += [(t, np.array([wx, wy, wz]), np.array([vx, vy, vz]))]
         elif type(self._SequenceInput) == list:
-            self.Sequence = self._SequenceInput
+            self.Sequence = list(self._SequenceInput)
 
         if self.NCameras != 2 and self._DisparityEvents:
             self.LogWarning("Disabling disparity events as more than two cameras are specified")
@@ -322,7 +323,7 @@ class MovementSimulatorClass(ModuleBase):
         self.NextEndT = self.t + dt
         return True
         
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         if len(Indexes) != len(self._CameraOffsets):
             self.LogWarning("Wrong number of SubSTreamOutput indexes compared to the number of cameras specified")
         self.SubStreamIndexes = list(Indexes)

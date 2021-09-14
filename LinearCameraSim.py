@@ -3,7 +3,8 @@ import random
 
 import matplotlib.pyplot as plt
 
-from PEBBLE import ModuleBase, CameraEvent, TrackerEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TrackerEvent
 
 _SPACE_DIM = 2
 _VOXEL_SIZE = 0.01

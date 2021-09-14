@@ -1,4 +1,4 @@
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class StreamSpliter(ModuleBase):
     def _OnCreation(self):
@@ -7,7 +7,7 @@ class StreamSpliter(ModuleBase):
         '''
         self.__GeneratesSubStream__ = True
 
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         self.NewStreamIndexes = Indexes
         return True
 

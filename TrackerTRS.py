@@ -7,9 +7,10 @@ import os
 import inspect
 import pickle
 from sys import stdout
-from PEBBLE import ModuleBase, TrackerEvent, TauEvent
-
 from functools import partial
+
+from ModuleBase import ModuleBase
+from Events import TrackerEvent, TauEvent
 
 from TrackerExtensions import *
 
@@ -287,12 +288,6 @@ class TrackerTRS(ModuleBase):
         self.AliveTrackers += [NewTracker]
         self.StartTimes += [None]
         self.DeathTimes += [None]
-
-    def _SaveAdditionalData(self, ExternalDict):
-        # As GT generation can be quite long, we can save it here.
-        ExternalDict['GTMaker'] = self.GTMaker._SaveDataToDict()
-    def _RecoverAdditionalData(self, ExternalDict):
-        self.GTMaker._RecoverDataFromDict(ExternalDict['GTMaker'])
 
 class StateClass:
     _STATUS_DEAD = 0

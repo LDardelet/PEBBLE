@@ -2,7 +2,8 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-from PEBBLE import ModuleBase, CameraEvent, FlowEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, FlowEvent
 
 class FlowComputer(ModuleBase):
     def _OnCreation(self):

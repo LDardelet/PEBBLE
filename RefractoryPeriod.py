@@ -1,6 +1,6 @@
 import numpy as np
 
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class Refractory(ModuleBase):
     def _OnCreation(self):

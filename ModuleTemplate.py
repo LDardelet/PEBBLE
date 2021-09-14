@@ -1,4 +1,4 @@
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class ModuleTemplate(ModuleBase):
     def _OnCreation(self):
@@ -42,7 +42,7 @@ class ModuleTemplate(ModuleBase):
         '''
         return
 
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         '''
         Method necessary for all modules that are at the base of a SubStream (self.__IsInput__ = True or self.__GeneratesSubStream__ = True).
         Allows to set the variables according to the specified data of the project file.

@@ -3,7 +3,8 @@ from struct import unpack
 from sys import stdout
 import h5py
 
-from PEBBLE import ModuleBase, CameraEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent
 
 _ES_HEADER_SIZE = 15
 
@@ -55,7 +56,7 @@ class Reader(ModuleBase):
     def Geometry(self, value):
         self._Geometry = value
 
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         self.__SubStreamInputIndexes__ = set()
         self.__SubStreamOutputIndexes__ = set(Indexes)
         if len(Indexes) == 0:
@@ -114,7 +115,7 @@ class Reader(ModuleBase):
         self.NEventsProduced += 1
         BareEvent.Join(CameraEvent, timestamp = t*self._InputTsFactor, location = X, polarity = p, SubStreamIndex = self.SubStreamIndex)
 
-    def _Warp(self, start_at):
+    def _OnWarp(self, start_at):
         Jump = self._WarpEventJump
         while True:
             self.nEvent += Jump

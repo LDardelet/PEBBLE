@@ -1,4 +1,6 @@
-from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, DisparityEvent, FlowEvent
+
 import matplotlib.pyplot as plt
 import numpy as np
 import datetime

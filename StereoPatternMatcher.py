@@ -1,5 +1,6 @@
 import numpy as np
-from PEBBLE import ModuleBase, CameraEvent, TrackerEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TrackerEvent
 
 class StereoPatternMatcher(ModuleBase):
     def _OnCreation(self):

@@ -1,6 +1,7 @@
 import numpy as np
 
-from PEBBLE import ModuleBase, FlowEvent
+from ModuleBase import ModuleBase
+from Events import FlowEvent
 
 class FlowMemory(ModuleBase):
     def _OnCreation(self):
@@ -10,7 +11,7 @@ class FlowMemory(ModuleBase):
         self._DefaultTau = 0.1
         self._RTau = 7
         self._FrameworkTauRatio = 4
-        self._EnableEventTau = True
+        self._EnableTauRequest = True
 
     def _OnInitialization(self):
         self.FlowContext = np.zeros(tuple(self.Geometry) + (3,))
@@ -37,8 +38,8 @@ class FlowMemory(ModuleBase):
         self.FlowContext[event.location[0], event.location[1], :] = [event.flow[0], event.flow[1], event.timestamp]
         return
 
-    def EventTau(self, EventConcerned = None):
-        if not self._EnableEventTau:
+    def _OnTauRequest(self, EventConcerned = None):
+        if not self._EnableTauRequest:
             return 0
         if EventConcerned is None:
             return self._InverseFlowNormsSum / max(0.0001, self._FlowActivity)

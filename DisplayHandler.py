@@ -8,7 +8,7 @@ import numpy as np
 import threading
 from multiprocessing import Queue
 
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class TransmissionInfo:
     EventPort = 54242
@@ -70,7 +70,10 @@ class DisplayHandler(ModuleBase):
         if len(self.PostBox) >= self._PostBoxLimit:
             self._SendPackage()
 
-    def _Restart(self):
+    def Restart(self):
+        '''
+        Specific method, hardcoded in PEBBLE to restart all displays at once.
+        '''
         self.EndTransmission()
         self._OnInitialization()
 

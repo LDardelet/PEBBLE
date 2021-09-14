@@ -1,6 +1,6 @@
 import numpy as np
 
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class ActivityFilter(ModuleBase):
     def _OnCreation(self):

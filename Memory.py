@@ -1,6 +1,7 @@
 import numpy as np
 
-from PEBBLE import ModuleBase, CameraEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent
 
 class Memory(ModuleBase):
     def _OnCreation(self):
@@ -9,7 +10,7 @@ class Memory(ModuleBase):
         '''
         self._DefaultTau = 0.01
         self._ExpectedDensity = 0.01
-        self._EnableEventTau = True
+        self._EnableTauRequest = True
 
         self._MonitorDt = 0.01
         self._MonitoredVariables = [('STContext', np.array)]
@@ -37,8 +38,8 @@ class Memory(ModuleBase):
 
         return
 
-    def EventTau(self, EventConcerned = None):
-        if not self._EnableEventTau:
+    def _OnTauRequest(self, EventConcerned = None):
+        if not self._EnableTauRequest:
             return 0
         if self.A <= 10:
             return self._DefaultTau

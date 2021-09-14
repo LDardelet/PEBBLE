@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, TrackerEvent
+from ModuleBase import ModuleBase
+
 import numpy as np
 
 class StreamWriter(ModuleBase):

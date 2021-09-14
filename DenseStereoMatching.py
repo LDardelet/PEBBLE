@@ -1,5 +1,6 @@
 import numpy as np
-from PEBBLE import ModuleBase, CameraEvent, DisparityEvent
+from moduleBase import ModuleBase
+from Events import CameraEvent, DisparityEvent
 import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import gaussian_filter

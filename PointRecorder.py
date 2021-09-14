@@ -4,7 +4,7 @@ import datetime
 
 import json
 
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class Clicker(ModuleBase):
     def _OnCreation(self):

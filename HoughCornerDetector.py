@@ -6,7 +6,7 @@ import json
 
 import cv2
 
-from PEBBLE import ModuleBase
+from ModuleBase import ModuleBase
 
 class HoughCD(ModuleBase):
     def _OnCreation(self):

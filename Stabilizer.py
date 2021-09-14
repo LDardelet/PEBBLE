@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, CameraEvent, TrackerEvent, TauEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TrackerEvent, TauEvent
 
 import numpy as np
 

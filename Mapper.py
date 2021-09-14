@@ -1,7 +1,9 @@
-from PEBBLE import ModuleBase, CameraEvent, TrackerEvent, PoseEvent
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
+
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TrackerEvent, PoseEvent
 
 class Mapper(ModuleBase):
     def _OnCreation(self):

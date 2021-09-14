@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, TwistEvent, TrackerEvent, DisparityEvent, PoseEvent
+from ModuleBase import ModuleBase
+from Events import TwistEvent, TrackerEvent, DisparityEvent, PoseEvent
 from functools import lru_cache
 import numpy as np
 
@@ -37,7 +38,7 @@ class PoseEstimator(ModuleBase):
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
 
-        self._DefaultK = 450
+        self._DefaultK = 200
         self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])]
 
         self._InitialCameraRotationVector = np.zeros(3)
@@ -45,10 +46,12 @@ class PoseEstimator(ModuleBase):
 
         self._ConstantSpringTrustDistance = 0.3 # to diable, use np.inf
         self._SpringTrustDistanceModel = "Gaussian" # str, either Constant ( 1 ), Gaussian ( e**(-delta**2) ) or Exponential ( e**(-delta) )
-        self._MuV = 5.
-        self._MuOmega = 5.
-        self._Mass = 0.005
-        self._Moment = 0.05
+
+        self._Kappa = 20.
+        self._MuV = 10.
+        self._MuOmega = 250.
+        self._Mass = 1.
+        self._Moment = 100.
 
         self._MinTrackersPerCamera = 8
         self._NeedsStereoOdometry = True
@@ -58,11 +61,13 @@ class PoseEstimator(ModuleBase):
 
         self._DisparityOverlap = 0.2
 
+        self._DisparitySegmentMargin = 0
+
         self._MaxLengthRatioBreak = np.inf
         self._MaxAbsoluteSpringLength = 2.
 
         self._UseAdaptiveDampening = True
-        self._AdaptativeDampeningFactor = 0.5 # Should be equal to 1 mathwise
+        self._AdaptativeDampeningFactor = 1. # Should be equal to 1 mathwise
 
         self._UseSpeedOdometry = True # WARNING : Should be True
         self._AddLiveTrackers = True # WARNING : Should definitely be True
@@ -99,6 +104,8 @@ class PoseEstimator(ModuleBase):
         if self._ConstantSpringTrustDistance:
             AnchorClass.SetTrustDistance(self._ConstantSpringTrustDistance)
         AnchorClass.SetTrustModel(self._SpringTrustDistanceModel)
+        AnchorClass.SetConstant(self._Kappa)
+        AnchorClass.SetDisparitySegmentMargin(self._DisparitySegmentMargin)
 
         self.AverageSpringLength = 0.
         self.TotalSpringConstant = 0.
@@ -124,7 +131,7 @@ class PoseEstimator(ModuleBase):
 
         return True
 
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         if len(Indexes) != 1:
             self.LogWarning("Improper number of generated streams specified")
             return False
@@ -240,14 +247,14 @@ class PoseEstimator(ModuleBase):
                 MaxLength = Anchor.Length
                 MaxID = ID
             self.AverageSpringLength += Anchor.Length
-            self.TotalSpringConstant += Anchor.K * Anchor.ExponentialValue
-            self.TotalSpringTorqueBase += Anchor.K * Anchor.ExponentialValue * np.linalg.norm(Anchor.WorldLocation - self.RigFrame.T)**2
+            self.TotalSpringConstant += Anchor.K
+            self.TotalSpringTorqueBase += Anchor.K * np.linalg.norm(Anchor.WorldLocation - self.RigFrame.T)**2
 
         N = len(self.Anchors)
         self.AverageSpringLength /= N
         if self._MaxLengthRatioBreak != np.inf and MaxLength > self._MaxLengthRatioBreak * self.AverageSpringLength:
             Anchor = self.Anchors[MaxID]
-            self.TotalSpringConstant -= Anchor.K * Anchor.ExponentialValue
+            self.TotalSpringConstant -= Anchor.K
             self.TotalSpringTorqueBase -= Anchor.K * np.linalg.norm(Anchor.WorldLocation - self.RigFrame.T)**2
             self.RemoveAnchor(MaxID, 'excessive relative length')
             self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
@@ -496,9 +503,11 @@ class OnCameraDataClass:
         self.Disparity = Disparity
 
 class AnchorClass:
-    K_Base = 1.
+    Kappa = 1.
     TrustDistance = np.inf
     TrustModel = 'Constant'
+    TrustModelIndex = 0
+    DisparityMargin = 0
 
     def __init__(self, WorldLocation, Origin, WorldPresenceSegment, OnCameraData, GetWorldLocationFunction):
         self.SetWorldData(WorldLocation, WorldPresenceSegment)
@@ -525,11 +534,18 @@ class AnchorClass:
         self.TrustDistance = Length
     @classmethod
     def SetTrustModel(self, Model):
+        self.TrustModel = Model
         self.TrustModelIndex = {'Constant':0, 'Gaussian':1, 'Exponential':2}[Model]
+    @classmethod
+    def SetConstant(self, Kappa):
+        self.Kappa = Kappa
+    @classmethod
+    def SetDisparitySegmentMargin(self, DisparityMargin):
+        self.DisparityMargin = DisparityMargin
 
     @property
     def K(self):
-        return self.Active * self.K_Base * self.ExponentialValue
+        return self.Active * self.Kappa * self.ExponentialValue
 
     @property
     def ForceNorm(self):
@@ -558,8 +574,11 @@ class AnchorClass:
         ScreenLocation = self.OnCameraData.Location
         disparity = self.OnCameraData.Disparity
         CameraID = self.OnCameraData.CameraID
-        self.CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+0.5, CameraID), self.GetWorldLocation(ScreenLocation, disparity-0.5, CameraID))
-        self.WorldProjection, self.CurrentReprojection = GetSegmentsProjections(self.WorldPresenceSegment, self.CurrentPresenceSegment)
+        if self.DisparityMargin:
+            self.CurrentPresenceSegment = (self.GetWorldLocation(ScreenLocation, disparity+self.DisparityMargin, CameraID), self.GetWorldLocation(ScreenLocation, disparity-self.DisparityMargin, CameraID))
+            self.WorldProjection, self.CurrentReprojection = GetSegmentsProjections(self.WorldPresenceSegment, self.CurrentPresenceSegment)
+        else:
+            self.CurrentReprojection = self.GetWorldLocation(ScreenLocation, disparity+self.DisparityMargin, CameraID)
 
         ErrorVector = self.WorldProjection - self.CurrentReprojection
         self.Length = np.linalg.norm(ErrorVector)

@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, CameraEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent
 import cv2
 import json
 import numpy as np

@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, CameraEvent, DisparityEvent, FlowEvent, TwistEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, DisparityEvent, FlowEvent, TwistEvent
 import numpy as np
 
 class VisualOdometer(ModuleBase):
@@ -25,7 +26,7 @@ class VisualOdometer(ModuleBase):
                                     ('UsedAFlow', float),
                                     ('Det', float)]
 
-        self._EnableEventTau = True
+        self._EnableTauRequest = True
 
         self._DisparityRange = [0, np.inf]
         self._DefaultK = 5e2
@@ -238,8 +239,8 @@ class VisualOdometer(ModuleBase):
                 self.LogSuccess("Security mode is off.")
                 return
 
-    def EventTau(self, event = None):
-        if not self._EnableEventTau:
+    def _OnTauRequest(self, event = None):
+        if not self._EnableTauRequest:
             return 0
         if event is None or not event.Has(CameraEvent):
             dx, dy = self.ScreenCenter

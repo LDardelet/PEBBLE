@@ -1,4 +1,5 @@
-from PEBBLE import ModuleBase, CameraEvent, TwistEvent, DisparityEvent
+from ModuleBase import ModuleBase
+from Events import CameraEvent, TwistEvent, DisparityEvent
 import numpy as np
 
 import random
@@ -161,14 +162,14 @@ class OdometerMixer(ModuleBase):
             event.Join(TwistEvent, SubStreamIndex = self.GeneratedOdometryStreamIndex, omega = self.omega, v = self.V)
         return
 
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
+    def _OnInputIndexesSet(self, Indexes):
         if len(Indexes) != 1:
             self.LogWarning("Improper number of generated streams specified")
             return False
         self.GeneratedOdometryStreamIndex = Indexes[0]
         return True
 
-    def EventTau(self, event = None):
+    def _OnTauRequest(self, event = None):
         if not self.Started:
             return 0
         if event is None or not event.Has(CameraEvent):

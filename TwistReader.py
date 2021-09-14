@@ -1,4 +1,6 @@
-from PEBBLE import ModuleBase, TwistEvent
+from ModuleBase import ModuleBase
+from Events import TwistEvent
+
 import numpy as np
 
 class TwistReader(ModuleBase):

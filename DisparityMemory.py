@@ -1,6 +1,7 @@
 import numpy as np
 
-from PEBBLE import ModuleBase, DisparityEvent
+from ModuleBase import ModuleBase
+from Events import DisparityEvent
 
 class DisparityMemory(ModuleBase):
     def _OnCreation(self):

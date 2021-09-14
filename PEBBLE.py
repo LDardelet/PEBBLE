@@ -5,7 +5,6 @@ import select
 import inspect
 import atexit
 import types
-import copy
 import os
 import shutil
 import pathlib
@@ -13,43 +12,17 @@ import _pickle as cPickle
 import json
 from datetime import datetime
 import matplotlib.pyplot as plt
-import ast
+from ast import literal_eval
+
+from Events import _AvailableEventsClassesNames, _EventContainerClass
+from ModuleBase import ModuleBase
+from DisplayHandler import DisplayHandler as _DisplayHandlerClass
 
 _RUNS_DIRECTORY = os.path.expanduser('~/Runs/')
         
 _TYPE_TO_STR = {np.array:'np.array', float:'float', int:'int', str:'str', tuple:'tuple', list:'list'}
 _STR_TO_TYPE = {value:key for key, value in _TYPE_TO_STR.items()}
 _SPECIAL_NPARRAY_CAST_MESSAGE = '$ASNPARRAY$'
-
-def LoadParametersFromFile(FileName):
-    with open(FileName, 'r') as fParamsJSON:
-        Parameters = json.load(fParamsJSON)
-    for ModuleName, ModuleParameters in Parameters.items():
-        for Key, Value in ModuleParameters.items():
-            if Key == '_MonitoredVariables':
-                for nVar, (Name, StrType) in enumerate(list(Value)):
-                    Value[nVar] = (Name, _STR_TO_TYPE[StrType])
-            else:
-                ModuleParameters[Key] = UnSerialize(Value)
-    return ParametersDictClass(Parameters)
-
-def Serialize(Value):
-    tValue = type(Value)
-    if tValue == np.ndarray:
-        return [_SPECIAL_NPARRAY_CAST_MESSAGE, Value.tolist()]
-    elif tValue in (list, tuple):
-        return [_TYPE_TO_STR[tValue]]+[Serialize(Item) for Item in Value]
-    else:
-        return Value
-def UnSerialize(Data):
-    tData = type(Data)
-    if tData == list:
-        if Data[0] == _SPECIAL_NPARRAY_CAST_MESSAGE:
-            return np.array(Data[1])
-        else:
-            return _STR_TO_TYPE[Data[0]]([UnSerialize(Item) for Item in Data[1:]])
-    else:
-        return Data
 
 class Framework:
     _Default_Color = '\033[0m'
@@ -76,6 +49,7 @@ class Framework:
 
         self.PropagatedContainer = None
         self.Running = False
+        self._RunFileSet = False
         self._Initializing = False
         self.Paused = ''
 
@@ -153,7 +127,7 @@ class Framework:
         for NameProposing in reversed(self.ModulesList[:ModuleAsking.__ModuleIndex__]):
             ModuleProposing = self.Modules[NameProposing]
             if (not EventConcerned is None and EventConcerned.SubStreamIndex in ModuleProposing.__SubStreamOutputIndexes__) or (EventConcerned is None and ModuleProposing._IsParent(ModuleAsking)):
-                EventTau = ModuleProposing.EventTau(EventConcerned)
+                EventTau = ModuleProposing._OnTauRequest(EventConcerned)
                 if not EventTau is None and not EventTau == 0:
                     return EventTau
 
@@ -349,6 +323,12 @@ class Framework:
         return self.RunFolder+'interpreter.txt'
 
     def SaveData(self, Filename, forceOverwrite = False):
+        '''
+        Interactive data saving method. 
+        Should save the data in such a format that it can be recovered later on in a recreated framework.
+
+        Might fail, so default data saving method is through CSV files right now.
+        '''
         GivenExtention = Filename.split('.')[-1]
         if GivenExtention != self._DATA_FILE_EXTENSION:
             raise Exception("Enter data file with .{0} extension".format(self._DATA_FILE_EXTENSION))
@@ -444,10 +424,10 @@ class Framework:
                     else:
                         self._Log(Value, 3)
                 elif Key == 'Input Files':
-                    InputFiles = ast.literal_eval(Value)
+                    InputFiles = literal_eval(Value)
                     self._Log(Value)
                 elif Key == 'Run arguments':
-                    RunArgs = ast.literal_eval(Value)
+                    RunArgs = literal_eval(Value)
                     self._Log(Value)
 
             if ProjectFile is None:
@@ -510,17 +490,14 @@ class Framework:
 
         self.Running = True
         self.Paused = ''
-        if resume:
-            for ModuleName in self.ModulesList:
-                self.Modules[ModuleName]._Resume()
 
         self.t = 0.
         if start_at > 0:
             for ModuleName in self.InputEvents.keys():
-                if '_Warp' in self.Modules[ModuleName].__class__.__dict__:
+                if '_OnWarp' in self.Modules[ModuleName].__class__.__dict__:
                     self._Log("Warping {0} through module method".format(ModuleName))
                     self._SendLog()
-                    if not self.Modules[ModuleName]._Warp(start_at):
+                    if not self.Modules[ModuleName]._OnWarp(start_at):
                         self._Log("No event remaining in {0} file".format(ModuleName), 2)
 
         while not resume and start_at > 0 and self.Running and not self.Paused:
@@ -537,8 +514,9 @@ class Framework:
                 self._Log("Warping : {0:.1f}/{1:.1f}s".format(self.t, start_at))
                 self._SendLog()
                 self._LastStartWarning = self.t
-
-        self._SetLockFile(True)
+        
+        if not resume:
+            self._SetLockFile(True)
 
         while self.Running and not self.Paused:
             self.t = self.Next(AtEventMethod)
@@ -556,8 +534,6 @@ class Framework:
         else:
             if self.Paused:
                 self._Log("Paused at t = {0:.3f}s by {1}.".format(self.t, self.Paused), 1)
-                for ModuleName in self.ModulesList:
-                    self.Modules[ModuleName]._Pause(self.Paused)
             return False
 
     def Resume(self, stop_at = np.inf):
@@ -566,7 +542,8 @@ class Framework:
 
     def DisplayRestart(self):
         for ModuleName in self.ModulesList:
-            self.Modules[ModuleName]._Restart()
+            if self.Modules[ModuleName] == _DisplayHandlerClass:
+                self.Modules[ModuleName].Restart()
 
     def Next(self, AtEventMethod = None):
         self.PropagatedContainer = self._NextInputEventMethod()
@@ -692,10 +669,10 @@ class Framework:
         if Module.__IsInput__:
             Module.__SubStreamInputIndexes__ = set()
             Module.__SubStreamOutputIndexes__ = set(self._ModulesSubStreamsCreated[ModuleName])
-            if '_SetGeneratedSubStreamsIndexes' not in Module.__class__.__dict__:
-                self._Log("Missing adequate _SetGeneratedSubStreamsIndexes method for input tool")
+            if '_OnInputIndexesSet' not in Module.__class__.__dict__:
+                self._Log("Missing adequate _OnInputIndexesSet method for input tool")
                 return False
-            if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
+            if not Module._OnInputIndexesSet(self._ModulesSubStreamsCreated[ModuleName]):
                 return False
         else:
             if not self._ModulesSubStreamsHandled[ModuleName]:
@@ -706,10 +683,10 @@ class Framework:
             if Module.__GeneratesSubStream__:
                 for SubStreamIndex in self._ModulesSubStreamsCreated[ModuleName]:
                     Module.__SubStreamOutputIndexes__.add(SubStreamIndex)
-                if '_SetGeneratedSubStreamsIndexes' not in Module.__class__.__dict__:
-                    self._Log("Missing adequate _SetGeneratedSubStreamsIndexes method for input tool")
+                if '_OnInputIndexesSet' not in Module.__class__.__dict__:
+                    self._Log("Missing adequate _OnInputIndexesSet method for input tool")
                     return False
-                if not Module._SetGeneratedSubStreamsIndexes(self._ModulesSubStreamsCreated[ModuleName]):
+                if not Module._OnInputIndexesSet(self._ModulesSubStreamsCreated[ModuleName]):
                     return False
         return True
 
@@ -1175,709 +1152,6 @@ class Framework:
         self._EventLogs = {ModuleName:[] for ModuleName in self._EventLogs.keys()}
         self._HasLogs = 0
 
-class ModuleBase:
-    def __init__(self, Name, Framework, ModulesLinked):
-        '''
-        Default module class.
-        Each module in the Framework should inherit this class. More information is given in ModuleTemplate.py
-        '''
-        self.__ModulesLinksRequested__ = []
-
-        self._NeedsLogColumn = False
-
-        self.__IsInput__ = False
-        self.__GeneratesSubStream__ = False
-
-        self._MonitoredVariables = []
-        self._MonitorDt = 0
-
-        ####
-
-        self.__Framework__ = Framework
-        self.__Name__ = Name
-
-        self.Log("Generating module")
-        self.__ModulesLinked__ = dict(ModulesLinked)
-        self.__Initialized__ = False
-        self.__SavedValues__ = {}
-        self.__SubStreamInputIndexes__ = set()
-        self.__SubStreamOutputIndexes__ = set()
-        self.__GeneratedSubStreams__ = []
-        
-        self.__ProposesTau = ('EventTau' in self.__class__.__dict__) # We set this as a variable, for user to change it at runtime. It can be accessed as a public variable through 'self.ProposesTau'
-        
-        try:
-            self.__ModuleIndex__ = self.__Framework__.ModulesOrder[self.__Name__]
-        except:
-            None
-
-        self._OnCreation()
-
-    def __repr__(self):
-        return self.__Name__
-
-    def _GetParameters(self):
-        InputDict = {}
-        for Key, Value in self.__dict__.items():
-            if type(Value) == types.MethodType:
-                continue
-            if len(Key) > 1 and Key[0] == '_' and Key[1] != '_' and Key[:7] != '_Module':
-                InputDict[Key] = Value
-        return InputDict
-
-    @property
-    def StreamName(self):
-        '''
-        Method to recover the name of the stream fed to this module.
-        Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
-        '''
-        if self.__IsInput__:
-            return self.__Framework__.CurrentInputStreams[self.__Name__]
-        else:
-            return self.__Framework__._GetStreamFormattedName(self)
-    @property
-    def Geometry(self):
-        '''
-        Method to recover the geometry of the stream fed to this module.
-        Looks for the closest 'Input' module generated a corresponding Camera Index Restriction
-        Input modules should override this property as they are the ones to feed the rest of the framework
-        '''
-        return self.__Framework__._GetStreamGeometry(self)
-    @property
-    def OutputGeometry(self):
-        return self.Geometry
-    @property
-    def FrameworkEventTau(self):
-        '''
-        Method to retreive the highest level information Tau from the framework, depending on all the information of the current event running..
-        If no Tau is proposed by any other module, will return None, so default value has to be Module specific
-        '''
-        return self.__Framework__._GetLowerLevelTau(self._RunningEvent, self)
-    @property
-    def FrameworkAverageTau(self):
-        '''
-        Method to retreive the highest level information Tau from the framework, with no information about the current event.
-        If no Tau is proposed by any other module, will return None, so default value has to be Module specific
-        '''
-        return self.__Framework__._GetLowerLevelTau(None, self)
-
-    def __Initialize__(self, Parameters):
-        # First restore all previous values
-        self.Log(" > Initializing module")
-        self.__LastMonitoredTimestamp = -np.inf
-        if self.__SavedValues__:
-            for Key, Value in self.__SavedValues__.items():
-                self.__dict__[Key] = Value
-        self.__SavedValues__ = {}
-        # Now change specific values for this initializing module
-        for Key, Value in Parameters.items():
-            if Key not in self.__dict__:
-                self.LogError("Unconsistent parameter for {0} : {1}".format(self.__Name__, Key))
-                return False
-            else:
-                if Key == '_MonitoredVariables' or Key == '_MonitorDt':
-                    self.__UpdateParameter__(Key, Value, Log = False)
-                    continue
-                if type(Value) != type(self.__dict__[Key]) or type(Value) in (list, tuple):
-                    self.__UpdateParameter__(Key, Value)
-                    continue
-                if type(Value) != np.ndarray:
-                    if Value != self.__dict__[Key]:
-                        self.__UpdateParameter__(Key, Value)
-                        continue
-                else:
-                    if (Value != self.__dict__[Key]).any():
-                        self.__UpdateParameter__(Key, Value)
-                        continue
-        if not self._MonitorDt:
-            self.Log("No data monitored (_MonitorDt = 0)")
-        elif not self._MonitoredVariables:
-            self.Log("No data monitored (_MonitoredVariables empty)")
-        else:
-            self.Log("Data monitored every {0:.3f}s :".format(self._MonitorDt))
-            for Var, Type in self._MonitoredVariables:
-                self.Log(" * {0} as {1}".format(Var, Type.__name__))
-        
-        # We can only link modules at this point, since the framework must have created them all before
-        for ModuleLinkRequested, ModuleLinked in self.__ModulesLinked__.items():
-            if ModuleLinked:
-                self.__dict__[ModuleLinkRequested] = self.__Framework__.Modules[ModuleLinked]
-
-        # Initialize the stuff corresponding to this specific module
-        InitAnswer = self._OnInitialization()
-        if InitAnswer is None:
-            self.LogWarning("Did not properly confirmed initialization ('return true' missing in function _OnInitialization ?).")
-            return False
-        elif not InitAnswer:
-            return False
-
-        # Finalize Module initialization
-        if not self.__IsInput__:
-            OnEventMethodUsed = self.__OnEventRestricted__
-        else:
-            OnEventMethodUsed = self.__OnEventInput__
-
-        if self._MonitorDt and self.__ProposesTau: # We check if that method was overloaded
-            if not self._MonitoredVariables:
-                self.LogSuccess("Enabling monitoring for Tau value")
-            self._MonitoredVariables = [('AverageTau', float)] + self._MonitoredVariables
-            self.__class__.AverageTau = property(lambda self: self.EventTau(None))
-
-        if self._MonitorDt and self._MonitoredVariables:
-            self.History = {'t':[]}
-            self.__MonitorRetreiveMethods = {}
-            for Variable in self._MonitoredVariables:
-                if type(Variable) == tuple:
-                    VarName, Type = Variable
-                else:
-                    VarName = Variable
-                    Type = None
-                self.History[VarName] = []
-                try:
-                    self.__MonitorRetreiveMethods[VarName] = self.__GetRetreiveMethod__(VarName, Type)
-                except:
-                    self.LogWarning("Unable to get a valid retreive method for {0}".format(VarName))
-
-            self.__LastMonitoredTimestamp = -np.inf
-
-            self.__OnEvent__ = lambda eventContainer: self.__OnEventMonitor__(OnEventMethodUsed, eventContainer)
-        else:
-            self.__OnEvent__ = OnEventMethodUsed
-
-        self._RunningEvent = None
-        self.__Initialized__ = True
-        return True
-
-    @property
-    def ProposesTau(self):
-        return self.__ProposesTau
-
-    def _SetGeneratedSubStreamsIndexes(self, Indexes):
-        '''
-        Specific method for input modules.
-        Upon calling when framework is created, will allow the module to set its variables accordingly to what was specified in the project file.
-        Cannot create a framework with an input module that has not its proper method.
-        Be careful to have variables that wont be overwritten during initialization of the framework
-        '''
-        return False
-
-    def __UpdateParameter__(self, Key, Value, Log = True):
-        self.__SavedValues__[Key] = copy.copy(self.__dict__[Key])
-        self.__dict__[Key] = Value
-        if Log:
-            self.Log("Changed specific value {0} from {1} to {2}".format(Key, self.__SavedValues__[Key], self.__dict__[Key]))
-
-    def GetSnapIndexAt(self, t):
-        return (abs(np.array(self.History['t']) - t)).argmin()
-    def _Restart(self):
-        # Template method for restarting modules, for instant display handler. Quite specific for now
-        pass
-    def _OnCreation(self):
-        # Main method for defining parameters of the module, monitored variables, etc...
-        # It must be formatted following the ModuleTemplate.py model, for the creation of the module to work smoothly. All predefined lines can be either modified, or removed
-        pass
-    def _OnInitialization(self):
-        # Template for user-filled module initialization
-        # Should return True if everything went normal
-        return True
-    def _OnEventModule(self, event):
-        # Template for user-filled module event running method
-        # Should not return anything, as the Framework takes care of events handling
-        pass
-    def EventTau(self, event = None):
-        # User-filled method to propose a tau for the whole framework. Ideally, thet further in the framework, the higher the information and the more acurate Tau information is
-        # Return None for default, or 0 for non-defined tau yet
-        pass
-    @property
-    def MapTau(self):
-        if not self.__ProposesTau:
-            return
-        Map = np.zeros(self.Geometry)
-        for x in range(Map.shape[0]):
-            for y in range(Map.shape[1]):
-                Map[x,y] = self.EventTau(CameraEvent(timestamp = self.__Framework__.t, location = [x,y], polarity = None, SubStreamIndex = None))
-        return Map
-    def _OnSnapModule(self):
-        # Template for user-filled module preparation for taking a snapshot. 
-        pass
-    def _Pause(self, PauseOrigin):
-        # Template method for module implications when the framework is paused. The origin of the pause is given to void the origin itself to apply consequences a second time
-        # Useful especially for threaded modules
-        pass
-    def _Resume(self):
-        # Template method for module implications when the framework is resumed after pause
-        # Useful especially for threaded modules
-        pass
-    def _SaveAdditionalData(self, ExternalDataDict):
-        # Template method to save additional data from module, when Framework 'SaveData' is called.
-        # Data 'History' from automatic monitoring is already saved. 
-        # Insert freely DataDict[Key] = Data as references as much as possible. Each Data chunk is assumed to be easily pickled (reasonable size).
-        pass
-    def _RecoverAdditionalData(self, ExternalDataDict):
-        # Template method to recover additional data from module, when Framework 'RecoverData' is called.
-        # Data 'History' from automatic monitoring is already recovered. 
-        pass
-    def _OnClosing(self):
-        # Template method to be called when python closes. 
-        # Used for closing any files or connexions that could have been made. Use that rather than another atexit call
-        pass
-    def _Warp(self, t):
-        # Template method for input modules to accelerate warp process when running an experiments after t=0. 
-        # Should improve computation time
-        pass
-
-    def __OnEventInput__(self, eventContainer):
-        self._OnEventModule(eventContainer.BareEvent)
-        if eventContainer.IsFilled:
-            return eventContainer
-        else:
-            return None
-
-    def __OnEventRestricted__(self, eventContainer):
-        for event in eventContainer.GetEvents(self.__SubStreamInputIndexes__):
-            self._RunningEvent = event
-            self._OnEventModule(event)
-        return eventContainer.IsFilled
-
-    def __OnEventMonitor__(self, OnEventMethodUsed, eventContainer):
-        output = OnEventMethodUsed(eventContainer)
-        if eventContainer.timestamp - self.__LastMonitoredTimestamp > self._MonitorDt:
-            self.__LastMonitoredTimestamp = eventContainer.timestamp
-            self._OnSnapModule()
-            self.History['t'] += [eventContainer.timestamp]
-            for VarName, RetreiveMethod in self.__MonitorRetreiveMethods.items():
-                self.History[VarName] += [RetreiveMethod()]
-        return output
-
-    def _IsParent(self, ChildModule):
-        if ChildModule.__ModuleIndex__ < self.__ModuleIndex__:
-            return False
-        for SubStreamIndex in self.__SubStreamOutputIndexes__:
-            if SubStreamIndex in ChildModule.__SubStreamInputIndexes__:
-                return True
-        return False
-
-    def _IsChild(self, ParentModule):
-        if ParentModule.__ModuleIndex__ > self.__ModuleIndex__:
-            return False
-        for SubStreamIndex in self.__SubStreamInputIndexes__:
-            if SubStreamIndex in ParentModule.__SubStreamOutputIndexes__:
-                return True
-        return False
-
-    @property
-    def PicturesFolder(self):
-        return self.__Framework__.PicturesFolder
-
-    def __GetRetreiveMethod__(self, VarName, UsedType):
-        if '@' in VarName:
-            Container, Key = VarName.split('@')
-            if '.' in Key:
-                Key, Field = Key.split('.')
-                SubRetreiveMethod = lambda Instance: getattr(getattr(Instance, Key), Field)
-            else:
-                SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
-
-            if type(self.__dict__[Container]) == list:
-                if UsedType is None:
-                    ExampleVar = SubRetreiveMethod(self.__dict__[Container][0])
-                    UsedType = type(ExampleVar)
-                return lambda :[UsedType(SubRetreiveMethod(Instance)) for Instance in self.__dict__[Container]]
-            elif type(self.__dict__[Container]) == dict:
-                if UsedType is None:
-                    ExampleVar = SubRetreiveMethod(self.__dict__[Container].values()[0])
-                    UsedType = type(ExampleVar)
-                return lambda :[(LocalDictKey, UsedType(SubRetreiveMethod(Instance))) for LocalDictKey, Instance in self.__dict__[Container].items()]
-            else:
-                if UsedType is None:
-                    ExampleVar = SubRetreiveMethod(self.__dict__[Container])
-                    UsedType = type(ExampleVar)
-                print(UsedType)
-                return lambda :UsedType(SubRetreiveMethod(self.__dict__[Container]))
-        else:
-            if UsedType is None:
-                UsedType = type(self.__dict__[VarName])
-            Key = VarName
-            if '.' in Key:
-                Key, Field = Key.split('.')
-                SubRetreiveMethod = lambda Instance: getattr(getattr(Instance, Key), Field)
-            else:
-                SubRetreiveMethod = lambda Instance: getattr(Instance, Key)
-
-            return lambda :UsedType(SubRetreiveMethod(self))
-
-    def PlotHistoryData(self, MonitoredVariable, fax = None, color = None):
-        t = np.array(self.History['t'])
-        Data = np.array(self.History[MonitoredVariable])
-        if len(Data.shape) == 0:
-            raise Exception("No data saved yet")
-        if len(Data.shape) == 1:
-            if fax is None:
-                f, ax = plt.subplots(1,1)
-            else:
-                f, ax = fax
-            if color is None:
-                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable)
-            else:
-                ax.plot(t, Data, label = self.__Name__ + ' : ' + MonitoredVariable, color = color)
-            ax.legend()
-            return f, ax
-        if len(Data.shape) == 2:
-            if fax is None:
-                f, ax = plt.subplots(1,1)
-            else:
-                f, ax = fax
-            if Data.shape[1] == 3:
-                Labels = ('x', 'y', 'z')
-            else:
-                Labels = [str(nCol) for nCol in range(Data.shape[1])]
-            for nCol, Label in enumerate(Labels):
-                ax.plot(t, Data[:,nCol], label = Label)
-            ax.legend()
-            return f, ax
-        if len(Data.shape) > 2:
-            raise Exception("Matrices unfit to be plotted")
-
-    def _SaveData(self, BinDataFile, MaxHistoryChunkSizeB = 16777216):
-        if self._MonitorDt and self._MonitoredVariables:
-            DataDict = {'Dt':self._MonitorDt, 't':self.History['t'], 'vars':self._MonitoredVariables}
-            cPickle.dump(('.'.join([self.__Name__, 'Monitor']), DataDict), BinDataFile)
-
-            for Var, Type in self._MonitoredVariables:
-                NItems = len(self.History[Var])
-                if NItems:
-                    if '@' in Var:
-                        TypeItem = self.History[Var][0][0]
-                        ChunkMultiplier = len(self.History[Var][0])
-                    else:
-                        TypeItem = self.History[Var][0]
-                        ChunkMultiplier = 1
-                    if Type == np.array:
-                        ItemSizeB = TypeItem.nbytes
-                    else:
-                        ItemSizeB = sys.getsizeof(TypeItem)
-                    ItemSizeB *= ChunkMultiplier
-                    NChunks = max(1, int(ItemSizeB * NItems / MaxHistoryChunkSizeB))
-                    ChunkSize = int(NItems / NChunks) + 1
-                    if NChunks > 1:
-                        self.LogWarning("Spliting monitored variable {0} into {1} chunks of data".format(Var, NChunks))
-                    else:
-                        self.Log("Dumping variable {0} in one chunk".format(Var))
-                    for nChunk in range(NChunks):
-                        if NChunks>1 and self.__Framework__._SessionLog is sys.stdout:
-                            sys.stdout.write("{0}%\r".format(int(100*nChunk/NChunks))),
-                        Data = self.History[Var][nChunk * ChunkSize : (nChunk+1) * ChunkSize]
-                        if Data:
-                            cPickle.dump(('.'.join([self.__Name__, 'Monitor', Var, str(nChunk)]), Data), BinDataFile)
-            self.LogSuccess("Saved history data")
-
-        ExternalDataDict = {}
-        self._SaveAdditionalData(ExternalDataDict)
-        if ExternalDataDict:
-            cPickle.dump(('.'.join([self.__Name__, 'External']), ExternalDataDict), BinDataFile)
-
-    def SaveCSVData(self, FileName, Variables = [], FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' '):
-        if not Variables:
-            if not self._MonitoredVariables:
-                self.LogWarning("No CSV export as no data was being monitored")
-                return
-            if not self._MonitorDt:
-                self.LogWarning("No CSV export as no sample rate was set")
-                return
-            Variables = [Key for Key, Type in self._MonitoredVariables if Key != 't']
-        else:
-            if 't' in Variables:
-                Variables.remove('t')
-        def FloatToStr(value):
-            return str(round(value, FloatPrecision))
-        FormatFunctions = [FloatToStr] # for 't'
-        CSVVariables = ['t']
-        CSVDataAccess = [('t', None)]
-        for Key, Type in self._MonitoredVariables:
-            if Key not in Variables:
-                continue
-            if '@' in Key:
-                 self.LogWarning("Avoiding monitored variable {0} as lists of data elements are not fitted for CSV files".format(Key))
-                 continue
-            TemplateVar = self.History[Key][0]
-            if Type == np.array:
-                Size = TemplateVar.flatten().shape[0]
-                if Size > 9: # We remove here anything that would be too big for CSV files, like frames, ST-contexts, ...
-                    self.LogWarning("Avoiding monitored variable {0} as its shape is not fitted for CSV files".format(Key))
-                    continue
-                DataType = type(TemplateVar.flatten()[0])
-                if DataType == np.int64:
-                    OutputFunction = str
-                else:
-                    OutputFunction = FloatToStr
-                if Size == 1:
-                    FormatFunctions.append(OutputFunction)
-                    CSVVariables.append(Key)
-                    CSVDataAccess.append((Key, 0))
-                elif Size == 2 and Default2DIndexes:
-                    for nIndex, Index in enumerate(Default2DIndexes):
-                        FormatFunctions.append(OutputFunction)
-                        CSVVariables.append(Key+'_'+Index)
-                        CSVDataAccess.append((Key, nIndex))
-                elif Size == 3 and Default3DIndexes:
-                    for nIndex, Index in enumerate(Default3DIndexes):
-                        FormatFunctions.append(OutputFunction)
-                        CSVVariables.append(Key+'_'+Index)
-                        CSVDataAccess.append((Key, nIndex))
-                else:
-                    for nIndex in range(Size):
-                        FormatFunctions.append(OutputFunction)
-                        CSVVariables.append(Key+'_'+str(nIndex))
-                        CSVDataAccess.append((Key, nIndex))
-            else:
-                CSVVariables.append(Key)
-                CSVDataAccess.append((Key, None))
-                if type(TemplateVar) == int:
-                    FormatFunctions.append(str)
-                else:
-                    FormatFunctions.append(FloatToStr)
-        if len(CSVVariables) == 1:
-            self.LogWarning("No CSV export as no monitored data was kept")
-            return
-        with open(FileName, 'w') as fCSV:
-            fCSV.write("# "+Separator.join(CSVVariables) + "\n")
-            for nLine in range(len(self.History['t'])):
-                Data = []
-                for FormatFunction, (Key, Index) in zip(FormatFunctions, CSVDataAccess):
-                    if Index is None:
-                        Data += [FormatFunction(self.History[Key][nLine])]
-                    else:
-                        Data += [FormatFunction(self.History[Key][nLine][Index])]
-                fCSV.write(Separator.join(Data)+'\n')
-            self.LogSuccess("Saved {0} data in {1}".format(self.__Name__, FileName))
-
-    def _RecoverData(self, Identifier, Data):
-        if Identifier == 'External':
-            self._RecoverAdditionalData(Data)
-            self.LogSuccess("Recovered additional data")
-            return
-        if Identifier == 'Monitor':
-            self._MonitorDt = Data['Dt']
-            self.__LastMonitoredTimestamp = Data['t'][-1]
-            self._MonitoredVariables = Data['vars']
-            self.History = {'t':Data['t']}
-            for Var, Type in self._MonitoredVariables:
-                self.History[Var] = []
-            self._ExpectedHistoryVarsChunks = {Var: 0 for Var, Type in self._MonitoredVariables}
-            self.LogSuccess("Recovered Monitor general data")
-        else:
-            Parts = Identifier.split('.')
-            if Parts[0] != 'Monitor':
-                raise Exception("Module {0} received wrong data recovery identifier : {1}".format(self.__Name__, Identifier))
-            nChunk = int(Parts[-1])
-            Var = '.'.join(Parts[1:-1])
-            if self._ExpectedHistoryVarsChunks[Var] != nChunk:
-                raise Exception("Module {0} lost chunk of data on recovery of MonitoredVariable {1}".format(self.__Name__, Var))
-            self.History[Var] += Data
-            if len(self.History[Var]) == len(self.History['t']):
-                del self._ExpectedHistoryVarsChunks[Var]
-                self.LogSuccess("{0}".format(Var))
-                if not self._ExpectedHistoryVarsChunks:
-                    del self.__dict__['_ExpectedHistoryVarsChunks']
-                    self.LogSuccess("Recovered all Monitor data")
-            else:
-                if self.__Framework__._SessionLog is sys.stdout:
-                    sys.stdout.write("{0}%\r".format(int(100*len(self.History[Var])/len(self.History['t'])))),
-                self._ExpectedHistoryVarsChunks[Var] += 1
-
-    def Log(self, Message, MessageType = 0):
-        '''
-        Log system to be used for verbose. for more clear information.
-        Message :  str, message specific to the module
-        MessageType : int. 0 for simple information, 1 for warning, 2 for error, stopping the stream, 3 for green highlight
-        '''
-        self.__Framework__._Log(Message, MessageType, self)
-    def LogWarning(self, Message):
-        self.Log(Message, 1)
-    def LogError(self, Message):
-        self.Log(Message, 2)
-        self.__Framework__.Paused = self.__Name__
-    def LogSuccess(self, Message):
-        self.Log(Message, 3)
-
-class _EventContainerClass: # Holds the timestamp and manages the subStreamIndexes and extensions. Should in theory never be used as such.
-    def __init__(self, timestamp = None, FirstEvent = None, FirstSubStreamIndex = None, Bare = False):
-        if not Bare:
-            self.timestamp = timestamp
-            self.Events = {FirstSubStreamIndex: [FirstEvent]}
-        else:
-            self.BareEvent = _BareEventClass(self)
-            self.timestamp = None
-            self.Events = {}
-    def _AddEvent(self, Event):
-        Index = Event.SubStreamIndex
-        if not Index in self.Events:
-            self.Events[Index] = [Event]
-        else:
-            self.Events[Index].append(Event)
-    def GetEvents(self, SubStreamRestriction = {}):
-        RequestedEvents = []
-        for SubStreamIndex, Events in self.Events.items():
-            if not SubStreamRestriction or SubStreamIndex in SubStreamRestriction:
-                RequestedEvents += Events
-        return RequestedEvents
-    def Filter(self, event):
-        self.Events[event.SubStreamIndex].remove(event)
-        if len(self.Events[event.SubStreamIndex]) == 0:
-            del self.Events[event.SubStreamIndex]
-    @property
-    def IsEmpty(self):
-        return len(self.Events) == 0
-    @property
-    def IsFilled(self):
-        return len(self.Events) != 0
-    def __eq__(self, rhs):
-        return self.timestamp == rhs.timestamp
-    def __lt__(self, rhs):
-        return self.timestamp < rhs.timestamp
-    def __le__(self, rhs):
-        return self.timestamp <= rhs.timestamp
-    def __gt__(self, rhs):
-        return self.timestamp > rhs.timestamp
-    def __ge__(self, rhs):
-        return self.timestamp >= rhs.timestamp
-
-class _BareEventClass: # First basic event given to an input module. That input module is expected to join another event to this one, restructuring internally the event packet
-    def __init__(self, Container):
-        self._Container = Container
-    def Join(self, Extension, **kwargs):
-        if 'SubStreamIndex' in kwargs:
-            SubStreamIndex = kwargs['SubStreamIndex']
-            del kwargs['SubStreamIndex']
-        else:
-            raise Exception("No SubStreamIndex specified during first event creation")
-        if self._Container.timestamp is None:
-            if 'timestamp' in kwargs:
-                self._Container.timestamp = kwargs['timestamp']
-                del kwargs['timestamp']
-            else:
-                raise Exception("No timestamp specified during first event creation")
-        self._Container._AddEvent(Extension(Container = self._Container, SubStreamIndex = SubStreamIndex, **kwargs))
-        del self._Container.__dict__['BareEvent']
-        return self._Container.Events[SubStreamIndex][-1]
-    def SetTimestamp(self, t):
-        self._Container.timestamp = t
-
-class _EventClass:
-    def __init__(self, **kwargs):
-        if not 'Container' in kwargs:
-            self._Container = _EventContainerClass(kwargs['timestamp'], self, kwargs['SubStreamIndex'])
-        else:
-            self._Container = kwargs['Container']
-            del kwargs['Container']
-        self.SubStreamIndex = kwargs['SubStreamIndex']
-        del kwargs['SubStreamIndex']
-        self._Extensions = set()
-        if 'Extensions' in kwargs:
-            for Extension in kwargs['Extensions']:
-                self.Attach(Extension, **kwargs)
-    def _Attach(self, Extension, **kwargs):
-        # Used to assess that the event was just created, so event information have to be attached anyway
-        self._Extensions.add(Extension)
-        for Field in Extension._Fields:
-            self.__dict__[Field] = kwargs[Field]
-    def Attach(self, Extension, **kwargs):
-        if not Extension._CanAttach or Extension in self._Extensions:
-            self.Join(Extension, **kwargs) # For now, its better to join when instance is already there (ex: multiple TrackerEvents)
-            return
-        self._Extensions.add(Extension)
-        for Field in Extension._Fields:
-            self.__dict__[Field] = kwargs[Field]
-    def Join(self, ExtensionOrEvent, **kwargs):
-        if type(ExtensionOrEvent) == _EventClass:
-            self._Container._AddEvent(ExtensionOrEvent)
-            return ExtensionOrEvent
-        if 'SubStreamIndex' in kwargs:
-            SubStreamIndex = kwargs['SubStreamIndex']
-            del kwargs['SubStreamIndex']
-        else:
-            SubStreamIndex = self.SubStreamIndex
-        self._Container._AddEvent(ExtensionOrEvent(Container = self._Container, SubStreamIndex = SubStreamIndex, **kwargs))
-        return self._Container.Events[SubStreamIndex][-1]
-    def Filter(self):
-        self._Container.Filter(self)
-    def AsList(self, Keys = ()):
-        Output = [self.timestamp]
-        for Extension in self._Extensions:
-            if Keys and Extension._Key not in Keys:
-                continue
-            Output += [[Extension._Key]+[self.__dict__[Field]for Field in Extension._Fields]]
-        return Output
-    def AsDict(self, Keys = ()):
-        Output = {0:self.timestamp}
-        for Extension in self._Extensions:
-            if Keys and Extension._Key not in Keys:
-                continue
-            Output[Extension._Key] = [self.__dict__[Field] for Field in Extension._Fields]
-        return Output
-    def Copy(self, SubStreamIndex = None):
-        if SubStreamIndex is None:
-            SubStreamIndex = self.SubStreamIndex
-        kwargs = {'timestamp':self.timestamp, 'SubStreamIndex':SubStreamIndex, 'Extensions':self._Extensions}
-        for Extension in self._Extensions:
-            for Field in Extension._Fields:
-                if type(self.__dict__[Field]) != np.ndarray:
-                    kwargs[Field] = type(self.__dict__[Field])(self.__dict__[Field])
-                else:
-                    kwargs[Field] = np.array(self.__dict__[Field])
-        return self.__class__(**kwargs)
-    @property
-    def timestamp(self):
-        return self._Container.timestamp
-    def Has(self, Extension):
-        return (Extension in self._Extensions)
-    def __eq__(self, rhs):
-        return self.timestamp == rhs.timestamp
-    def __lt__(self, rhs):
-        return self.timestamp < rhs.timestamp
-    def __le__(self, rhs):
-        return self.timestamp <= rhs.timestamp
-    def __gt__(self, rhs):
-        return self.timestamp > rhs.timestamp
-    def __ge__(self, rhs):
-        return self.timestamp >= rhs.timestamp
-    def __repr__(self):
-        return "{0:.3f}s".format(self.timestamp)
-
-# Listing all the events existing
-
-class _EventExtensionClass:
-    _Key = -1 # identifier for this type of events
-    _CanAttach = True
-    _Fields = ()
-    def __new__(cls, *args, **kwargs):
-        Event = _EventClass(**kwargs)
-        Event._Attach(cls, **kwargs)
-        return Event
-
-class CameraEvent(_EventExtensionClass):
-    _Key = 1
-    _Fields = ('location', 'polarity')
-class TrackerEvent(_EventExtensionClass):
-    _Key = 2
-    _CanAttach = False # From experience, many trackers can be updated upon a single event. For equity, all trackers are joined, not attached
-    _Fields = ('TrackerLocation', 'TrackerID', 'TrackerAngle', 'TrackerScaling', 'TrackerColor', 'TrackerMarker')
-class DisparityEvent(_EventExtensionClass):
-    _Key = 3
-    _Fields = ('disparity', 'sign')
-class PoseEvent(_EventExtensionClass):
-    _Key = 4
-    _Fields = ('poseHomography', 'worldHomography', 'reprojectionError')
-class TauEvent(_EventExtensionClass):
-    _Key = 5
-    _Fields = ('tau',)
-class FlowEvent(_EventExtensionClass):
-    _Key = 6
-    _Fields = ('flow',)
-class TwistEvent(_EventExtensionClass):
-    _Key = 7
-    _Fields = ('omega', 'v')
-
 class ParametersDictClass(dict):
     def __init__(self, *args):
         super().__init__(*args)
@@ -1906,5 +1180,32 @@ class ParametersDictClass(dict):
         else:
             super().__setitem__(key, value)
 
-_AvailableEventsClassesNames = [EventType.__name__ for EventType in _EventExtensionClass.__subclasses__()]
+def LoadParametersFromFile(FileName):
+    with open(FileName, 'r') as fParamsJSON:
+        Parameters = json.load(fParamsJSON)
+    for ModuleName, ModuleParameters in Parameters.items():
+        for Key, Value in ModuleParameters.items():
+            if Key == '_MonitoredVariables':
+                for nVar, (Name, StrType) in enumerate(list(Value)):
+                    Value[nVar] = (Name, _STR_TO_TYPE[StrType])
+            else:
+                ModuleParameters[Key] = UnSerialize(Value)
+    return ParametersDictClass(Parameters)
 
+def Serialize(Value):
+    tValue = type(Value)
+    if tValue == np.ndarray:
+        return [_SPECIAL_NPARRAY_CAST_MESSAGE, Value.tolist()]
+    elif tValue in (list, tuple):
+        return [_TYPE_TO_STR[tValue]]+[Serialize(Item) for Item in Value]
+    else:
+        return Value
+def UnSerialize(Data):
+    tData = type(Data)
+    if tData == list:
+        if Data[0] == _SPECIAL_NPARRAY_CAST_MESSAGE:
+            return np.array(Data[1])
+        else:
+            return _STR_TO_TYPE[Data[0]]([UnSerialize(Item) for Item in Data[1:]])
+    else:
+        return Data

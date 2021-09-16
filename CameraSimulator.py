@@ -17,7 +17,9 @@ class MovementSimulatorClass(ModuleBase):
         '''
         self.__IsInput__ = True
         self._MonitoredVariables = [('T', np.array),
-                                    ('Theta', np.array)]
+                                    ('Theta', np.array),
+                                    ('Omega', np.array),
+                                    ('V', np.array)]
 
         self._MapType = 'cubic'
         self._MapDensity = 0.0006
@@ -44,10 +46,15 @@ class MovementSimulatorClass(ModuleBase):
         self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])] # By default, its a 2 cameras simulator
 
         self._TwistTau = 0.005
+
         self._TwistGaussianRelativeNoise = 0.1
 
+        self._ConstantTwistErrorTau = 0.05
+        self._ConstantTwistErrorRelativeNoise = 0.1
+
+
         self._TrackersMinDisplacement = 0.1
-        self._TrackersLocationGaussianNoise = 0.
+        self._TrackersLocationGaussianNoise = 0.5
         self._TrackerEdgeMargin = 10
         self._TrackersSentAtOnce = 1
 
@@ -100,6 +107,13 @@ class MovementSimulatorClass(ModuleBase):
         if not self.StartNextSequenceStep():
             self.LogWarning("Input sequence is empty")
 
+        if self._ConstantTwistErrorTau == np.inf:
+            self.NextConstantTwistErrorTs = np.inf
+            self.vConstantError = np.zeros(3)
+            self.omegaConstantError = np.zeros(3)
+        else:
+            self.NextConstantTwistErrorTs = 0
+
         if self._TrackerOutlierTau not in [0, np.inf]:
             self.StepOutlierProba = 1-np.e**(-self._dt / self._TrackerOutlierTau)
         else:
@@ -129,7 +143,12 @@ class MovementSimulatorClass(ModuleBase):
         if self._TwistEvents and (self.t >= self.NextTwistT).any():
             nCamera = self.NextTwistT.argmin()
             omega, v = self.GetCameraTwist(nCamera)
-            event.Join(TwistEvent, v = v + np.random.normal(0, np.linalg.norm(v)*self._TwistGaussianRelativeNoise, size = 3), omega = omega + np.random.normal(0, np.linalg.norm(omega)*self._TwistGaussianRelativeNoise, size = 3), SubStreamIndex = self.SubStreamIndexes[nCamera])
+
+            if self.t > self.NextConstantTwistErrorTs:
+                self.GenerateConstantTwistError(omega, v)
+            vSent = v + np.random.normal(0, np.linalg.norm(v)*self._TwistGaussianRelativeNoise, size = 3) + self.vConstantError
+            omegaSent = omega + np.random.normal(0, np.linalg.norm(omega)*self._TwistGaussianRelativeNoise, size = 3) + self.omegaConstantError
+            event.Join(TwistEvent, v = vSent, omega = omegaSent, SubStreamIndex = self.SubStreamIndexes[nCamera])
             self.NextTwistT[nCamera] = self.t + np.random.exponential(self._TwistTau)
 
 
@@ -147,6 +166,11 @@ class MovementSimulatorClass(ModuleBase):
         self.T += self.V * self._dt
 
         return True
+
+    def GenerateConstantTwistError(self, omega, v):
+        self.NextConstantTwistErrorTs = self.t + np.random.exponential(self._ConstantTwistErrorTau)
+        self.vConstantError = np.random.normal(0, np.linalg.norm(v)*self._ConstantTwistErrorRelativeNoise, size = 3)
+        self.omegaConstantError = np.random.normal(0, np.linalg.norm(omega)*self._ConstantTwistErrorRelativeNoise, size = 3)
 
     def UpdateGenerators(self, event):
         UzWorld = self.R.T.dot(np.array([0., 0., 1.]))

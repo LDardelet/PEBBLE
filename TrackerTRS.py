@@ -136,10 +136,13 @@ class TrackerTRS(ModuleBase):
         try:
             self.FeatureManager = FeatureManagerClass(self)
             self.GTMaker = GTMakerClass(self)
+            self.Plotter = PlotterClass(self)
+            self.LocksSubscribers = [self.FeatureManager.AddLock]
         except:
             self.LogWarning("Unable to load trackers extensions, limited post-processing abilities")
             self.FeatureManager = None
             self.GTMaker = None
+
         if self._DetectorAutoRestart: #  One cannot expect all trackers to die if they auto restart
             self._TrackerStopIfAllDead = False
 
@@ -188,10 +191,6 @@ class TrackerTRS(ModuleBase):
         self.LastTsSnap = -np.inf
 
         self._DetectorMinActivityForStart = self._TrackerDiameter * self._DetectorMinRelativeStartActivity
-
-        self.Plotter = PlotterClass(self)
-        if not self.FeatureManager is None:
-            self.LocksSubscribers = [self.FeatureManager.AddLock]
 
         return True
 

@@ -133,15 +133,17 @@ class TrackerTRS(ModuleBase):
         self._StateClass = StateClass
 
     def _OnInitialization(self):
+        self.LocksSubscribers = []
         try:
             self.FeatureManager = FeatureManagerClass(self)
             self.GTMaker = GTMakerClass(self)
             self.Plotter = PlotterClass(self)
-            self.LocksSubscribers = [self.FeatureManager.AddLock]
+            self.LocksSubscribers.append(self.FeatureManager.AddLock)
         except:
             self.LogWarning("Unable to load trackers extensions, limited post-processing abilities")
             self.FeatureManager = None
             self.GTMaker = None
+
 
         if self._DetectorAutoRestart: #  One cannot expect all trackers to die if they auto restart
             self._TrackerStopIfAllDead = False

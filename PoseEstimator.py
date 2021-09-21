@@ -35,12 +35,14 @@ class PoseEstimator(ModuleBase):
                                     ('NaturalPeriod', float),
                                     ('AverageSpringLength', float),
                                     ('Anchors@Energy', float),
+                                    ('NTrackers', int),
+                                    ('NActive', int),
                                     ('Anchors@Length', float)]
 
         self.__ModulesLinksRequested__ = ['RightDisparityMemory', 'LeftDisparityMemory']
 
         self._DefaultK = 200
-        self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])]
+        self._DefaultStereoBase = 0.2
 
         self._InitialCameraRotationVector = np.zeros(3)
         self._InitialCameraTranslationVector = np.zeros(3)
@@ -48,9 +50,11 @@ class PoseEstimator(ModuleBase):
         self._ConstantSpringTrustDistance = 0.3 # to diable, use np.inf
         self._SpringTrustDistanceModel = "Gaussian" # str, either Constant ( 1 ), Gaussian ( e**(-delta**2) ) or Exponential ( e**(-delta) )
 
-        self._SpringsModel = 'Single'                    # Either 'Single' or 'Orthogonal', for one direct spring or two speings for reprojection and depth
+        self._SpringsModel = 'Orthogonal'                    # Either 'Single' or 'Orthogonal', for one direct spring or two speings for reprojection and depth
 
         self._UseAdaptiveParameters = True
+        self._EquivalentConstraintsModel = True
+        self._EquivalentConstraintsMinDetDistance = 0.05
 
         # Following 5 parameters only used if _UseAdaptiveParameters = False
         self._Kappa = 25.
@@ -59,46 +63,74 @@ class PoseEstimator(ModuleBase):
         self._Mass = 1.
         self._Moment = 20.
 
-        self._AdaptiveDampeningFactor = 0.5 # Should be equal to 1 mathwise
+        self._AdaptiveDampeningFactor = 1. # Should be equal to 1 mathwise
         self._AdaptiveKappaFactor = 1.
         self._AdaptiveBaseLength = 4.
-        self._AdaptiveBaseTau = 0.6
+        self._AdaptiveBaseTrackers = 1 
+        self._AdaptiveBaseTau = 0.1
+        self._AdaptiveMuOmegaFactor = 5.
 
         self._MinTrackersPerCamera = 8
         self._NeedsStereoOdometry = True
         self._DefaultTau = 0.05
         self._TrackerDisparityRadius = 5
         self._DisparityTauRatio = 10
+        self._IntegerDisparity = True
 
         self._DisparityOverlap = 0.
 
         self._DisparitySegmentMargin = 0
 
+        self._SetSpeedAtStartup = True
+
         self._MaxLengthRatioBreak = np.inf
         self._MaxAbsoluteSpringLength = 2.
 
-        self._UseSpeedOdometry = True # WARNING : Should be True
-        self._AddLiveTrackers = True # WARNING : Should definitely be True
+        self._AutoReleaseOnNewTracker = False
+        self._AutoReleaseTrustDistanceRatio = 0.02
+        self._AutoReleaseMaxTauRatio = 2.
+        self._AutoReleaseDtRatio = 10.
+
+        self._DepthlessSpringBehaviour = "Partial" # Behaviours are either "Disable", "Remove", or in Orthogonal Model, "Partial"
+
         self._CanDeactivateAnchor = False
 
     def _OnInitialization(self):
         self.RigFrame = FrameClass(self._InitialCameraRotationVector, self._InitialCameraTranslationVector, np.zeros(3), np.zeros(3), 0, 0)
+        self.NCameras = len(self.__SubStreamInputIndexes__)
         self.Anchors = {}
 
         if self._UseAdaptiveParameters:
             self.Mass = 1.
-            self.Moment = self.Mass * self._AdaptiveBaseLength ** 2 / 2
-            self.Kappa = self._AdaptiveKappaFactor * 4 * np.pi**2 * self.Mass / self._AdaptiveBaseTau**2
+            if self._EquivalentConstraintsModel:
+                self.Moment = self.Mass
+                self.Kappa = self._AdaptiveKappaFactor * 4 * np.pi**2 * self.Mass / (self._AdaptiveBaseTau**2)
+            else:
+                self.Moment = self.Mass * self._AdaptiveBaseLength ** 2 / 2
+                self.Kappa = self._AdaptiveKappaFactor * 4 * np.pi**2 * self.Mass / (self._AdaptiveBaseTau**2 * self._AdaptiveBaseTrackers)
         else:
             self.Mass = self._Mass
             self.Moment = self._Moment
             self.Kappa = self._Kappa
 
+        if self._EquivalentConstraintsModel:
+            self.__class__.SpringsForceAndTorque = property(lambda self: self.KinematicSpringsForceAndTorque)
+            self.__class__.ReferenceSpringConstant = self.Kappa
+            self.__class__.ReferenceSpringTorqueConstant = self.Kappa
+        else:
+            self.__class__.SpringsForceAndTorque = property(lambda self: self.MechanicSpringsForceAndTorque)
+            self.__class__.ReferenceSpringConstant = property(lambda self: self.TotalSpringConstant)
+            self.__class__.ReferenceSpringTorqueConstant = property(lambda self: self.TotalSpringTorqueConstant)
+
+        if self._DepthlessSpringBehaviour == 'Partial' and self._SpringsModel == 'Single':
+            self.LogError("Incompatible parameters : _DepthlessSpringBehaviour = Partial & _SpringsModel = Single")
+            return False
+
         self.K = self._DefaultK
         self.ScreenSize = np.array(self.Geometry)
         self.ScreenCenter = self.ScreenSize/2
-        self.StereoBaseDistance = np.linalg.norm(self._CameraOffsets[0] - self._CameraOffsets[1])
-        self.CameraOffsetLocations = [self._CameraOffsets[CameraIndex] for CameraIndex in self.__SubStreamInputIndexes__]
+        self.StereoBaseDistance = self._DefaultStereoBase
+        self.CameraOffsetLocations = [np.array([self.StereoBaseDistance/2, 0., 0.]), np.array([-self.StereoBaseDistance/2, 0., 0.])]
 
         self.KMat = np.array([[self.K, 0., self.ScreenCenter[0]],
                                         [0., -self.K, self.ScreenCenter[1]],
@@ -136,25 +168,33 @@ class PoseEstimator(ModuleBase):
 
         self.AverageSpringLength = 0.
         self.TotalSpringConstant = 0.
-        self.TotalSpringTorqueBase = 0.
+        self.TotalSpringTorqueConstant = 0.
 
         self.LastUpdateT = 0.
+
+        self.NUpdates = 0
+        self.NActive = 0
+
+        self._SimulationActivity = 0.
+        self._SimulationDtSum = 0.
 
         self.TrackersEnergy = 0.
         self.EnvironmentEnergy = 0.
         self.BrokenSpringsEnergyLoss = 0.
         self.UpdatedSpringsPreviousEnergies = {}
 
+        self.EndpointDistance = self.GetDepth(1)
+
         self.Started = False
+        self.Relaxing = False
         self.ReceivedOdometry = np.zeros(2, dtype = bool)
-        if not self._UseSpeedOdometry:
-            self.ReceivedOdometry[:] = 1
+
         self.TrackersPerCamera = {CameraID:0 for CameraID in self.__SubStreamInputIndexes__}
 
         self.ReceivedV = np.zeros((3, 2))
         self.ReceivedOmega = np.zeros((3,2))
 
-        self.DisparitySegmentHalfWidth = 0.5 + self._DisparityOverlap / 2
+        self.DisparitySegmentHalfWidth = (float(self._IntegerDisparity) / 2) + self._DisparityOverlap / 2
 
         return True
 
@@ -172,16 +212,23 @@ class PoseEstimator(ModuleBase):
             self.ReceivedV[:,event.SubStreamIndex] = event.v
             self.ReceivedOmega[:,event.SubStreamIndex] = event.omega
         if event.Has(TrackerEvent):
-            if event.TrackerColor == 'k':
-                ID = (event.TrackerID, event.SubStreamIndex)
-                if ID in self.Anchors:
-                    self.RemoveAnchor(ID, "tracker disappeared")
-            elif event.TrackerColor == 'g' and event.TrackerMarker == 'o': # Tracker locked
+            if event.TrackerColor == 'g' and event.TrackerMarker == 'o': # Tracker locked
                 if event.Has(DisparityEvent):
                     disparity = event.disparity
                 else:
-                    disparity = None
-                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID, disparity)
+                    if self._UseDisparityMemories:
+                        Tau = self.FrameworkAverageTau
+                        if Tau is None or Tau == 0:
+                            Tau = self._DefaultTau
+                        disparity = self.DisparityMemories[event.SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(event.TrackerLocation, dtype = int), self._TrackerDisparityRadius)
+                    else:
+                        disparity = None
+                    self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID, disparity)
+            else:
+                ID = (event.TrackerID, event.SubStreamIndex)
+                if ID in self.Anchors:
+                    self.RemoveAnchor(ID, "tracker disappeared")
+
         if not self.Started:
             if self.ReceivedOdometry.all() or (not self._NeedsStereoOdometry and self.ReceivedOdometry.any()):
                 CanStart = True
@@ -193,12 +240,21 @@ class PoseEstimator(ModuleBase):
                     return
                 self.Started = event.timestamp
                 self.LastUpdateT = event.timestamp
+                if self._SetSpeedAtStartup:
+                    self.Log(f"Set speeds to current average received values")
+                    self.RigFrame.V = self.ReceivedV.mean(axis = 1)
+                    self.RigFrame.Omega = self.ReceivedOmega.mean(axis = 1)
                 self.LogSuccess("Started")
                 for Anchor in self.Anchors.values():
                     self.Fix(Anchor)
             else:
                 return
-        self.UpdateSimulation(event.timestamp)
+
+        dt = event.timestamp - self.LastUpdateT
+        self.LastUpdateT = event.timestamp
+        self.NUpdates += 1
+        self.UpdateSimulation(dt)
+
         return
 
     def RemoveAnchor(self, ID, reason):
@@ -212,9 +268,57 @@ class PoseEstimator(ModuleBase):
         del self.Anchors[ID]
         self.Log("Removed anchor {0} ({1})".format(ID, reason))
 
-    def UpdateSimulation(self, t):
-        dt = t - self.LastUpdateT
-        self.LastUpdateT = t
+    @property
+    def SimulationAverageDt(self):
+        return self._SimulationDtSum / max(1., self._SimulationActivity)
+
+    def Relax(self, TauSceneFactor = 2., NLogs = 1000, dtRatio = 5., StopLengthRatio = 0):
+        if self.AverageSpringLength < self._ConstantSpringTrustDistance * StopLengthRatio:
+            self.Log("Relaxation stop condition already met")
+            return
+        dt = self.SimulationAverageDt * dtRatio
+        NUpdates = int(self._AdaptiveBaseTau * TauSceneFactor / dt)
+
+        self.StoredRigVelocities = {'V':np.array(self.RigFrame.V), 'Omega':np.array(self.RigFrame.Omega)}
+        self.Relaxing = True
+        self.RigFrame.V[:] = 0.
+        self.RigFrame.Omega[:] = 0.
+
+        StartEnergy = self.PotentialEnergy
+
+        Energies = []
+        LogDnUpdate = NUpdates // (NLogs-1)
+
+        self.Log("Relaxing over {0:.1f} seconds ({1} updates)".format(self._AdaptiveBaseTau * TauSceneFactor, NUpdates))
+        for nUpdate in range(NUpdates):
+            self.UpdateSimulation(dt)
+            if nUpdate % LogDnUpdate == 0:
+                Release = StartEnergy - self.PotentialEnergy
+                print("{0:3d}% : {1}{2:.3f} J released, average length : {3:.3f} m".format(int(100. * (nUpdate+1) / NUpdates), '+'*(Release>0) + '-'*(Release<0), abs(Release), self.AverageSpringLength), end = '\r')
+
+                Energies.append(self.PotentialEnergy)
+            if self.AverageSpringLength < self._ConstantSpringTrustDistance * StopLengthRatio:
+                self.LogSuccess("Relaxation condition met")
+                break
+
+        print("")
+        EndEnergy = self.PotentialEnergy
+        if EndEnergy < StartEnergy:
+            self.Log("Released {0:.3f} / {1:.3f} J of potential energy".format(StartEnergy - EndEnergy, StartEnergy))
+        else:
+            self.LogWarning("Gained {0:.3f} J of energy while relaxing. This should not happen. Maybe relaxation wasn't long enough.".format(EndEnergy - StartEnergy))
+        
+        self.RigFrame.V = np.array(self.StoredRigVelocities['V'])
+        self.RigFrame.Omega = np.array(self.StoredRigVelocities['Omega'])
+        self.Relaxing = False
+        del self.__dict__['StoredRigVelocities']
+        return Energies
+
+    def UpdateSimulation(self, dt):
+        if not self.Relaxing:
+            Decay = np.e**(-dt / self._AdaptiveBaseTau)
+            self._SimulationActivity = self._SimulationActivity * Decay + 1
+            self._SimulationDtSum = self._SimulationDtSum * Decay + dt
 
         self.RigFrame.UpdatePosition(dt)
         self.UpdateLinesOfSights()
@@ -230,17 +334,12 @@ class PoseEstimator(ModuleBase):
 
     def UpdateFromTracker(self, CameraID, ScreenLocation, TrackerID, disparity = None):
         ID = (TrackerID, CameraID)
-        Tau = self.FrameworkAverageTau
-        if Tau is None or Tau == 0:
-            Tau = self._DefaultTau
-        if self._UseDisparityMemories:
-            disparity = self.DisparityMemories[CameraID].GetDisparity(Tau*self._DisparityTauRatio, np.array(ScreenLocation, dtype = int), self._TrackerDisparityRadius)
         if ID not in self.Anchors:
-            if self.Started and not self._AddLiveTrackers:
-                return
             if disparity is None:
                 return
 
+            if self.Started and self._AutoReleaseOnNewTracker:
+                self.Relax(TauSceneFactor = self._AutoReleaseMaxTauRatio, NLogs = 100, dtRatio = self._AutoReleaseDtRatio, StopLengthRatio = self._AutoReleaseTrustDistanceRatio)
             self.Anchors[ID] = self.AnchorClass(np.array(ScreenLocation), disparity, CameraID)
 
             self.TrackersPerCamera[CameraID] += 1
@@ -250,29 +349,32 @@ class PoseEstimator(ModuleBase):
                 self.Fix(self.Anchors[ID])
         else:
             Anchor = self.Anchors[ID]
-            self.UpdatedSpringsPreviousEnergies[ID] = Anchor.Energy
 
-            Anchor.OnCameraData.Update(ScreenLocation, disparity)
-            if not self.Started:
-                return
-
-            if not disparity is None:
-                if not Anchor.Active:
-                    Anchor.Active = True
-                    self.LogSuccess("Reactivated anchor {0}".format(ID))
-                    self.TrackersPerCamera[CameraID] += 1
-            else:
-                if Anchor.Active and self._CanDeactivateAnchor:
+            if disparity is None:
+                if self._DepthlessSpringBehaviour == 'Remove':
+                    self.RemoveAnchor(ID, "no depth")
+                    return
+                elif self.Started and self._DepthlessSpringBehaviour == 'Disable' and Anchor.Active:
                     Anchor.Active = False
                     self.LogWarning("Deactivated anchor {0} (no disparity)".format(ID))
                     self.TrackersPerCamera[CameraID] -= 1
+                    return
+            else:
+                if self.Started and not Anchor.Active:
+                    Anchor.Active = True
+                    self.LogSuccess("Reactivated anchor {0}".format(ID))
+                    self.TrackersPerCamera[CameraID] += 1
+
+            self.UpdatedSpringsPreviousEnergies[ID] = Anchor.Energy
+
+            Anchor.OnCameraData.Update(ScreenLocation, disparity)
 
     def UpdateLinesOfSights(self):
         MaxLength = 0
         MaxID = None
         self.AverageSpringLength = 0.
         self.TotalSpringConstant = 0.
-        self.TotalSpringTorqueBase = 0.
+        self.TotalSpringTorqueConstant = 0.
         for nAnchor, (ID, Anchor) in enumerate(list(self.Anchors.items())):
             self.Update3D(Anchor)
             if Anchor.Length > self._MaxAbsoluteSpringLength:
@@ -283,22 +385,30 @@ class PoseEstimator(ModuleBase):
                 MaxID = ID
             self.AverageSpringLength += Anchor.Length
             self.TotalSpringConstant += Anchor.K
-            self.TotalSpringTorqueBase += Anchor.K * Anchor.ArmLength**2
+            self.TotalSpringTorqueConstant += Anchor.K * Anchor.ArmLength**2
 
         N = len(self.Anchors)
         self.AverageSpringLength /= N
         if self._MaxLengthRatioBreak != np.inf and MaxLength > self._MaxLengthRatioBreak * self.AverageSpringLength:
             Anchor = self.Anchors[MaxID]
             self.TotalSpringConstant -= Anchor.K
-            self.TotalSpringTorqueBase -= Anchor.K * Anchor.ArmLength**2
+            self.TotalSpringTorqueConstant -= Anchor.K * Anchor.ArmLength**2
             self.RemoveAnchor(MaxID, 'excessive relative length')
             self.AverageSpringLength = (self.AverageSpringLength * N - MaxLength) / (N - 1)
 
+    @property
+    def NTrackers(self):
+        return len(self.Anchors)
+
     def Fix(self, Anchor):
-        self.UpdateCurrentValues(Anchor)
+        if not self.UpdateCurrentValues(Anchor): # If no depth information was available
+            self.LogWarning("Could not fix an anchor, as no depth data was available")
+            return
         Anchor.Fix()
 
     def Update3D(self, Anchor):
+        if not Anchor.Active:
+            return
         self.UpdateCurrentValues(Anchor)
         Anchor.UpdateProjections()
 
@@ -306,7 +416,19 @@ class PoseEstimator(ModuleBase):
         ScreenLocation, disparity, CameraID = Anchor.OnCameraData.Values
         Anchor.CurrentValues['Origin'] = self.GetCameraLocation(CameraID)
         Anchor.CurrentValues['LoS'] = self.GetLineOfSight(ScreenLocation)
-        Anchor.CurrentValues['Range'] = self.GetDepthRange(disparity)
+        
+        #DepthToDistanceRatio = 1 / (Anchor.CurrentValues['LoS'].dot(self.RigFrame.ToWorld(np.array([0., 0., 1.]), RelativeToOrigin = False)))
+        if not disparity is None:
+            DepthToDistanceRatio = self.GetDepthToDistanceRatio(ScreenLocation)
+            Anchor.CurrentValues['Range'] = [Depth * DepthToDistanceRatio for Depth in self.GetDepthRange(disparity)]
+            Anchor.CurrentValues['Distance'] = DepthToDistanceRatio * self.GetDepth(disparity)
+            return True
+        else:
+            if self._DepthlessSpringBehaviour == 'Partial':
+                Anchor.CurrentValues['Distance'] = None
+            else:
+                self.LogWarning("Conditions path should not come here")
+            return False
 
     def GetDepth(self, disparity):
         if disparity <= 0:
@@ -314,9 +436,14 @@ class PoseEstimator(ModuleBase):
         return self.StereoBaseDistance * self.K / disparity
     def GetDepthRange(self, disparity):
         if self.DisparitySegmentHalfWidth == 0:
-            return [self.GetDepth(disparity), None]
+            return [self.GetDepth(disparity), 0]
         else:
             return [self.GetDepth(disparity+self.DisparitySegmentHalfWidth), self.GetDepth(disparity-self.DisparitySegmentHalfWidth)]
+
+    def GetDepthToDistanceRatio(self, ScreenLocation):
+        Uv = self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1]))
+        return np.linalg.norm(Uv) / Uv[-1]
+
     def GetLineOfSight(self, ScreenLocation):
         u = self.RigFrame.ToWorld(self.KMatInv.dot(np.array([ScreenLocation[0], ScreenLocation[1], 1])), RelativeToOrigin = False)
         return u / np.linalg.norm(u)
@@ -354,19 +481,23 @@ class PoseEstimator(ModuleBase):
         return 2*np.pi * np.sqrt(self.Mass / KTot)
 
     @property
-    def EnvironmentV(self):
-        if not self._UseSpeedOdometry:
-            return np.zeros(3)
-        return self.ReceivedV.mean(axis = 1)
+    def EnvironmentVs(self):
+        if self.Relaxing:
+            return np.zeros((3, self.NCameras))
+        return self.ReceivedV
     @property
-    def EnvironmentOmega(self):
-        if not self._UseSpeedOdometry:
-            return np.zeros(3)
-        return self.ReceivedOmega.mean(axis = 1)
+    def EnvironmentOmegas(self):
+        if self.Relaxing:
+            return np.zeros((3, self.NCameras))
+        return self.ReceivedOmega
 
     @property
     def ViscosityForceAndTorque(self):
-        return self.MuV * (self.EnvironmentV - self.RigFrame.V), self.MuOmega * (self.EnvironmentOmega - self.RigFrame.Omega)
+        Forces = self.MuV * (self.EnvironmentVs - self.RigFrame.V.reshape((3,1)))
+        VTorque = np.zeros(3)
+        for nCamera in range(self.NCameras):
+            VTorque -= np.cross(self.GetCameraLocation(nCamera) - self.RigFrame.T, Forces[:,nCamera])
+        return self.RigFrame.ToWorld(Forces.sum(axis = 1) / self.NCameras, RelativeToOrigin = False), self.RigFrame.ToWorld((self.MuOmega * (self.EnvironmentOmegas - self.RigFrame.Omega.reshape((3, 1))).sum(axis = 1) + VTorque) / self.NCameras, RelativeToOrigin = False)
     @property
     def EnvironmentPower(self): # Defined as the instantaneous power transmitted to the rig frame
         Force, Torque = self.ViscosityForceAndTorque
@@ -375,24 +506,89 @@ class PoseEstimator(ModuleBase):
     @property
     def MuV(self):
         if self._UseAdaptiveParameters:
-            return 2 * np.sqrt(self.Mass * self.TotalSpringConstant) * self._AdaptiveDampeningFactor
+            return 2 * np.sqrt(self.Mass * self.ReferenceSpringConstant) * self._AdaptiveDampeningFactor
         else:
             return self._MuV
     @property
     def MuOmega(self):
         if self._UseAdaptiveParameters:
-            return 2 * np.sqrt(self.Moment * self.TotalSpringTorqueBase) * self._AdaptiveDampeningFactor
+            return 2 * np.sqrt(self.Moment * self.ReferenceSpringTorqueConstant) * self._AdaptiveDampeningFactor * self._AdaptiveMuOmegaFactor
         else:
             return self._MuOmega
 
     @property
-    def SpringsForceAndTorque(self):
+    def CenterApplicationPoint(self):
+        Center = np.zeros(3)
+        for Anchor in self.Anchors.values():
+            Center += Anchor.CurrentProjection
+        return Center
+
+    @property
+    def KinematicSpringsForceAndTorque(self):
+        Xs = []
+        Fs = []
+        Cs = []
+        SumForce = np.zeros(3)
+        SumLocation = np.zeros(3)
+        SumTrust = 0.
+        self.NActive = 0
+        for Anchor in self.Anchors.values():
+            if Anchor.Active:
+                self.NActive += 1
+                Force = Anchor.RawForce
+                Trust = Anchor.ExponentialValue
+
+                SumForce += Force * Trust
+                SumLocation += Anchor.CurrentProjection * Trust
+                SumTrust += Trust
+                Xs.append(Anchor.CurrentProjection)
+                Fs.append(Force)
+                Cs.append(Trust)
+
+        if not SumTrust:
+            return np.zeros(3), np.zeros(3)
+
+        X0 = SumLocation / SumTrust
+        F0 = SumForce / SumTrust
+        Xs = np.array(Xs).transpose()
+        Fs = np.array(Fs).transpose()
+        Cs = np.array(Cs)
+        
+        DXs = Xs - X0.reshape((3,1))
+        M = np.zeros((3,3))
+        N2 = (DXs**2 * Cs).sum()
+        for nDim in range(3):
+            M[nDim,nDim] = N2 - (Cs * DXs[nDim,:]**2).sum()
+            
+        M[0,1] = M[1,0] = -(Cs * DXs[0,:] * DXs[1,:]).sum()
+        M[0,2] = M[2,0] = -(Cs * DXs[0,:] * DXs[2,:]).sum()
+        M[1,2] = M[2,1] = -(Cs * DXs[1,:] * DXs[2,:]).sum()
+
+        DetM = np.linalg.det(M)
+        if abs(DetM / SumTrust) < self._EquivalentConstraintsMinDetDistance ** 6:
+            return np.zeros(3), np.zeros(3)
+
+        DFs = Fs - F0.reshape((3,1))
+        Gamma = np.zeros(3)
+        for nPoint in range(self.NActive):
+            Gamma += Cs[nPoint] * np.cross(DFs[:,nPoint], DXs[:,nPoint])
+        
+        Omega = (np.linalg.inv(M)).dot(Gamma)
+
+        FEquiv = F0 + np.cross((self.RigFrame.T - X0), Omega)
+        return FEquiv, Omega
+
+    @property
+    def MechanicSpringsForceAndTorque(self):
         TotalForce = np.zeros(3)
         TotalTorque = np.zeros(3)
         for Anchor in self.Anchors.values():
+            Arm = Anchor.CurrentProjection - self.RigFrame.T
+            Distance = np.linalg.norm(Arm)
             Force = Anchor.Force
-            Torque = -np.cross(Anchor.CurrentProjection - self.RigFrame.T, Force)
-            TotalForce += Force
+            Torque = -np.cross(Arm, Force)
+            if Distance < self.EndpointDistance:
+                TotalForce += Force * (self.EndpointDistance - Distance) / self.EndpointDistance
             TotalTorque += Torque
         return TotalForce, TotalTorque
 
@@ -454,12 +650,12 @@ class PoseEstimator(ModuleBase):
             ax.scatter(*CameraWorldLocation.tolist(), marker = 'o', color = CameraColors[CameraIndex])
 
         for ID, Anchor in self.Anchors.items():
-            if Anchor.StaticValues['Range'][1] is None:
+            if Anchor.StaticValues['Range'][1] == 0:
                 Distance = Anchor.StaticValues['Range'][0]
                 ax.scatter(*[[(Anchor.StaticValues['Origin'] + Anchor.StaticValues['LoS'] * Distance)[nAxDim]] for nAxDim in range(3)], color = CameraColors[ID[1]], marker = 'x')
             else:
                 ax.plot(*[[(Anchor.StaticValues['Origin'] + Anchor.StaticValues['LoS'] * Distance)[nAxDim] for Distance in Anchor.StaticValues['Range']] for nAxDim in range(3)], color = CameraColors[ID[1]], linestyle = '--')
-            if Anchor.CurrentValues['Range'][1] is None:
+            if Anchor.CurrentValues['Range'][1] is 0:
                 Distance = Anchor.CurrentValues['Range'][0]
                 ax.scatter(*[[(Anchor.CurrentValues['Origin'] + Anchor.CurrentValues['LoS'] * Distance)[nAxDim]] for nAxDim in range(3)], color = CameraColors[ID[1]])
             else:
@@ -470,7 +666,7 @@ class PoseEstimator(ModuleBase):
             ax.scatter(*WP.tolist(), color = 'k', marker = 'o')
             ax.scatter(*CP.tolist(), color = 'k', marker = 'o')
             ax.text(CP[0], CP[1], CP[2]+0.01, str(ID), color = 'k')
-            ax.plot(*[[CPpF[nAxDim], CP[nAxDim]] for nAxDim in range(3)], color = 'k')
+            #ax.plot(*[[CPpF[nAxDim], CP[nAxDim]] for nAxDim in range(3)], color = 'k')
 
         return f, ax
 
@@ -573,34 +769,6 @@ class OnCameraDataClass:
         self.Location = Location
         self.Disparity = Disparity
 
-class SpringClass:
-    def __init__(self, Kappa, TrustDistance, TrustModelIndex):
-        self.Kappa = Kappa
-        self.TrustDistance = TrustDistance
-        self.TrustModelIndex = TrustModelIndex
-
-        self.Length = 0
-        self.UnitVector = np.zeros(3)
-    @property
-    def K(self):
-        return self.Kappa * self.ExponentialValue
-    @property
-    def Force(self):
-        return self.Length * self.K * self.UnitVector
-    @property
-    def Energy(self):
-        if self.TrustModelIndex != 2:
-            return self.K * self.Length**2 / 2
-        return self.K * self.TrustDistance * (self.TrustDistance * (1/self.ExponentialValue - 1) - self.Length)
-    @property
-    def ExponentialValue(self):
-        if self.TrustModelIndex == 0 or self.TrustDistance == np.inf:
-            return 1
-        if self.TrustModelIndex == 1:
-            return np.e**(-self.Length**2 / self.TrustDistance**2)
-        else:
-            return np.e**(-self.Length / self.TrustDistance)
-
 class TemplateAnchorClass:
     Kappa = 1.
     TrustDistance = np.inf
@@ -626,7 +794,8 @@ class TemplateAnchorClass:
             raise Exception("Anchor already active")
         self.StaticValues = {'Origin':np.array(self.CurrentValues['Origin']),
                              'LoS': np.array(self.CurrentValues['LoS']),
-                             'Range': tuple(self.CurrentValues['Range'])}
+                             'Range': tuple(self.CurrentValues['Range']),
+                             'Distance': self.CurrentValues['Distance']}
         self.Active = True
 
     def UpdateProjections(self):
@@ -636,18 +805,21 @@ class TemplateAnchorClass:
 
         COrigin = self.CurrentValues['Origin']
         CLine = self.CurrentValues['LoS']
-        CRange = self.CurrentValues['Range']
+        if self.CurrentValues['Distance'] is None:
+            CRange = [0, _MAX_DEPTH]
+        else:
+            CRange = self.CurrentValues['Range']
 
-        if SRange[1] is None:
+        if SRange[1] == 0:
             self.StaticProjection = SOrigin + SLine * SRange[0]
-            if CRange[1] is None:
+            if CRange[1] == 0:
                 self.CurrentProjection = COrigin + CLine * CRange[0]
             else:
                 CurrentDistance = (self.StaticProjection - COrigin).dot(CLine) # Compute distance from the static location to the current origin, projected on current line of sight
                 CurrentDistance = max(CRange[0], min(CRange[1], CurrentDistance)) # Clamp that distance onto the allows segment
                 self.CurrentProjection =  COrigin + CLine * CurrentDistance
         else:
-            if CRange[1] is None:
+            if CRange[1] == 0:
                 self.CurrentProjection = COrigin + CLine * CRange[0]
                 StaticDistance = (self.CurrentProjection - SOrigin).dot(SLine)
                 StaticDistance = max(SRange[0], min(SRange[1], StaticDistance))
@@ -658,6 +830,15 @@ class TemplateAnchorClass:
                 self.StaticProjection, self.CurrentProjection = _GetSegmentsProjections(StaticSegment, CurrentSegment)
 
         self.UpdateSprings()
+
+    @property
+    def StaticLocation(self):
+        return self.StaticValues['Origin'] + self.StaticValues['LoS'] * self.StaticValues['Distance']
+    @property
+    def CurrentLocation(self):
+        if self.CurrentValues['Distance'] == 0:
+            raise Exception("Depth is currently unknown for this object")
+        return self.CurrentValues['Origin'] + self.CurrentValues['LoS'] * self.CurrentValues['Distance']
 
     @property
     def ProjectionError(self): # Oriented towards the theoretical location
@@ -681,6 +862,23 @@ class TemplateAnchorClass:
         for Spring in self.Springs:
             Force += Spring.Force
         return Force
+    @property
+    def RawForce(self):
+        Force = np.zeros(3, dtype = float)
+        for Spring in self.Springs:
+            Force += Spring.RawForce
+        return Force
+    @property
+    def ExponentialValue(self):
+        if not self.Active:
+            return False
+        if self.TrustModelIndex == 0 or self.TrustDistance == np.inf:
+            return 1
+        if self.TrustModelIndex == 1:
+            return np.e**(-self.Length**2 / self.TrustDistance**2)
+        else:
+            return np.e**(-self.Length / self.TrustDistance)
+        
 
 class SingleSpringAnchor(TemplateAnchorClass):
     def __init__(self, *args):
@@ -720,13 +918,47 @@ class OrthogonalSpringsAnchor(TemplateAnchorClass):
         self.Springs[0].Length = np.linalg.norm(OrthogonalError)
         self.Springs[0].UnitVector = _GetUnitVector(OrthogonalError)
 
-        DepthError = self.DepthError
-        self.Springs[1].Length = np.linalg.norm(DepthError)
-        self.Springs[1].UnitVector = _GetUnitVector(DepthError)
+        if self.CurrentValues['Distance'] is None:
+            self.Springs[1].Length = 0
+        else:
+            DepthError = self.DepthError
+            self.Springs[1].Length = np.linalg.norm(DepthError)
+            self.Springs[1].UnitVector = _GetUnitVector(DepthError)
 
     @property
     def K(self):
         return self.Springs[0].K # We use the orthogonal spring a base K.
+
+class SpringClass:
+    def __init__(self, Kappa, TrustDistance, TrustModelIndex):
+        self.Kappa = Kappa
+        self.TrustDistance = TrustDistance
+        self.TrustModelIndex = TrustModelIndex
+
+        self.Length = 0
+        self.UnitVector = np.zeros(3)
+    @property
+    def K(self):
+        return self.Kappa * self.ExponentialValue
+    @property
+    def Force(self):
+        return self.Length * self.K * self.UnitVector
+    @property
+    def RawForce(self):
+        return self.Length * self.Kappa * self.UnitVector
+    @property
+    def Energy(self):
+        if self.TrustModelIndex != 2:
+            return self.K * self.Length**2 / 2
+        return self.K * self.TrustDistance * (self.TrustDistance * (1/self.ExponentialValue - 1) - self.Length)
+    @property
+    def ExponentialValue(self):
+        if self.TrustModelIndex == 0 or self.TrustDistance == np.inf:
+            return 1
+        if self.TrustModelIndex == 1:
+            return np.e**(-self.Length**2 / self.TrustDistance**2)
+        else:
+            return np.e**(-self.Length / self.TrustDistance)
 
 def _GetUnitVector(V):
     N = np.linalg.norm(V)

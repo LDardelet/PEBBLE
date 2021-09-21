@@ -1,6 +1,7 @@
 import types
 import numpy as np
 import copy
+import matplotlib.pyplot as plt
 
 class ModuleBase:
     def __init__(self, Name, Framework, ModulesLinked):

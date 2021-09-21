@@ -4,7 +4,6 @@ import random
 from ModuleBase import ModuleBase
 from Events import CameraEvent, TrackerEvent, TwistEvent, DisparityEvent
 
-_MAP_DIMENSION = 10. # In Meters
 _MAX_T = 100.
 _MAX_STEPS_NO_EVENTS = 100
 
@@ -19,10 +18,13 @@ class MovementSimulatorClass(ModuleBase):
         self._MonitoredVariables = [('T', np.array),
                                     ('Theta', np.array),
                                     ('Omega', np.array),
-                                    ('V', np.array)]
+                                    ('V', np.array),
+                                    ('NOutliers', tuple),
+                                    ('ActiveTrackers', tuple)]
 
-        self._MapType = 'cubic'
+        self._MapType = 'cubic' # Either 'cubic', 'random'
         self._MapDensity = 0.0006
+        self._MapSize = 10.
 
         self._GeneratorRadius = 0.07
 
@@ -31,20 +33,24 @@ class MovementSimulatorClass(ModuleBase):
         self._SequenceType = 'twist'
         self._SequenceInput = None
 
-        self._TrackerEvents = True
-        self._TwistEvents = True
-        self._CameraEvents = True
-        self._DisparityEvents = True
 
         self._TranslationAcceleration = 20.
         self._RotationAcceleration = 20.
 
+        # Events
+        self._CameraEvents = True
         self._KMat = None
         self._DefaultK = 200
         self._Geometry = np.array([240, 180])
 
+        # Disparities
+        self._DisparityEvents = True
         self._CameraOffsets = [np.array([-0.1, 0., 0.]), np.array([0.1, 0., 0.])] # By default, its a 2 cameras simulator
+        self._IntegerDisparity = True
 
+        # Twists
+        self._TwistEvents = True
+        self._TwistSendRule = 'random' # Either random for _TwistTau average sending value, or 'fixed' for constant timestep
         self._TwistTau = 0.005
 
         self._TwistGaussianRelativeNoise = 0.1
@@ -52,6 +58,8 @@ class MovementSimulatorClass(ModuleBase):
         self._ConstantTwistErrorTau = 0.05
         self._ConstantTwistErrorRelativeNoise = 0.1
 
+        # Trackers
+        self._TrackerEvents = True
 
         self._TrackersMinDisplacement = 0.1
         self._TrackersLocationGaussianNoise = 0.5
@@ -59,9 +67,9 @@ class MovementSimulatorClass(ModuleBase):
         self._TrackersSentAtOnce = 1
 
         self._LambdaAveragesTrackers = 0.05
-        self._TrackerOutliersSpeedFactor = 3.
-        self._TrackerOutlierTau = 0.1
-        self._NMaxOutliersPerCamera = 4
+        self._TrackerOutliersSpeedFactor = 2.
+        self._TrackerOutlierTau = 0.4
+        self._NMaxOutliersPerCamera = 6
         self._OutliersMaxDistance = 50
 
     def _OnInitialization(self):
@@ -83,6 +91,10 @@ class MovementSimulatorClass(ModuleBase):
             self._DisparityEvents = False
         if self._DisparityEvents:
             self.StereoBaseDistance = np.linalg.norm(self._CameraOffsets[0] - self._CameraOffsets[1])
+            if self._IntegerDisparity:
+                self.DisparityFunction = lambda x:int(x+0.5)
+            else:
+                self.DisparityFunction = lambda x:x
 
         self.T = np.zeros(3)
         self.Theta = np.zeros(3)
@@ -92,7 +104,7 @@ class MovementSimulatorClass(ModuleBase):
         self.dV = np.zeros(3)
         self.t = 0.
 
-        self.NextTwistT = np.random.exponential(self._TwistTau, size = self.NCameras)
+        self.NextTwistT = np.zeros(self.NCameras)
 
         self.ScreenCenter = self._Geometry / 2
         if self._KMat is None:
@@ -128,7 +140,8 @@ class MovementSimulatorClass(ModuleBase):
         self.TrackersGenerators = []
 
         self.TrackersAverageSpeed = 100
-        self.NOutliers = {0:0, 1:0}
+        self.ActiveTrackers = [0,0]
+        self.NOutliers = [0,0]
 
         return True
 
@@ -149,7 +162,11 @@ class MovementSimulatorClass(ModuleBase):
             vSent = v + np.random.normal(0, np.linalg.norm(v)*self._TwistGaussianRelativeNoise, size = 3) + self.vConstantError
             omegaSent = omega + np.random.normal(0, np.linalg.norm(omega)*self._TwistGaussianRelativeNoise, size = 3) + self.omegaConstantError
             event.Join(TwistEvent, v = vSent, omega = omegaSent, SubStreamIndex = self.SubStreamIndexes[nCamera])
-            self.NextTwistT[nCamera] = self.t + np.random.exponential(self._TwistTau)
+
+            if self._TwistSendRule == 'random':
+                self.NextTwistT[nCamera] = self.t + np.random.exponential(self._TwistTau)
+            elif self._TwistSendRule == 'fixed':
+                self.NextTwistT[nCamera] = self.t + self._TwistTau
 
 
     def UpdateSpeedAndLocation(self, event):
@@ -219,6 +236,8 @@ class MovementSimulatorClass(ModuleBase):
                                     dx = self.IsOutlier[nGenerator][nCamera][1:] * (self.t - self.OnScreenTrackers[nGenerator][nCamera][0])
                                     if np.linalg.norm(dx) > self._TrackersMinDisplacement:
                                         OnScreenLocation = self.OnScreenTrackers[nGenerator][nCamera][1:] + dx
+                                        if self._TrackersLocationGaussianNoise:
+                                            OnScreenLocation = OnScreenLocation + np.random.normal(0, self._TrackersLocationGaussianNoise, size = 2)
                                         TrackerOnScreen = ((OnScreenLocation > self._TrackerEdgeMargin).all() and (OnScreenLocation < self._Geometry-1-self._TrackerEdgeMargin).all())
                                         if not TrackerOnScreen:
                                             self.RemoveTracker(nGenerator, nCamera)
@@ -235,6 +254,7 @@ class MovementSimulatorClass(ModuleBase):
                                     continue
                             else:
                                 self.Log("Adding tracker {0} for camera {1}".format(nGenerator, nCamera))
+                                self.ActiveTrackers[nCamera] += 1
                                 self.OnScreenTrackers[nGenerator][nCamera] = np.array([self.t, OnScreenLocation[0], OnScreenLocation[1]])
                                 self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, OnScreenLocation, disparity, sign)]
                                 continue
@@ -303,10 +323,10 @@ class MovementSimulatorClass(ModuleBase):
                     TrackerLocation = np.zeros(2)
                 else:
                     color = 'g'
-                if self._TrackersLocationGaussianNoise and color == 'g':
-                    TrackerLocation = TrackerLocation + np.random.normal(0, self._TrackersLocationGaussianNoise, size = 2)
-                    if ((TrackerLocation <= self._TrackerEdgeMargin).any() or (TrackerLocation >= self._Geometry-1-self._TrackerEdgeMargin).any()):
-                        continue
+#                if self._TrackersLocationGaussianNoise and color == 'g': # Moved it elsewhere
+#                    TrackerLocation = TrackerLocation + np.random.normal(0, self._TrackersLocationGaussianNoise, size = 2)
+#                    if ((TrackerLocation <= self._TrackerEdgeMargin).any() or (TrackerLocation >= self._Geometry-1-self._TrackerEdgeMargin).any()):
+#                        continue
                 JoinedTrackerEvent = event.Join(TrackerEvent, TrackerLocation = TrackerLocation, TrackerID = nGenerator, TrackerAngle = 0., TrackerScaling = 0., TrackerColor = color, TrackerMarker = 'o', SubStreamIndex = SubStreamIndex)
                 if self._DisparityEvents:
                     JoinedTrackerEvent.Attach(DisparityEvent, disparity = disparity, sign = sign)
@@ -316,6 +336,7 @@ class MovementSimulatorClass(ModuleBase):
 
     def RemoveTracker(self, nGenerator, nCamera):
         self.OnScreenTrackers[nGenerator][nCamera][0] = 0
+        self.ActiveTrackers[nCamera] -= 1
         if not self.IsOutlier[nGenerator][nCamera] is None:
             self.IsOutlier[nGenerator][nCamera] = None
             self.NOutliers[nCamera] -= 1
@@ -323,7 +344,7 @@ class MovementSimulatorClass(ModuleBase):
         self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, None, None, None)]
 
     def DisparityData(self, Depth, nCamera):
-        return int(self.StereoBaseDistance * self.K / Depth + 0.5), nCamera*2-1
+        return self.DisparityFunction(self.StereoBaseDistance * self.K / Depth), nCamera*2-1
 
     @property
     def R(self):
@@ -344,6 +365,9 @@ class MovementSimulatorClass(ModuleBase):
         if not self.Sequence:
             return False
         dt, self.AimedOmega, self.AimedV = self.Sequence.pop(0)
+        self.Log("New sequence velocities : ")
+        self.Log("Vx = {0:.3f}, Vy = {1:.3f}, Vz = {2:.3f}".format(*self.AimedV.tolist()))
+        self.Log("wx = {0:.3f}, wy = {1:.3f}, wz = {2:.3f}".format(*self.AimedOmega.tolist()))
         self.NextEndT = self.t + dt
         return True
         
@@ -354,7 +378,7 @@ class MovementSimulatorClass(ModuleBase):
         return True
 
     def GetCameraTwist(self, nCamera):
-        return self.Omega, self.V + np.cross(self.Omega, self._CameraOffsets[nCamera])
+        return self.R.dot(self.Omega), self.R.dot(self.V + np.cross(self.Omega, self._CameraOffsets[nCamera]))
 
     @property
     def Geometry(self):
@@ -362,15 +386,20 @@ class MovementSimulatorClass(ModuleBase):
 
     def GenerateMap(self):
         self.Generators = []
+
+        Volume = self._MapSize**3
+        GeneratorVolume = 4/3*np.pi*self._GeneratorRadius**3
+        NGenerators = int(Volume * self._MapDensity / GeneratorVolume)
+
         if self._MapType == 'cubic':
-            Volume = _MAP_DIMENSION**3
-            GeneratorVolume = 4/3*np.pi*self._GeneratorRadius**3
-            NGenerators = Volume * self._MapDensity / GeneratorVolume
             NGeneratorsPerDimension = int(NGenerators**(1/3))
 
-            Ds = np.linspace(-_MAP_DIMENSION/2, _MAP_DIMENSION/2, NGeneratorsPerDimension)
+            Ds = np.linspace(-self._MapSize/2, self._MapSize/2, NGeneratorsPerDimension)
             
             for x in Ds:
                 for y in Ds:
                     for z in Ds:
                         self.Generators += [np.array([x, y, z])]
+
+        elif self._MapType == 'random':
+            self.Generators = [np.random.normal(0, self._MapSize/2, size = 3) for nGenerator in range(NGenerators)]

@@ -367,7 +367,10 @@ class Framework:
                 Folder = Folder + '/'
         for ModuleName in self.ModulesList:
             FileName = Folder + ModuleName + '.csv'
-            self.Modules[ModuleName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
+            try:
+                self.Modules[ModuleName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
+            except:
+                self.Modules[ModuleName].LogWarning(f"Failed saving {ModuleName} data to CSV file")
         self._CSVDataSaved = True
     
     def _LoadFiles(self, File1, File2, onlyRawData):
@@ -542,7 +545,7 @@ class Framework:
 
     def DisplayRestart(self):
         for ModuleName in self.ModulesList:
-            if self.Modules[ModuleName] == _DisplayHandlerClass:
+            if self.Modules[ModuleName].__class__ == _DisplayHandlerClass:
                 self.Modules[ModuleName].Restart()
 
     def Next(self, AtEventMethod = None):
@@ -1176,7 +1179,7 @@ class ParametersDictClass(dict):
                             Found = True
                             self[subKey][key] = value
                 if not Found:
-                    raise KeyError(key)
+                    raise KeyError(Pattern + " -> " + key)
         else:
             super().__setitem__(key, value)
 

@@ -1,5 +1,5 @@
 import numpy as np
-from moduleBase import ModuleBase
+from ModuleBase import ModuleBase
 from Events import CameraEvent, DisparityEvent
 import matplotlib.pyplot as plt
 

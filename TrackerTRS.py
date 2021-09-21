@@ -133,7 +133,11 @@ class TrackerTRS(ModuleBase):
         self._StateClass = StateClass
 
     def _OnInitialization(self):
-        self.FeatureManager = FeatureManagerClass(self)
+        try:
+            self.FeatureManager = FeatureManagerClass(self)
+        except:
+            self.LogWarning("Unable to load trackers extensions, limited post-processing abilities")
+            self.FeatureManager = None
         self.GTMaker = GTMakerClass(self)
         if self._DetectorAutoRestart: #  One cannot expect all trackers to die if they auto restart
             self._TrackerStopIfAllDead = False
@@ -185,7 +189,8 @@ class TrackerTRS(ModuleBase):
         self._DetectorMinActivityForStart = self._TrackerDiameter * self._DetectorMinRelativeStartActivity
 
         self.Plotter = PlotterClass(self)
-        self.LocksSubscribers = [self.FeatureManager.AddLock]
+        if not self.FeatureManager is None:
+            self.LocksSubscribers = [self.FeatureManager.AddLock]
 
         return True
 
@@ -992,7 +997,8 @@ class TrackerClass:
             SpeedCancelation = -np.array(self.Speed)
             SpeedCancelation[:2] = 0
             self.DynamicsModifier.ModSpeed('Flow', SpeedCancelation)
-        self.TM.FeatureManager.RemoveLock(self)
+        if not self.TM.FeatureManager is None:
+            self.TM.FeatureManager.RemoveLock(self)
         self.TM.LogWarning("Tracker {0} was released ({1})".format(self.ID, Reason))
         self.State.SetStatus(self.State._STATUS_CONVERGED)
 

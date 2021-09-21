@@ -12,7 +12,7 @@ from functools import partial
 from ModuleBase import ModuleBase
 from Events import TrackerEvent, TauEvent
 
-from TrackerExtensions import *
+#from TrackerExtensions import *
 
 def RotateVector(Vector):
     return np.array([Vector[0]**2 - Vector[1]**2, 2*Vector[0]*Vector[1]])

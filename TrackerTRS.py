@@ -112,11 +112,11 @@ class TrackerTRS(ModuleBase):
         # Monitoring Variables
 
         self._MonitorDt = 0.1                                                         # Float. Time difference between two snapshots of the system.
-        self._MonitoredVariables = [#('RecordedTrackers@ID', int),
-                                    #('RecordedTrackers@TrackerActivity', float),
-                                    #('RecordedTrackers@Position', np.array),
+        self._MonitoredVariables = [('RecordedTrackers@ID', int),
+                                    ('RecordedTrackers@TrackerActivity', float),
+                                    ('RecordedTrackers@Position', np.array),
                                      #('RecordedTrackers@Speed', np.array),
-                                     #('RecordedTrackers@State.Value', tuple),
+                                     ('RecordedTrackers@State.Value', tuple),
                                      #('RecordedTrackers@ProjectedEvents', np.array),
                                      #('RecordedTrackers@TimeConstant', float),
                                      #('RecordedTrackers@DynamicsEstimator.W', float),

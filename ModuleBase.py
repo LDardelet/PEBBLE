@@ -250,7 +250,7 @@ class ModuleBase:
         if self._MonitorDt and self.__ProposesTau: # We check if that method was overloaded
             if not self._MonitoredVariables:
                 self.LogSuccess("Enabling monitoring for Tau value")
-            self._MonitoredVariables = [('AverageTauMonitored', float)] + self._MonitoredVariables
+            self._MonitoredVariables.append(('AverageTauMonitored', float))
             self.__class__.AverageTauMonitored = property(lambda self: self._OnTauRequest(None))
 
         if self._MonitorDt and self._MonitoredVariables:

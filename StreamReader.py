@@ -36,7 +36,7 @@ class Reader(ModuleBase):
 
         self._TxtFileStructure = ['t', 'x', 'y', 'p']
         self._TxtTimestampMultiplier = 1.
-        self._TxtDefaultGeometry = [240, 180]
+        self._TxtDefaultGeometry = [346, 260]
         self._DatDefaultGeometry = [304, 240]
         self._H5DefaultGeometry = [346, 260]
         self._AedatDefaultGeometry = [346, 260]

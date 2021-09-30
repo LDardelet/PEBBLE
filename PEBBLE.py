@@ -370,7 +370,7 @@ class Framework:
             try:
                 self.Modules[ModuleName].SaveCSVData(FileName, FloatPrecision = 6, Default2DIndexes = 'xy', Default3DIndexes = 'xyz', Separator = ' ')
             except:
-                self.Modules[ModuleName].LogWarning(f"Failed saving {ModuleName} data to CSV file")
+                self.Modules[ModuleName].LogWarning(f"Failed saving {ModuleName} data to CSV file : " + str(sys.exc_info()[0]))
         self._CSVDataSaved = True
     
     def _LoadFiles(self, File1, File2, onlyRawData):

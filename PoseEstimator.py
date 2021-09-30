@@ -24,6 +24,8 @@ class PoseEstimator(ModuleBase):
                                     ('RigFrame.Omega', np.array),
                                     ('ReceivedV', np.array),
                                     ('ReceivedOmega', np.array),
+                                    ('SpringsForceAndTorque', np.array),
+                                    ('ViscosityForceAndTorque', np.array),
                                     ('MechanicalEnergy', float),
                                     ('PotentialEnergy', float),
                                     ('KineticEnergy', float),
@@ -47,7 +49,7 @@ class PoseEstimator(ModuleBase):
         self._InitialCameraRotationVector = np.zeros(3)
         self._InitialCameraTranslationVector = np.zeros(3)
 
-        self._ConstantSpringTrustDistance = 0.3 # to diable, use np.inf
+        self._ConstantSpringTrustDistance = 0.3 # to disable, use np.inf
         self._SpringTrustDistanceModel = "Gaussian" # str, either Constant ( 1 ), Gaussian ( e**(-delta**2) ) or Exponential ( e**(-delta) )
 
         self._SpringsModel = 'Orthogonal'                    # Either 'Single' or 'Orthogonal', for one direct spring or two speings for reprojection and depth
@@ -223,7 +225,7 @@ class PoseEstimator(ModuleBase):
                         disparity = self.DisparityMemories[event.SubStreamIndex].GetDisparity(Tau*self._DisparityTauRatio, np.array(event.TrackerLocation, dtype = int), self._TrackerDisparityRadius)
                     else:
                         disparity = None
-                    self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID, disparity)
+                self.UpdateFromTracker(event.SubStreamIndex, event.TrackerLocation, event.TrackerID, disparity)
             else:
                 ID = (event.TrackerID, event.SubStreamIndex)
                 if ID in self.Anchors:
@@ -495,8 +497,8 @@ class PoseEstimator(ModuleBase):
     def ViscosityForceAndTorque(self):
         Forces = self.MuV * (self.EnvironmentVs - self.RigFrame.V.reshape((3,1)))
         VTorque = np.zeros(3)
-        for nCamera in range(self.NCameras):
-            VTorque -= np.cross(self.GetCameraLocation(nCamera) - self.RigFrame.T, Forces[:,nCamera])
+        #for nCamera in range(self.NCameras):
+        #    VTorque -= np.cross(self.GetCameraLocation(nCamera) - self.RigFrame.T, Forces[:,nCamera])
         return self.RigFrame.ToWorld(Forces.sum(axis = 1) / self.NCameras, RelativeToOrigin = False), self.RigFrame.ToWorld((self.MuOmega * (self.EnvironmentOmegas - self.RigFrame.Omega.reshape((3, 1))).sum(axis = 1) + VTorque) / self.NCameras, RelativeToOrigin = False)
     @property
     def EnvironmentPower(self): # Defined as the instantaneous power transmitted to the rig frame
@@ -609,6 +611,17 @@ class PoseEstimator(ModuleBase):
         self.PlotHistoryData("KineticEnergy", fax = (f, ax))
         self.PlotHistoryData("PotentialEnergy", fax = (f, ax))
         self.PlotHistoryData("MechanicalEnergy", fax = (f, ax))
+
+    def PlotConstraints(self):
+        f, axs = plt.subplots(2,1)
+        t = np.array(self.History['t'])
+        for nType, Type in enumerate(('Force', 'Torque')):
+            axs[nType].set_title(Type)
+            for nDim, color in enumerate('rgb'):
+                SpringForce = np.array(self.History['SpringsForceAndTorque'])[:,nType,nDim]
+                axs[nType].plot(t, SpringForce, color = color)
+                ViscousForce = np.array(self.History['ViscosityForceAndTorque'])[:,nType,nDim]
+                axs[nType].plot(t, ViscousForce, color = color, linestyle = '--')
 
     def Plot3DSystem(self, Orientation = 'natural', fax = None):
         if fax is None:

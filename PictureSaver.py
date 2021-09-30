@@ -1,5 +1,5 @@
 from ModuleBase import ModuleBase
-from Events import CameraEvent, DisparityEvent, FlowEvent
+from Events import CameraEvent, DisparityEvent, FlowEvent, TrackerEvent, TwistEvent
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,10 +14,16 @@ class PictureSaver(ModuleBase):
         Creates PNG images of anything plottable that comes though
         '''
         self._FramesDt = 0.01
-        self._TauOutputs = ['Default', 'Framework']
-        self._Outputs = ['Events', 'Disparities']
-        self._Tau = 0.005
+        self._TauOutputs = ['Framework'] # among 'Framework', 'Default'
+        self._Outputs = ['Disparities', 'Events+Trackers']
+        self._DefaultTau = 0.005
+        self._RemoveTicks = True
         self._DisparityRange = [0, 60]
+
+        self._EventsMonotonicLastT = True
+        
+        self._TrackersOnlyLocked = True
+        self._TrackersIDs = True
 
     def _OnInitialization(self):
         if self._FramesDt == 0:
@@ -36,11 +42,19 @@ class PictureSaver(ModuleBase):
             for DisplayedType in Output.split('+'):
                 self.UsedContainers.add(DisplayedType)
 
+        class ModuleEventsContainer(EventsContainer):
+            _MonotonicLastT = self._EventsMonotonicLastT
+        class ModuleFlowsContainer(FlowsContainer):
+            pass
         class ModuleDisparitiesContainer(DisparitiesContainer):
             _DisparityRange = self._DisparityRange
+        class ModuleTrackersContainer(TrackersContainer):
+            _TrackersOnlyLocked = self._TrackersOnlyLocked
+            _TrackersIDs = self._TrackersIDs
+        class ModuleTwistContainer(TwistContainer):
+            pass
 
-
-        self.TemplateContainers = {'Events':EventsContainer, 'Flows':FlowsContainer, 'Disparities':ModuleDisparitiesContainer}
+        self.TemplateContainers = {'Events':ModuleEventsContainer, 'Flows':ModuleFlowsContainer, 'Disparities':ModuleDisparitiesContainer, 'Trackers':ModuleTrackersContainer, 'Twist': ModuleTwistContainer}
 
         for subStreamIndex in self.__SubStreamInputIndexes__:
             self.AddSubStreamData(subStreamIndex)
@@ -73,7 +87,6 @@ class PictureSaver(ModuleBase):
         self.StreamsFAxs[subStreamIndex] = {}
         for output in self._Outputs:
             self.StreamsFAxs[subStreamIndex][output] = plt.subplots(1,1)
-            self.StreamsFAxs[subStreamIndex][output][1].tick_params('both', bottom =  False, labelbottom = False, left = False, labelleft = False)
             plt.close(self.StreamsFAxs[subStreamIndex][output][0])
         self.StreamsLastFrames[subStreamIndex] = (0, -1)
 
@@ -81,18 +94,20 @@ class PictureSaver(ModuleBase):
         FrameIndexes = self.StreamsLastFrames[subStreamIndex][1] + 1
         for TauName in self._TauOutputs:
             if TauName == 'Default':
-                Tau = self._Tau
+                Tau = self._DefaultTau
             elif TauName == 'Framework':
                 Tau = self.FrameworkAverageTau
                 if Tau is None or Tau == 0:
-                    Tau = self._Tau
+                    Tau = self._DefaultTau
             for output in self._Outputs:
                 self.StreamsFAxs[subStreamIndex][output][1].cla()
+                if self._RemoveTicks:
+                    self.StreamsFAxs[subStreamIndex][output][1].tick_params('both', bottom =  False, labelbottom = False, left = False, labelleft = False, top = False, labeltop = False, right = False, labelright = False)
+                self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
                 for Container in output.split('+'):
                     self.StreamsContainers[subStreamIndex][Container].Draw(t, Tau, self.StreamsFAxs[subStreamIndex][output][1])
                 self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
                 self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
-                self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
                 self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_{1:06d}.png'.format(subStreamIndex, FrameIndexes))
             self.StreamsLastFrames[subStreamIndex] = (t, FrameIndexes)
 
@@ -103,8 +118,10 @@ class PictureSaver(ModuleBase):
 
 class EventsContainer:
     _TauMultiplier = 2
+    _MonotonicLastT = True
     def __init__(self, ScreenSize):
         self.STContext = np.zeros(ScreenSize + (2,))
+        self.LastTConsidered = -np.inf
 
     def OnEvent(self, event):
         if event.Has(CameraEvent):
@@ -112,8 +129,12 @@ class EventsContainer:
 
     def Draw(self, t, Tau, ax):
         Map = np.zeros(self.STContext.shape[:2])
+        tMin = t - Tau*self._TauMultiplier
+        if self._MonotonicLastT:
+            tMin = max(self.LastTConsidered, tMin)
+        self.LastTConsidered = tMin
         for Polarity in range(2):
-            Map = (Map + ((t - self.STContext[:,:,Polarity]) < Tau*self._TauMultiplier))
+            Map = (Map + (self.STContext[:,:,Polarity] > tMin))
         ax.imshow(np.transpose(Map), origin = 'lower', cmap = 'binary', vmin = 0, vmax = 2)
 
 class FlowsContainer:
@@ -149,7 +170,7 @@ class DisparitiesContainer:
         self.MaxD = 5
 
     def OnEvent(self, event):
-        if not event.Has(DisparityEvent):
+        if not event.Has(DisparityEvent) or not event.Has(CameraEvent):
             return
         self.STDContext[event.location[0], event.location[1],:] = np.array([event.disparity, event.timestamp])
 
@@ -157,3 +178,49 @@ class DisparitiesContainer:
         Map = self.STDContext[:,:,0] * ((t - self.STDContext[:,:,1]) < Tau*self._TauMultiplier)
         self.MaxD = max(self.MaxD, self.STDContext[:,:,0].max())
         ax.imshow(np.transpose(Map), origin = 'lower', vmin = self._DisparityRange[0], vmax = self._DisparityRange[1], cmap = 'hot')
+
+class TrackersContainer:
+    _TauMultiplier = 3
+    _TrackersOnlyLocked = True
+    _TrackersIDs = False
+    def __init__(self, ScreenSize):
+        self.Trackers = {}
+        from TrackerTRS import StateClass 
+        self.TrackerStateC = StateClass
+
+    def OnEvent(self, event):
+        if not event.Has(TrackerEvent):
+            return
+        if self._TrackersOnlyLocked and (event.TrackerColor != self.TrackerStateC._COLORS[self.TrackerStateC._STATUS_LOCKED] or event.TrackerMarker != self.TrackerStateC._MARKERS[0]):
+            return
+        self.Trackers[event.TrackerID] = (event.timestamp, event.TrackerLocation, event.TrackerColor, event.TrackerMarker)
+
+    def Draw(self, t, Tau, ax):
+        Tau *= self._TauMultiplier
+        for ID in list(self.Trackers.keys()):
+            if self.Trackers[ID][0] < t - Tau:
+                del self.Trackers[ID]
+                continue
+            _, (x, y), color, marker = self.Trackers[ID]
+            ax.plot(x, y, color = color, marker = marker)
+            if self._TrackersIDs:
+                ax.text(x+5, y, str(ID), color = color)
+
+class TwistContainer:
+    def __init__(self, ScreenSize):
+        self.LastV = np.zeros(3)
+        self.LastOmega = np.zeros(3)
+
+    def OnEvent(self, event):
+        if not event.Has(TwistEvent):
+            return
+        self.LastV = event.v
+        self.LastOmega = event.omega
+
+    def Draw(self, t, Tau, ax):
+        previous_title = ax.get_title()
+        if previous_title:
+            previous_title = previous_title + '\n'
+        previous_title = previous_title + "Vx = {0:.3f}, Vy = {1:.3f}, Vz = {2:.3f}\n".format(*self.LastV.tolist())
+        previous_title = previous_title + "Wx = {0:.3f}, Wy = {1:.3f}, Wz = {2:.3f}".format(*self.LastOmega.tolist())
+        ax.set_title(previous_title)

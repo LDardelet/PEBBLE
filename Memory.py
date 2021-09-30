@@ -9,7 +9,7 @@ class Memory(ModuleBase):
         Class to handle ST-context memory.
         '''
         self._DefaultTau = 0.01
-        self._ExpectedDensity = 0.01
+        self._ExpectedDensity = 0.05
         self._EnableTauRequest = True
 
         self._MonitorDt = 0.01

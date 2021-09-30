@@ -360,6 +360,10 @@ class MovementSimulatorClass(ModuleBase):
                       [Uy*Ux*(1-c) + Uz*s, c + Uy**2*(1-c), Uy*Uz*(1-c) - Ux*s],
                       [Uz*Ux*(1-c) - Uy*s, Uz*Uy*(1-c) + Ux*s, c + Uz**2*(1-c)]])
         return self.RStored
+    def ToWorld(self, Location, RelativeToOrigin = True):
+        return self.R.T.dot(Location) + self.T * RelativeToOrigin
+    def ToRig(self, Location, RelativeToOrigin = True):
+        return self.R.dot(Location - self.T * RelativeToOrigin)
 
     def StartNextSequenceStep(self):
         if not self.Sequence:
@@ -378,7 +382,7 @@ class MovementSimulatorClass(ModuleBase):
         return True
 
     def GetCameraTwist(self, nCamera):
-        return self.R.dot(self.Omega), self.R.dot(self.V + np.cross(self.Omega, self._CameraOffsets[nCamera]))
+        return self.ToRig(self.Omega, RelativeToOrigin = False), self.ToRig(self.V + np.cross(self.Omega, self._CameraOffsets[nCamera]), RelativeToOrigin = False)
 
     @property
     def Geometry(self):

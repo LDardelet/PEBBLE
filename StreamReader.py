@@ -359,8 +359,7 @@ class Reader(ModuleBase):
         Width = (Events_Header[1] << 8) | Events_Header[0]
         Height = (Events_Header[3] << 8) | Events_Header[2]
 
-        self.Geometry[0] = Width
-        self.Geometry[1] = Height
+        self.Geometry = np.array([Width, Height])
 
         self.BatchSize = self._BatchEventSize * self.Event_Size
 

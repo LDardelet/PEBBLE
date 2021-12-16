@@ -35,6 +35,7 @@ class PictureSaver(ModuleBase):
         self.ScreenSize = tuple(self.Geometry)
         self.StreamsContainers = {}
         self.StreamsLastFrames = {}
+        self.StreamsFramesInfo = {}
         self.StreamsFAxs = {}
 
         self.UsedContainers = set()
@@ -84,6 +85,7 @@ class PictureSaver(ModuleBase):
 
     def AddSubStreamData(self, subStreamIndex):
         self.StreamsContainers[subStreamIndex] = {Container:self.TemplateContainers[Container](self.ScreenSize) for Container in self.UsedContainers}
+        self.StreamsFramesInfo[subStreamIndex] = {Container:[] for Container in self.UsedContainers}
         self.StreamsFAxs[subStreamIndex] = {}
         for output in self._Outputs:
             self.StreamsFAxs[subStreamIndex][output] = plt.subplots(1,1)
@@ -105,7 +107,7 @@ class PictureSaver(ModuleBase):
                     self.StreamsFAxs[subStreamIndex][output][1].tick_params('both', bottom =  False, labelbottom = False, left = False, labelleft = False, top = False, labeltop = False, right = False, labelright = False)
                 self.StreamsFAxs[subStreamIndex][output][1].set_title("{0:.3f}s".format(t))
                 for Container in output.split('+'):
-                    self.StreamsContainers[subStreamIndex][Container].Draw(t, Tau, self.StreamsFAxs[subStreamIndex][output][1])
+                    self.StreamsFramesInfo[subStreamIndex][Container].append(self.StreamsContainers[subStreamIndex][Container].Draw(t, Tau, self.StreamsFAxs[subStreamIndex][output][1]))
                 self.StreamsFAxs[subStreamIndex][output][1].set_xlim(0, self.ScreenSize[0])
                 self.StreamsFAxs[subStreamIndex][output][1].set_ylim(0, self.ScreenSize[1])
                 self.StreamsFAxs[subStreamIndex][output][0].savefig(self.FolderName + output + '_{0}Tau'.format(TauName) + '_{0}_{1:06d}.png'.format(subStreamIndex, FrameIndexes))
@@ -136,6 +138,7 @@ class EventsContainer:
         for Polarity in range(2):
             Map = (Map + (self.STContext[:,:,Polarity] > tMin))
         ax.imshow(np.transpose(Map), origin = 'lower', cmap = 'binary', vmin = 0, vmax = 2)
+        return ((Map == 1).sum(), (Map == 2).sum(), (Map > 0).sum() / np.prod(self.STContext.shape[:2]))
 
 class FlowsContainer:
     _TauMultiplier = 1
@@ -150,10 +153,12 @@ class FlowsContainer:
     def Draw(self, t, Tau, ax):
         while self.FlowsList and self.FlowsList[0][0] < t - Tau*self._TauMultiplier:
             self.FlowsList.pop(0)
+        NFlows = 0
         for _, (x, y), flow in self.FlowsList:
             n = np.linalg.norm(flow)
             if n == 0:
                 continue
+            NFlows += 1
             nf = flow / n
             r = max(0., nf[0])
             g = max(0., (nf * np.array([-1, np.sqrt(3)])).sum()/2)
@@ -161,6 +166,7 @@ class FlowsContainer:
             color = np.sqrt(np.minimum(np.array([r, g, b, 1]), np.ones(4, dtype = float)))
             df = flow * Tau*self._TauMultiplier
             ax.plot([x,x+df[0]], [y, y+df[1]], color = color)
+        return NFlows
 
 class DisparitiesContainer:
     _TauMultiplier = 2
@@ -178,6 +184,7 @@ class DisparitiesContainer:
         Map = self.STDContext[:,:,0] * ((t - self.STDContext[:,:,1]) < Tau*self._TauMultiplier)
         self.MaxD = max(self.MaxD, self.STDContext[:,:,0].max())
         ax.imshow(np.transpose(Map), origin = 'lower', vmin = self._DisparityRange[0], vmax = self._DisparityRange[1], cmap = 'hot')
+        return (Map > 0).sum() / np.prod(self.STDContext.shape[:2])
 
 class TrackersContainer:
     _TauMultiplier = 3
@@ -197,14 +204,17 @@ class TrackersContainer:
 
     def Draw(self, t, Tau, ax):
         Tau *= self._TauMultiplier
+        NTrackers = 0
         for ID in list(self.Trackers.keys()):
             if self.Trackers[ID][0] < t - Tau:
                 del self.Trackers[ID]
                 continue
             _, (x, y), color, marker = self.Trackers[ID]
             ax.plot(x, y, color = color, marker = marker)
+            NTrackers += 1
             if self._TrackersIDs:
                 ax.text(x+5, y, str(ID), color = color)
+        return NTrackers
 
 class TwistContainer:
     def __init__(self, ScreenSize):
@@ -224,3 +234,4 @@ class TwistContainer:
         previous_title = previous_title + "Vx = {0:.3f}, Vy = {1:.3f}, Vz = {2:.3f}\n".format(*self.LastV.tolist())
         previous_title = previous_title + "Wx = {0:.3f}, Wy = {1:.3f}, Wz = {2:.3f}".format(*self.LastOmega.tolist())
         ax.set_title(previous_title)
+        return (np.array(self.LastV), np.array(self.LastOmega))

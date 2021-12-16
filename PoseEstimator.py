@@ -132,7 +132,7 @@ class PoseEstimator(ModuleBase):
         self.ScreenSize = np.array(self.Geometry)
         self.ScreenCenter = self.ScreenSize/2
         self.StereoBaseDistance = self._DefaultStereoBase
-        self.CameraOffsetLocations = [np.array([self.StereoBaseDistance/2, 0., 0.]), np.array([-self.StereoBaseDistance/2, 0., 0.])]
+        self.CameraOffsetLocations = [np.array([-self.StereoBaseDistance/2, 0., 0.]), np.array([self.StereoBaseDistance/2, 0., 0.])]
 
         self.KMat = np.array([[self.K, 0., self.ScreenCenter[0]],
                                         [0., -self.K, self.ScreenCenter[1]],

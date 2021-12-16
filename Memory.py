@@ -8,21 +8,30 @@ class Memory(ModuleBase):
         '''
         Class to handle ST-context memory.
         '''
-        self._DefaultTau = 0.01
+        self._TauMethod = 0 # 0 is for decay over events (preferred), 1 for decay over time
+        self._DefaultTau = 0.02
         self._ExpectedDensity = 0.05
         self._EnableTauRequest = True
 
         self._MonitorDt = 0.01
-        self._MonitoredVariables = [('STContext', np.array)]
+        self._MonitoredVariables = [('STContext', np.array),
+                                    ('tOld', float)]
 
     def _OnInitialization(self):
 
         self.STContext = -np.inf*np.ones(tuple(self.Geometry) + (2,))
         self.LastEvent = None
-
+        self.tOld = 0
         self.AExp = np.prod(self.Geometry[:2]) * self._ExpectedDensity
-        self.A = 0.
-        self.LastT = -np.inf
+        if self._TauMethod == 0:
+            self.Decay = np.e**(-1/self.AExp)
+            self.Tau = 0
+            self.TauUpdateMethod = self.EventDecay
+            self.LastT = 0
+        else:
+            self.TauUpdateMethod = self.TimeDecay
+            self.A = 0.
+            self.LastT = -np.inf
 
         return True
 
@@ -31,19 +40,33 @@ class Memory(ModuleBase):
             return
         self.LastEvent = event.Copy()
         position = tuple(self.LastEvent.location.tolist() + [self.LastEvent.polarity])
-
         self.STContext[position] = self.LastEvent.timestamp
-        self.A = self.A * np.e**((self.LastT - event.timestamp) / self._DefaultTau) + 1.
+
+        self.TauUpdateMethod(event.timestamp - self.LastT)
         self.LastT = event.timestamp
 
+        self.tOld = max(self.tOld, self.LastT - self._Tau)
         return
+
+    def EventDecay(self, dt):
+        self.Tau = self.Decay * self.Tau + dt
+    def TimeDecay(self, dt):
+        self.A = self.A * np.e**(-dt / self._DefaultTau) + 1.
+
+    @property
+    def _Tau(self):
+        if self._TauMethod == 0:
+            return self.Tau
+        else:
+            if self.A <= 10:
+                return self._DefaultTau
+            return np.log(self.A/(self.A-1)) / np.log(self.AExp/(self.AExp-1)) * self._DefaultTau
 
     def _OnTauRequest(self, EventConcerned = None):
         if not self._EnableTauRequest:
             return 0
-        if self.A <= 10:
-            return self._DefaultTau
-        return np.log(self.A/(self.A-1)) / np.log(self.AExp/(self.AExp-1)) * self._DefaultTau
+        else:
+            return self._Tau
 
     def CreateSnapshot(self):
         return np.array(self.STContext)

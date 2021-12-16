@@ -18,9 +18,7 @@ class MovementSimulatorClass(ModuleBase):
         self._MonitoredVariables = [('T', np.array),
                                     ('Theta', np.array),
                                     ('Omega', np.array),
-                                    ('V', np.array),
-                                    ('NOutliers', tuple),
-                                    ('ActiveTrackers', tuple)]
+                                    ('V', np.array)]
 
         self._MapType = 'cubic' # Either 'cubic', 'random'
         self._MapDensity = 0.0006
@@ -50,7 +48,7 @@ class MovementSimulatorClass(ModuleBase):
 
         # Twists
         self._TwistEvents = True
-        self._TwistSendRule = 'random' # Either random for _TwistTau average sending value, or 'fixed' for constant timestep
+        self._TwistSendRule = 'random' # Either random for _TwistTau average sending value, 'fixed' for _TwistTau constant timestep, or 'each' for permanent sending
         self._TwistTau = 0.005
 
         self._TwistGaussianRelativeNoise = 0.1
@@ -167,7 +165,8 @@ class MovementSimulatorClass(ModuleBase):
                 self.NextTwistT[nCamera] = self.t + np.random.exponential(self._TwistTau)
             elif self._TwistSendRule == 'fixed':
                 self.NextTwistT[nCamera] = self.t + self._TwistTau
-
+            elif self._TwistSendRule == 'each':
+                self.NextTwistT[nCamera] = self.t
 
     def UpdateSpeedAndLocation(self, event):
         if self.t >= self.NextEndT:
@@ -190,7 +189,7 @@ class MovementSimulatorClass(ModuleBase):
         self.omegaConstantError = np.random.normal(0, np.linalg.norm(omega)*self._ConstantTwistErrorRelativeNoise, size = 3)
 
     def UpdateGenerators(self, event):
-        UzWorld = self.R.T.dot(np.array([0., 0., 1.]))
+        UzWorld = self.ToWorld(np.array([0., 0., 1.]), RelativeToOrigin = False)
 
         CameraGenerators = []
 
@@ -206,7 +205,7 @@ class MovementSimulatorClass(ModuleBase):
                         self.TrackersGenerators += [(self.SubStreamIndexes[nCamera], nGenerator, None, None, None)]
             else:
                 for nCamera in range(self.NCameras):
-                    CameraFrameLocation = self.R.dot(Delta) - self._CameraOffsets[nCamera]
+                    CameraFrameLocation = self.ToRig(Delta, RelativeToOrigin = False) - self._CameraOffsets[nCamera]
                     ScreenFrameLocation = self.KMat.dot(CameraFrameLocation)
                     if self._DisparityEvents:
                         Depth = CameraFrameLocation[-1]
@@ -274,8 +273,7 @@ class MovementSimulatorClass(ModuleBase):
         nGenerator, nCamera = CameraGenerators[nLocalGenerator][:2]
         X = self.Generators[nGenerator]
 
-        Delta = (X - self.T)
-        CameraFrameLocation = self.R.dot(Delta) - self._CameraOffsets[nCamera]
+        CameraFrameLocation = self.ToRig(X) - self._CameraOffsets[nCamera]
         Distance = np.linalg.norm(CameraFrameLocation)
         UX = CameraFrameLocation / Distance
         UH = np.array([1., 0., 0.]) - (np.array([1., 0., 0.]).dot(UX)) * UX
